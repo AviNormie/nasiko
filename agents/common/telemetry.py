@@ -31,7 +31,7 @@ def init_telemetry(service_name: str | None = None) -> None:
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.propagate import set_global_textmap
         from opentelemetry.propagators.composite import CompositePropagator
-        from opentelemetry.trace.propagation import TraceContextTextMapPropagator
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     except ImportError:
         logger.warning("opentelemetry SDK not installed — telemetry disabled")
         return
@@ -77,7 +77,11 @@ def _auto_instrument():
     _try_instrument("opentelemetry.instrumentation.requests", "RequestsInstrumentor")
     _try_instrument("opentelemetry.instrumentation.logging", "LoggingInstrumentor")
     _try_instrument("opentelemetry.instrumentation.starlette", "StarletteInstrumentor")
-    # LLM clients — emit gen_ai.usage.input_tokens / output_tokens / request.model
+    # LLM clients — GenAI semconv spans (gen_ai.usage.*, gen_ai.request.model,
+    # and gen_ai.input/output.messages when content capture is enabled).
+    # opentelemetry.instrumentation.openai_v2 is the official OTel package;
+    # the un-suffixed openai module is Traceloop's, kept as a fallback.
+    _try_instrument("opentelemetry.instrumentation.openai_v2", "OpenAIInstrumentor")
     _try_instrument("opentelemetry.instrumentation.openai", "OpenAIInstrumentor")
     _try_instrument("opentelemetry.instrumentation.anthropic", "AnthropicInstrumentor")
 
