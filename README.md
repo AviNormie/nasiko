@@ -220,7 +220,7 @@ flowchart LR
 ## Quick Start — Docker only (no Rust needed)
 
 The fastest way to run Nasiko requires **only [Docker](https://docs.docker.com/get-docker/)** (with Compose).
-The server builds itself from source inside Docker.
+The server pulls a pre-built image from Docker Hub — no local Rust or compile step.
 
 ### 1. Clone and configure
 
@@ -241,17 +241,19 @@ Edit `.env` and set at minimum:
 docker compose up -d
 ```
 
-This builds the server image and starts the full stack:
+This pulls the server image and starts the full stack:
 **Postgres · Redis · RustFS (S3) · OTel Collector · Tempo · Loki · nasiko-server**.
 
-- First build takes a few minutes (compiles Rust inside Docker) — subsequent builds are fast.
 - Open **http://localhost:8080** for the dashboard and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`
   (default `admin` / `changeme`).
+- To build the server from source instead of pulling (e.g. to test a local change):
+  `docker compose build server && docker compose up -d`.
 
 ```sh
 docker compose logs -f server   # follow server logs
 docker compose down             # stop everything
-docker compose up -d --build    # rebuild after pulling new changes
+docker compose pull server && docker compose up -d   # update to the latest published image
+docker compose up -d --build                          # rebuild from local source instead
 ```
 
 > No Docker? Use the [Developer / Rust setup](#path-b--developer--rust-setup) below.
