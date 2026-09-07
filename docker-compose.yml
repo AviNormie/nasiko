@@ -7,10 +7,6 @@
 #
 # Copy .env.example to .env and edit before starting:
 #   cp .env.example .env
-#
-# Pulls the published skmallick/nasiko-oss-server image by default — no Rust
-# or local compile needed. Building from source instead (e.g. to test an
-# unreleased change): docker compose build server && docker compose up -d.
 
 services:
   postgres:
@@ -90,7 +86,6 @@ services:
       - nasiko
 
   server:
-    image: skmallick/nasiko-oss-server:latest
     build:
       context: .
       dockerfile: server/Dockerfile
