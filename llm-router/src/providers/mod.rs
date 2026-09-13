@@ -39,6 +39,12 @@ pub fn provider_for(
             http.clone(),
             cfg.gemini_api_base.clone(),
         ))),
+        "openrouter" => Ok(Box::new(OpenRouterProvider::new(
+            http.clone(),
+            cfg.openrouter_api_base.clone(),
+            cfg.openrouter_http_referer.clone(),
+            cfg.openrouter_x_title.clone(),
+        ))),
         other => Err(GatewayError::Internal(format!(
             "provider '{other}' is not supported yet"
         ))),
@@ -49,11 +55,13 @@ pub mod anthropic;
 pub mod fallback;
 pub mod gemini;
 pub mod openai;
+pub mod openrouter;
 pub(crate) mod sse;
 
 pub use anthropic::AnthropicProvider;
 pub use gemini::GeminiProvider;
 pub use openai::OpenAiProvider;
+pub use openrouter::OpenRouterProvider;
 
 /// Current unix time (seconds) for synthesized response `created` fields. Providers
 /// that don't return a creation timestamp (Anthropic, Gemini) stamp one here.
