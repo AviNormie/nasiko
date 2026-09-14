@@ -91,7 +91,11 @@ pub async fn sync_all(db: &PgPool, http: &reqwest::Client) {
     match sync_openrouter(db, http).await {
         Ok(n) => {
             total += n;
-            tracing::info!(provider = "openrouter", models = n, "synced model pricing from openrouter");
+            tracing::info!(
+                provider = "openrouter",
+                models = n,
+                "synced model pricing from openrouter"
+            );
         }
         Err(e) => tracing::warn!(
             provider = "openrouter",
@@ -331,17 +335,19 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(row.model, "openai/gpt-4o-mini");
-        assert_eq!(row.input, Decimal::from_f64_retain(0.15).unwrap());
-        assert_eq!(row.output, Decimal::from_f64_retain(0.6).unwrap());
+        assert_eq!(row.input, Decimal::new(15, 2));
+        assert_eq!(row.output, Decimal::new(6, 1));
     }
 
     #[test]
     fn skips_variable_openrouter_prices() {
-        assert!(PricingRow::from_openrouter(&serde_json::json!({
-            "id": "openrouter/auto",
-            "pricing": {"prompt": "-1", "completion": "-1"}
-        }))
-        .is_none());
+        assert!(
+            PricingRow::from_openrouter(&serde_json::json!({
+                "id": "openrouter/auto",
+                "pricing": {"prompt": "-1", "completion": "-1"}
+            }))
+            .is_none()
+        );
     }
 
     #[test]
