@@ -303,6 +303,12 @@ pub struct SessionDetailData {
 pub struct SessionDetail {
     pub id: String,
     pub session_id: String,
+    /// The registered agent's display label (e.g. "Claude Code
+    /// (ankit@nasiko.com)") when this session belongs to a coding-agent
+    /// integration — `None` for ordinary agent sessions. Matches the label
+    /// set at registration time (`catalog::routes::register_coding_agent`),
+    /// so the trace viewer shows the same identity consistently.
+    pub agent_name: Option<String>,
     pub num_traces: usize,
     pub token_usage: TokenUsageSummary,
     pub cost_summary: FullCostSummary,
@@ -907,6 +913,21 @@ impl ObservabilityService {
         let start = end - Duration::days(7);
         let details = self.provider.get_session(session_id, start, end).await?;
 
+        // Coding-agent sessions carry a human-facing label (e.g. "Claude Code
+        // (ankit@nasiko.com)") set once at registration — reuse it here so the
+        // trace viewer shows the same identity, rather than re-deriving one.
+        let agent_name: Option<String> = sqlx::query_scalar(
+            r#"SELECT a.display_name
+               FROM chat_sessions cs
+               LEFT JOIN agents a ON a.id = cs.agent_id
+               WHERE cs.session_id = $1 AND a.coding_agent_integration_id IS NOT NULL"#,
+        )
+        .bind(session_id)
+        .fetch_optional(&self.db)
+        .await
+        .map_err(|error| ObservabilityError::Internal(error.to_string()))?
+        .flatten();
+
         let trace_entries: Vec<TraceEntry> = details
             .traces
             .iter()
@@ -967,6 +988,7 @@ impl ObservabilityService {
                 session: SessionDetail {
                     id: details.session_id.clone(),
                     session_id: details.session_id.clone(),
+                    agent_name,
                     num_traces: details.traces.len(),
                     token_usage: TokenUsageSummary {
                         total: Some(total_tokens),
