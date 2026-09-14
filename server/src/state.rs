@@ -76,6 +76,17 @@ impl AppState {
     }
 
     pub async fn run_migrations(db: &PgPool) {
+        // `set_ignore_missing` is load-bearing, not defensive. The coding-agent
+        // migrations are numbered 0016-0021 to match `development`, which owns
+        // 0008-0015 for unrelated work that has not reached this branch — so a
+        // database migrated by `development` has applied versions this tree does
+        // not contain. Without this, such a database fails `VersionMissing(8)`
+        // on boot. The numbering itself is deliberate: renumbering these six to
+        // 0008-0013 makes the same database fail `VersionMismatch(8)`, and
+        // renumbering them above 0021 makes it fail on `CREATE TABLE ... already
+        // exists`. Matching version *and* content is the only arrangement under
+        // which both lineages converge; keep these six byte-identical to
+        // `development`'s copies.
         sqlx::migrate!("../migrations")
             .set_ignore_missing(true)
             .run(db)
