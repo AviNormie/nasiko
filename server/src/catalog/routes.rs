@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/agents", post(create))
         .route("/agents", get(list))
         .route("/agents/coding-integrations", post(register_coding_agent))
+        .route("/agents/{id}/llm-token", post(issue_coding_agent_llm_token))
         .route("/agents/{id}", get(get_one))
         .route("/agents/{id}", put(update))
         .route("/agents/{id}", axum::routing::delete(delete))
@@ -36,6 +37,76 @@ pub fn router() -> Router<AppState> {
         .route("/search/users", get(search_users))
         .route("/registry/user/agents", get(registry_user_agents))
         .route("/registries/{id}", get(get_by_registry_id))
+}
+
+const CODING_AGENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
+
+#[derive(Debug, Serialize, ToSchema)]
+struct CodingAgentLlmToken {
+    token: String,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+struct CodingAgentLlmTokenResponse {
+    data: CodingAgentLlmToken,
+}
+
+async fn issue_coding_agent_llm_token(
+    State(state): State<AppState>,
+    claims: Claims,
+    Path(agent_id): Path<Uuid>,
+) -> Response {
+    let owner_id = match claims.user_uuid() {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    let owned_integration = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS(
+               SELECT 1 FROM agents
+               WHERE id = $1 AND owner_id = $2 AND coding_agent_integration_id IS NOT NULL
+                 AND deleted_at IS NULL
+           )"#,
+    )
+    .bind(agent_id)
+    .bind(owner_id)
+    .fetch_one(&state.db)
+    .await;
+    match owned_integration {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::error!(%error, %agent_id, %owner_id, "coding-agent LLM token lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    let gateway = nasiko_llm_router::GatewayConfig::from_env();
+    if gateway.agent_jwt_secret.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "LLM router credentials are not configured",
+        )
+            .into_response();
+    }
+    let token = match nasiko_llm_router::auth::mint_agent_token(
+        &agent_id.to_string(),
+        &owner_id.to_string(),
+        &gateway.agent_jwt_secret,
+        CODING_AGENT_TOKEN_TTL_SECONDS,
+        nasiko_llm_router::auth::parse_algorithm(&gateway.agent_jwt_algorithm),
+    ) {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(%error, %agent_id, "failed to mint coding-agent LLM token");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let expires_at = Utc::now() + chrono::Duration::seconds(CODING_AGENT_TOKEN_TTL_SECONDS as i64);
+    Json(CodingAgentLlmTokenResponse {
+        data: CodingAgentLlmToken { token, expires_at },
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

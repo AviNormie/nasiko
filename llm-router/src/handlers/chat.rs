@@ -90,7 +90,7 @@ async fn chat_core(
     format: InboundFormat,
     force_stream: Option<bool>,
 ) -> Result<Response, GatewayError> {
-    let authz = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+    let authz = agent_credential(headers);
     let (agent_id, owner_id) = verify_agent_jwt(authz, &ctx.cfg)?;
     tracing::info!(
         target: "nasiko::llm_router::chat",
@@ -235,6 +235,13 @@ async fn chat_core(
     );
 
     Ok(Json(inbound.render_chat_response(resp)).into_response())
+}
+
+fn agent_credential(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .or_else(|| headers.get("x-api-key"))
+        .and_then(|value| value.to_str().ok())
 }
 
 /// Derive the model-routing [`BoundarySignals`] for this request (S5).
@@ -507,6 +514,21 @@ mod tests {
 
     fn token() -> String {
         crate::auth::mint_agent_token(AGENT, OWNER, SECRET, 3600, Algorithm::HS256).unwrap()
+    }
+
+    #[test]
+    fn accepts_anthropic_api_key_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", "agent-token".parse().unwrap());
+        assert_eq!(agent_credential(&headers), Some("agent-token"));
+    }
+
+    #[test]
+    fn authorization_header_takes_precedence() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer auth-token".parse().unwrap());
+        headers.insert("x-api-key", "api-key-token".parse().unwrap());
+        assert_eq!(agent_credential(&headers), Some("Bearer auth-token"));
     }
 
     /// An llm_config pinning the destination to OpenAI `gpt-4o-mini` — used by the format-
