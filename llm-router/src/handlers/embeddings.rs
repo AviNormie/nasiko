@@ -107,6 +107,7 @@ mod tests {
             Ok(Some(AgentConfigResult {
                 config: None,
                 agent_pinned_model: None,
+                is_coding_agent: false,
             }))
         }
         async fn fetch_user_secret(&self, _: Uuid, _: &str) -> Result<Option<String>, sqlx::Error> {
