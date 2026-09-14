@@ -84,6 +84,7 @@
 - [Quick Start — Docker only (no Rust needed)](#quick-start--docker-only-no-rust-needed)
 - [Setup guides by operating system](#setup-guides-by-operating-system)
 - [CLI — install & use](#cli--install--use)
+- [Coding Agents & LLM Router](#coding-agents--llm-router)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
@@ -485,6 +486,83 @@ pull from the artifact registry.
 
 Run `nasiko --help` for the full, workflow-ordered command list.
 
+## Coding Agents & LLM Router
+
+Nasiko can manage the coding-agent CLIs already installed on your machine — recording what they
+do, routing their LLM calls, or both. The two are independent opt-ins.
+
+Supported: Claude Code, Codex, Cursor CLI, OpenCode.
+
+### Session reporting
+
+```sh
+nasiko agents discover           # DETECTED / CONNECTED / VERSION / CONFIG per agent
+nasiko agents install <agent>    # install session-reporting hooks
+nasiko agents uninstall <agent>
+nasiko agents sync               # flush queued session-turn events to the control plane
+```
+
+Auto-install also fires on `nasiko connect` / `nasiko use` / `nasiko auth login`, but only for
+agents with **no existing install record** — it never silently rebinds an already-installed agent
+to a new cluster. Rebind explicitly with `nasiko agents install <agent>`.
+
+Each agent gets a Stop/session-idle hook. Completed turns are queued locally under
+`~/.nasiko/integrations/queue/` and delivered to `POST /telemetry/coding-agent/events/batch`, so a
+control plane that is briefly unreachable costs you nothing. Permanently-failed deliveries (after a
+cluster is deleted or renamed, say) land in `~/.nasiko/integrations/rejected/` and are safe to
+delete.
+
+Ingested turns show up as chat sessions right away (`nasiko sessions`, `nasiko history <id>`).
+Traces, token counts, and cost additionally require `CODING_AGENT_OTLP_ENDPOINT` — see below.
+
+### Routing LLM calls through Nasiko
+
+```sh
+nasiko connect claude --config <llm-config-name>
+nasiko connect codex --config <llm-config-name>
+nasiko connect opencode --config <llm-config-name>
+nasiko disconnect <agent>        # reverse the settings/plugin changes
+nasiko status <agent>            # show current binding
+```
+
+`connect claude` / `connect codex` point the agent's `apiKeyHelper` and `*_BASE_URL` at Nasiko, so
+each request mints a short-lived JWT via `POST /api/agents/{id}/llm-token`. Claude Code sends that
+credential in the `x-api-key` header rather than `Authorization`; the router accepts both.
+
+`connect opencode` instead installs a JS plugin (`~/.config/opencode/plugins/nasiko-llm-router.js`)
+registering a `nasiko` provider and making `nasiko/router` the default model for **new** OpenCode
+sessions only — OpenCode fixes a session's model at creation time in its own database, so resuming
+an existing session will not route it. Start a new one, or pick "Nasiko Router" explicitly.
+
+Inbound wire protocol and outbound provider are fully decoupled: `nasiko connect claude --config
+my-openai-config` routes Claude Code's Anthropic-format traffic to OpenAI.
+
+> `~/.claude/settings.json` and OpenCode's config are per-user, global files. Connecting an agent
+> affects every Claude Code / OpenCode process on the machine, not just the current project.
+
+### LLM config management
+
+```sh
+nasiko llm-config create --name <name> --provider <provider> --model <model>
+nasiko llm-config list
+nasiko llm-config update <name> [--provider ...] [--model ...]
+nasiko llm-config set-default <name>
+nasiko llm-config attach <name> --agent <agent>     # attach to a deployed agent
+nasiko llm-config detach --agent <agent>
+nasiko llm-config get <agent>                       # resolved routing config for an agent
+nasiko llm-config providers                         # valid provider/model values + pricing
+```
+
+A config's `model` field is required for routing to work — `list` shows `provider/?` when it is
+unset.
+
+### Server configuration
+
+| Variable | Purpose |
+|---|---|
+| `AGENT_JWT_SECRET` | Signs the short-lived per-request router JWTs. Empty ⇒ every router request is rejected with 401 (fail-closed). |
+| `CODING_AGENT_OTLP_ENDPOINT` | OTLP/HTTP JSON base endpoint for the telemetry outbox worker (the server appends `/v1/traces` and `/v1/logs`). Unset leaves ingested receipts pending and starts no worker, so coding-agent traces never reach Tempo/Loki. |
+
 ## Environment Variables
 
 Everything is env-driven through a single `Config` struct (`config/src/lib.rs`); required keys fail
@@ -505,6 +583,8 @@ fast at startup. When running via `docker compose`, the infrastructure URLs (`DA
 | `SEED_TOOLKITS` | Composio toolkits to auto-register at boot | optional |
 | `MCP_GATEWAY_PUBLIC_URL` | Public URL injected into agents for the MCP gateway | set by compose |
 | `SEED_AGENTS` | Space-separated images auto-deployed at boot | optional |
+| `AGENT_JWT_SECRET` | Signs coding-agent LLM-router request tokens | **required for `nasiko connect`** |
+| `CODING_AGENT_OTLP_ENDPOINT` | OTLP/HTTP JSON endpoint for the coding-agent telemetry outbox | unset (worker disabled) |
 | `ROUTER_MODEL` / `EMBEDDING_MODEL` | Routing-engine models | see `config/` |
 | `NASIKO_FLOW_MAX_DEPTH` / `NASIKO_FLOW_MAX_FAN_OUT` / `NASIKO_FLOW_MAX_TOKENS` | Flow-guard cascade limits | see `config/` |
 ## Project Structure

@@ -237,6 +237,17 @@ impl AppState {
         let worker_state = state.clone();
         tokio::spawn(crate::agents::build_worker::run(worker_state, build_rx));
 
+        // Coding-agent telemetry outbox: drains ingested receipts to the OTLP
+        // collector so their traces/logs reach Tempo/Loki. Unset endpoint leaves
+        // receipts pending and starts no worker.
+        if let Some(endpoint) = state.config.coding_agent_otlp_endpoint.clone() {
+            tokio::spawn(crate::coding_agent_otlp::run(
+                state.db.clone(),
+                state.http_client.clone(),
+                endpoint,
+            ));
+        }
+
         // Container-hours meter: records per-instance run sessions for billing
         // (see agents/hours_meter.rs). 0 disables — used by tests that drive
         // reconcile_once directly.

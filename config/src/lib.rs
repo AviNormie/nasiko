@@ -44,6 +44,9 @@ pub struct Config {
     pub otel_sample_ratio: String,
     pub otel_collector_endpoint: String,
     pub otel_capture_content: bool,
+    /// OTLP/HTTP JSON base endpoint used only by the durable coding-agent
+    /// telemetry outbox. Unset leaves receipts pending and disables its worker.
+    pub coding_agent_otlp_endpoint: Option<String>,
     pub tempo_url: String,
     pub loki_url: String,
     /// Whether the Tempo/Loki observability backend is enabled — the SINGLE
@@ -293,6 +296,10 @@ impl Config {
             )
             .map(|v| v == "true")
             .unwrap_or(true),
+            coding_agent_otlp_endpoint: std::env::var("CODING_AGENT_OTLP_ENDPOINT")
+                .ok()
+                .map(|value| value.trim_end_matches('/').to_owned())
+                .filter(|value| !value.is_empty()),
             tempo_url: env_or("TEMPO_URL", ""),
             loki_url: env_or("LOKI_URL", ""),
             // Enabled only when BOTH backends are explicitly configured; a
