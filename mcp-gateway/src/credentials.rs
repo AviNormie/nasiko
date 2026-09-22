@@ -139,23 +139,6 @@ async fn build_server_config(
         }
     }
 
-    let system = connector.provider_type == "system";
-    // A system backend's tool names must come from the synced catalog, never
-    // a naming heuristic — `router::route_tool` matches a bare name against
-    // this list exactly, since a bare name is otherwise ambiguous with a
-    // Composio meta-tool or toolkit slug (e.g. `GMAIL_SEND_EMAIL`). One extra
-    // query per system connector per request is fine (there is exactly one
-    // such connector). A DB error here propagates like every sibling query
-    // in `build_generic_servers` (`list_accessible_mcp_connectors`,
-    // `list_user_connections`) — silently degrading to "owns nothing" would
-    // let `aggregator::aggregate_tools` list zero of this backend's tools
-    // while a stale cached manifest (or a retry) still routes calls to it,
-    // which is worse than failing this session-build cycle outright.
-    let tool_names = if system {
-        repo::list_connector_tool_names(&state.db, connector.id).await?
-    } else {
-        Vec::new()
-    };
     Ok(Ok(MCPServerConfig {
         connector_id: connector.id,
         kind: ServerType::Mcp,
@@ -166,14 +149,10 @@ async fn build_server_config(
             .transport
             .clone()
             .unwrap_or_else(|| "streamable_http".to_string()),
-        // The ONLY place `trusted`/`system` are ever computed — see
-        // MCPServerConfig's doc comment. Read straight off the already-joined
-        // connector row, no new query. Uploaded builds and system backends
-        // both live inside the platform's own network, so both are trusted.
-        trusted: connector.source_kind == repo::SourceKind::UploadedBuild || system,
-        system,
-        tool_names,
-        instructions: connector.instructions.clone(),
+        // The ONLY place `trusted` is ever computed — see MCPServerConfig's
+        // doc comment. Read straight off the already-joined connector row,
+        // no new query.
+        trusted: connector.source_kind == repo::SourceKind::UploadedBuild,
     }))
 }
 
@@ -444,7 +423,6 @@ mod tests {
             display_name: None,
             logo_url: None,
             description: None,
-            instructions: None,
             auth_config_id: None,
             auth_scheme: None,
             use_composio_managed: None,
@@ -540,8 +518,6 @@ mod tests {
                 tool_search_meta_limit: 0,
                 openai_api_key: None,
                 embedding_model: "".to_string(),
-                gateway_instructions: String::new(),
-                identity_signing_key: b"test-identity-signing-key".to_vec(),
             },
             providers: Providers {
                 composio: None,

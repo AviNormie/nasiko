@@ -4,8 +4,6 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::catalog::models::Agent;
-use crate::seed_mirror::{self, MirrorSettings, RegistryCredential};
-use crate::seed_registry_ready;
 use crate::state::AppState;
 use nasiko_mcp_gateway::catalog;
 use nasiko_runtime::{ContainerId, RuntimeState};
@@ -15,16 +13,12 @@ const AGENT_PORT: u16 = 8000;
 /// Ensure seed agents are deployed and running.
 ///
 /// Reads `SEED_AGENTS` env var (space-separated image refs, e.g.
-/// "nasiko/echo-agent ghcr.io/org/nutrition:v2"). For each image:
+/// "nasiko/echo-agent nasiko/nutrition:v2"). For each image:
 ///
-/// 1. Mirror it from its external registry into the embedded registry
-///    (`seed_mirror`) — the agent is deployed from the internal copy, so every
-///    later pull stays inside the cluster
-/// 2. Upsert the DB record (insert if new, update image if changed)
-/// 3. Check runtime status
-/// 4. Deploy if not running or image changed — the first deploy first waits
-///    for the registry to be pullable over TLS (`seed_registry_ready`)
-/// 5. Fetch agent card once healthy
+/// 1. Upsert the DB record (insert if new, update image if changed)
+/// 2. Check runtime status
+/// 3. Deploy if not running or image changed
+/// 4. Fetch agent card once healthy
 ///
 /// Designed to run as a background task — does not block server startup.
 pub async fn seed_agents_if_configured(state: &AppState) {
@@ -38,17 +32,6 @@ pub async fn seed_agents_if_configured(state: &AppState) {
             return;
         }
     };
-
-    if registry_address_pending(
-        &state.config.agent_image_registry,
-        state.config.agent_image_registry_placeholder.as_deref(),
-    ) {
-        info!(
-            registry = %state.config.agent_image_registry,
-            "registry address not final yet; seeding deferred to the restart that sets it"
-        );
-        return;
-    }
 
     let owner_id: Uuid = match sqlx::query_scalar(
         "SELECT id FROM users WHERE is_superuser = true AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
@@ -69,12 +52,9 @@ pub async fn seed_agents_if_configured(state: &AppState) {
     // (e.g. gpt-4o-mini), which non-OpenAI providers reject with a 400.
     let openai_model = std::env::var("OPENAI_MODEL").unwrap_or_default();
     let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap_or_default();
-    let oci = nasiko_oci::OciState::new(state.db.clone(), state.oci_storage.clone());
-    let mirror_settings = mirror_settings(&state.config);
-    let mut registry_checked = false;
 
-    for source_image in images.split_whitespace() {
-        let agent_name = extract_name(source_image);
+    for image in images.split_whitespace() {
+        let agent_name = extract_name(image);
 
         let existing = sqlx::query_as::<_, Agent>("SELECT * FROM agents WHERE name = $1")
             .bind(&agent_name)
@@ -82,28 +62,11 @@ pub async fn seed_agents_if_configured(state: &AppState) {
             .await
             .unwrap_or(None);
 
-        let Some((mirrored, repointed)) = resolve_seed_image(
-            state,
-            &oci,
-            &mirror_settings,
-            source_image,
-            &agent_name,
-            existing.as_ref(),
-        )
-        .await
-        else {
-            continue;
-        };
-        let image = mirrored.as_str();
-
         let force_pull = std::env::var("SEED_FORCE_PULL").is_ok();
         let needs_deploy = match &existing {
             None => true,
             Some(agent) => {
-                // `repointed`: the external tag moved, so the internal tag now
-                // holds new content under the same ref string — redeploy so the
-                // running agent picks it up.
-                let image_changed = agent.image.as_deref() != Some(image) || repointed;
+                let image_changed = agent.image.as_deref() != Some(image);
                 if image_changed || force_pull {
                     true
                 } else {
@@ -124,10 +87,6 @@ pub async fn seed_agents_if_configured(state: &AppState) {
             continue;
         }
 
-        if !registry_checked {
-            wait_for_registry(state).await;
-            registry_checked = true;
-        }
         info!(agent = %agent_name, image = %image, "seeding agent");
 
         let agent = match &existing {
@@ -210,9 +169,7 @@ pub async fn seed_agents_if_configured(state: &AppState) {
         // "already running, same image, same env" branch never consults this
         // flag at all, so SEED_FORCE_PULL alone does not force a re-pull of an
         // unchanged, already-running seed agent. See DeploymentSpec::force_pull.
-        // A re-pointed tag keeps its ref string, so a runtime with the old
-        // content cached must be told to pull again.
-        spec.force_pull = force_pull || repointed;
+        spec.force_pull = force_pull;
         crate::agents::attach_pull_credential(
             &state.db,
             &state.config.agent_runtime,
@@ -269,130 +226,27 @@ pub async fn seed_agents_if_configured(state: &AppState) {
     }
 }
 
-/// Holds the first seed deploy until nodes can pull from the embedded
-/// registry — see [`seed_registry_ready`].
-async fn wait_for_registry(state: &AppState) {
-    let registry = &state.config.agent_image_registry;
-    let insecure = seed_registry_ready::insecure_registries_from_env();
-    let insecure: Vec<&str> = insecure.iter().map(String::as_str).collect();
-    if seed_registry_ready::needs_tls_wait(registry, &insecure) {
-        seed_registry_ready::wait_until_ready(
-            &state.http_client,
-            &format!("https://{registry}"),
-            seed_registry_ready::READY_TIMEOUT,
-            seed_registry_ready::POLL_INTERVAL,
-        )
-        .await;
-    }
-}
+const DEFAULT_WEAVE_AGENT_NAME: &str = "weave-dashboard-generator";
 
-/// Whether the registry address is still the installer's "not known yet"
-/// placeholder. Seeded agents bake that address into their image ref and pull
-/// credential, so seeding against it would deploy agents that can never pull.
-fn registry_address_pending(registry: &str, placeholder: Option<&str>) -> bool {
-    placeholder.is_some_and(|placeholder| placeholder == registry)
-}
-
-fn mirror_settings(config: &nasiko_config::Config) -> MirrorSettings {
-    let credential = match (
-        &config.agent_registry_username,
-        &config.agent_registry_password,
-    ) {
-        (Some(username), Some(password)) => Some(RegistryCredential {
-            host: config.agent_registry_host.clone(),
-            username: username.clone(),
-            password: password.clone(),
-        }),
-        _ => None,
+/// Deploys the Weave dynamic-UI generation agent the same way
+/// `seed_agents_if_configured` deploys any other agent, except this row has
+/// `is_internal = true` — excluded from every agent list/router/discovery
+/// query, reachable only through the dedicated `ee/server/src/weave_surface.rs`
+/// route, never the generic explicit-`agent_id` A2A dispatch path. Set
+/// `WEAVE_AGENT_IMAGE` to enable; unset skips this entirely, same posture as
+/// `SEED_AGENTS`. `WEAVE_FORCE_PULL` (any value) forces a redeploy even when
+/// `WEAVE_AGENT_IMAGE` is unchanged — for reusing the same tag across builds
+/// instead of bumping it (`SEED_FORCE_PULL`'s equivalent for this agent).
+pub async fn seed_weave_agent_if_configured(state: &AppState) {
+    let image = match std::env::var("WEAVE_AGENT_IMAGE") {
+        Ok(val) if !val.trim().is_empty() => val,
+        _ => {
+            info!("WEAVE_AGENT_IMAGE not set, skipping weave agent seeding");
+            return;
+        }
     };
-    MirrorSettings {
-        credential,
-        platform: config.seed_image_platform.clone(),
-        internal_registry: config.agent_image_registry.clone(),
-    }
-}
-
-/// The internal reference to deploy `source_image` from, after mirroring it.
-///
-/// A mirror failure never falls back to pulling from the external registry.
-/// An agent mirrored on an earlier boot keeps its internal copy (the external
-/// registry being down must not take a running agent offline); one that was
-/// never mirrored is marked `failed` and skipped.
-async fn resolve_seed_image(
-    state: &AppState,
-    oci: &nasiko_oci::OciState,
-    settings: &MirrorSettings,
-    source_image: &str,
-    agent_name: &str,
-    existing: Option<&Agent>,
-) -> Option<(String, bool)> {
-    let error = match seed_mirror::mirror_image(oci, settings, source_image, agent_name).await {
-        Ok(outcome) => return Some((outcome.internal_ref, outcome.repointed)),
-        Err(e) => e,
-    };
-    let previous = existing.and_then(|a| a.image.clone()).filter(|i| {
-        i.contains(&format!(
-            "nasiko/{}:",
-            crate::agents::image_name_slug(agent_name)
-        ))
-    });
-    if let Some(previous) = previous {
-        warn!(agent = %agent_name, image = %source_image, %error,
-            "seed image mirror failed; keeping the previously mirrored copy");
-        return Some((previous, false));
-    }
-    warn!(agent = %agent_name, image = %source_image, %error, "seed image mirror failed");
-    if let Some(agent) = existing {
-        let _ =
-            sqlx::query("UPDATE agents SET status = 'failed', updated_at = now() WHERE id = $1")
-                .bind(agent.id)
-                .execute(&state.db)
-                .await;
-    }
-    None
-}
-
-/// One internal agent to deploy.
-///
-/// An internal agent is a platform-owned agent excluded from every agent
-/// list, routing candidate and A2A discovery query (`is_internal = true`, see
-/// `migrations/0014_agent_internal_flag.sql`), reachable only through whatever
-/// dedicated route its owner mounts rather than the generic
-/// explicit-`agent_id` A2A dispatch path.
-///
-/// The caller owns the policy — which image, under what name, and what the
-/// container needs in its environment. This module owns the mechanics, which
-/// are the ones `seed_agents_if_configured` already uses for ordinary agents.
-/// The split is deliberate: an edition that ships such an agent describes it
-/// in its own tree, and this one carries no particular agent's vocabulary.
-pub struct InternalAgentSeed {
-    /// Agent row name, and the name the deployment is tracked under.
-    pub name: String,
-    /// Container image reference.
-    pub image: String,
-    /// Redeploy even when the image reference has not changed — for reusing
-    /// one tag across builds instead of bumping it, the single-agent
-    /// equivalent of `SEED_FORCE_PULL`.
-    pub force_pull: bool,
-    /// The agent's own settings, stored as its `secrets_env` so every later
-    /// redeploy (restart, reconcile) gives the container the same environment.
-    pub env: HashMap<String, String>,
-    pub public: bool,
-}
-
-/// Deploys one internal agent the same way `seed_agents_if_configured` deploys
-/// any other, except the row carries `is_internal = true`.
-///
-/// Designed to run as a background task — does not block server startup, and
-/// returns quietly when the agent is already running on the same image.
-pub async fn seed_internal_agent(state: &AppState, seed: InternalAgentSeed) {
-    let InternalAgentSeed {
-        name: agent_name,
-        image,
-        force_pull,
-        env: extra_env,
-        public,
-    } = seed;
+    let agent_name =
+        std::env::var("WEAVE_AGENT_NAME").unwrap_or_else(|_| DEFAULT_WEAVE_AGENT_NAME.to_string());
 
     let owner_id: Uuid = match sqlx::query_scalar(
         "SELECT id FROM users WHERE is_superuser = true AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
@@ -402,7 +256,7 @@ pub async fn seed_internal_agent(state: &AppState, seed: InternalAgentSeed) {
     {
         Ok(Some(id)) => id,
         _ => {
-            warn!(agent = %agent_name, "no admin user found, cannot seed internal agent (run bootstrap first)");
+            warn!("no admin user found, cannot seed weave agent (run bootstrap first)");
             return;
         }
     };
@@ -413,21 +267,12 @@ pub async fn seed_internal_agent(state: &AppState, seed: InternalAgentSeed) {
         .await
         .unwrap_or(None);
 
+    let force_pull = std::env::var("WEAVE_FORCE_PULL").is_ok();
     let needs_deploy = match &existing {
         None => true,
         Some(agent) => {
             let image_changed = agent.image.as_deref() != Some(image.as_str());
-            let settings_changed =
-                crate::catalog::agent_secrets::resolve_agent_env(&state.db, agent.id).await
-                    != extra_env;
-            let _ = sqlx::query(
-                "UPDATE agents SET is_public = $2 WHERE id = $1 AND is_public IS DISTINCT FROM $2",
-            )
-            .bind(agent.id)
-            .bind(public)
-            .execute(&state.db)
-            .await;
-            if image_changed || settings_changed || force_pull {
+            if image_changed || force_pull {
                 true
             } else {
                 let container_id = ContainerId::from_uuid(agent.id);
@@ -439,20 +284,19 @@ pub async fn seed_internal_agent(state: &AppState, seed: InternalAgentSeed) {
         }
     };
     if !needs_deploy {
-        info!(agent = %agent_name, "internal agent already running, skipping");
+        info!(agent = %agent_name, "weave agent already running, skipping");
         return;
     }
 
-    info!(agent = %agent_name, %image, "seeding internal agent");
+    info!(agent = %agent_name, %image, "seeding weave agent");
 
     let agent = match &existing {
         Some(a) => {
             let _ = sqlx::query(
-                "UPDATE agents SET image = $2, is_public = $3, status = 'deploying', updated_at = now() WHERE id = $1",
+                "UPDATE agents SET image = $2, status = 'deploying', updated_at = now() WHERE id = $1",
             )
             .bind(a.id)
             .bind(&image)
-            .bind(public)
             .execute(&state.db)
             .await;
             a.clone()
@@ -460,59 +304,91 @@ pub async fn seed_internal_agent(state: &AppState, seed: InternalAgentSeed) {
         None => {
             let inserted = sqlx::query_as::<_, Agent>(
                 r#"INSERT INTO agents (name, owner_id, image, status, is_public, is_internal, metadata)
-                   VALUES ($1, $2, $3, 'deploying', $4, true, '{"seed": true}')
+                   VALUES ($1, $2, $3, 'deploying', false, true, '{"seed": true}')
                    RETURNING *"#,
             )
             .bind(&agent_name)
             .bind(owner_id)
             .bind(&image)
-            .bind(public)
             .fetch_one(&state.db)
             .await;
             match inserted {
                 Ok(a) => a,
                 Err(e) => {
-                    warn!(agent = %agent_name, error = %e, "failed to register internal agent");
+                    warn!(agent = %agent_name, error = %e, "failed to register weave agent");
                     return;
                 }
             }
         }
     };
 
-    if let Err(e) =
-        crate::catalog::agent_secrets::replace_agent_env(&state.db, agent.id, &extra_env).await
-    {
-        warn!(agent = %agent_name, error = %e, "failed to store internal agent settings");
-        return;
-    }
-    if let Err(e) =
-        deploy_internal_agent(state, &agent_name, agent.id, owner_id, &image, force_pull).await
-    {
-        warn!(agent = %agent_name, error = %e, "failed to deploy internal agent");
-        let _ =
-            sqlx::query("UPDATE agents SET status = 'failed', updated_at = now() WHERE id = $1")
-                .bind(agent.id)
-                .execute(&state.db)
-                .await;
-    }
-}
-
-async fn deploy_internal_agent(
-    state: &AppState,
-    agent_name: &str,
-    agent_id: Uuid,
-    owner_id: Uuid,
-    image: &str,
-    force_pull: bool,
-) -> Result<(), String> {
-    let mut env = state.agent_env(agent_id).await;
+    let mut env = HashMap::new();
     env.insert("PORT".into(), AGENT_PORT.to_string());
-    crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env, agent_id).await;
+    env.insert(
+        "WEAVE_EXTRA_SKILLS".into(),
+        "examples.dynamic_ui.skill:build_skill".into(),
+    );
+    for (key, var) in [
+        ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+        ("ANTHROPIC_BASE_URL", "ANTHROPIC_BASE_URL"),
+        ("AWS_REGION", "AWS_REGION"),
+        ("AWS_BEARER_TOKEN_BEDROCK", "AWS_BEARER_TOKEN_BEDROCK"),
+    ] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            env.insert(key.into(), val);
+        }
+    }
+    // Where the agent reaches this control plane from inside its container.
+    //
+    // Two facts make this awkward and neither is optional. `localhost` in
+    // there is the container, so a loopback URL silently resolves to nothing;
+    // and when it resolves to nothing, weave's catalog.py falls back to the
+    // catalog bundled in its image rather than failing — a generation against
+    // a vocabulary nobody chose, which reads as a model ignoring the prompt.
+    //
+    // CP_DOMAIN covers deployment and nothing covered local development,
+    // where CP_DOMAIN is unset by design. WEAVE_CP_URL is that gap: set it to
+    // whatever the container can reach this server at — on Docker Desktop
+    // that is http://host.docker.internal:<CP_BIND port>.
+    let cp_url = std::env::var("WEAVE_CP_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("CP_DOMAIN")
+                .ok()
+                .filter(|d| !d.trim().is_empty())
+                .map(|d| format!("https://{d}"))
+        });
+    match cp_url {
+        Some(url) => {
+            let base = url.trim_end_matches('/');
+            env.insert(
+                "WEAVE_CATALOG_URL".into(),
+                format!("{base}/common/surface/dsl-catalog.json"),
+            );
+            // The same base backs the generated dashboards' own data calls.
+            env.insert("NASIKO_CP_BASE_URL".into(), base.to_string());
+        }
+        None => {
+            warn!(
+                agent = %agent_name,
+                "neither WEAVE_CP_URL nor CP_DOMAIN is set — the weave agent will fall back to \
+                 the catalog bundled in its image, and generate against a stale vocabulary"
+            );
+        }
+    }
+    // Per-agent MCP gateway credential (rotates on every re-seed) — without
+    // this, McpInjector still sets MCP_GATEWAY_URL unconditionally but has no
+    // MCP_GATEWAY_TOKEN to complete MCP_GATEWAY_CONNECT_URL with, leaving the
+    // gateway unreachable from inside the container.
+    crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env, agent.id).await;
 
     let mut spec = crate::agents::build_agent_spec(
-        agent_id,
-        agent_name,
-        image.to_string(),
+        agent.id,
+        &agent_name,
+        image.clone(),
         vec![AGENT_PORT],
         env,
         &state.config.agent_default_memory,
@@ -521,84 +397,48 @@ async fn deploy_internal_agent(
         None,
         owner_id,
     );
+    // Only takes effect when `deploy()` actually recreates the container (no
+    // existing container, or its image/env changed) — see this function's
+    // sibling `seed_agents_if_configured` for the same caveat in full, and
+    // DeploymentSpec::force_pull.
     spec.force_pull = force_pull;
     crate::agents::attach_pull_credential(
         &state.db,
         &state.config.agent_runtime,
         &state.config.agent_image_registry,
         &mut spec,
-        agent_id,
+        agent.id,
     )
     .await;
 
-    let status = state
-        .runtime
-        .deploy(&spec)
-        .await
-        .map_err(|e| e.to_string())?;
-    info!(agent = %agent_name, ?status, "internal agent deployed");
-    let agent_url =
-        crate::agents::resolve_agent_url(&state.runtime, &status, &spec.container_id).await;
-    let _ = sqlx::query(
-        "UPDATE agents SET status = 'running', url = $2, transport_path = '/jsonrpc', updated_at = now() WHERE id = $1",
-    )
-    .bind(agent_id)
-    .bind(&agent_url)
-    .execute(&state.db)
-    .await;
-    crate::agents::utils::ensure_deployment_tracked(&state.db, agent_id, Some(owner_id), image)
-        .await;
-    tokio::spawn(crate::agents::utils::fetch_agent_card_with_retry(
-        state.db.clone(),
-        state.http_client.clone(),
-        agent_id,
-        agent_url,
-    ));
-    Ok(())
-}
-
-const INTERNAL_AGENT_WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-
-pub fn spawn_internal_agent_watch(state: AppState) {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval_at(
-            tokio::time::Instant::now() + INTERNAL_AGENT_WATCH_INTERVAL,
-            INTERNAL_AGENT_WATCH_INTERVAL,
-        );
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tick.tick().await;
-            redeploy_dead_internal_agents(&state).await;
+    match state.runtime.deploy(&spec).await {
+        Ok(status) => {
+            info!(agent = %agent_name, ?status, "weave agent deployed");
+            let agent_url =
+                crate::agents::resolve_agent_url(&state.runtime, &status, &spec.container_id).await;
+            let _ = sqlx::query(
+                "UPDATE agents SET status = 'running', url = $2, transport_path = '/jsonrpc', updated_at = now() WHERE id = $1",
+            )
+            .bind(agent.id)
+            .bind(&agent_url)
+            .execute(&state.db)
+            .await;
+            crate::agents::utils::ensure_deployment_tracked(
+                &state.db,
+                agent.id,
+                Some(owner_id),
+                &image,
+            )
+            .await;
         }
-    });
-}
-
-async fn redeploy_dead_internal_agents(state: &AppState) {
-    let agents: Vec<(Uuid, String, Uuid, String)> = match sqlx::query_as(
-        "SELECT id, name, owner_id, image FROM agents
-         WHERE is_internal AND status = 'running' AND image IS NOT NULL AND deleted_at IS NULL",
-    )
-    .fetch_all(&state.db)
-    .await
-    {
-        Ok(rows) => rows,
         Err(e) => {
-            warn!(error = %e, "internal agent watch: lookup failed");
-            return;
-        }
-    };
-    for (agent_id, name, owner_id, image) in agents {
-        let alive = matches!(
-            state.runtime.status(&ContainerId::from_uuid(agent_id)).await,
-            Ok(status) if matches!(status.state, RuntimeState::Running | RuntimeState::Pending)
-        );
-        if alive {
-            continue;
-        }
-        warn!(agent = %name, "internal agent is not running, redeploying");
-        if let Err(e) = deploy_internal_agent(state, &name, agent_id, owner_id, &image, false).await
-        {
-            warn!(agent = %name, error = %e, "internal agent redeploy failed, retrying next round");
+            warn!(agent = %agent_name, error = %e, "failed to deploy weave agent");
+            let _ = sqlx::query(
+                "UPDATE agents SET status = 'failed', updated_at = now() WHERE id = $1",
+            )
+            .bind(agent.id)
+            .execute(&state.db)
+            .await;
         }
     }
 }
@@ -616,8 +456,6 @@ async fn redeploy_dead_internal_agents(state: &AppState) {
 /// the LAST `/`, so isolating that final path segment before splitting on
 /// `:` is unambiguous regardless of how many colons a registry host has.
 fn extract_name(image: &str) -> String {
-    // A digest pin (`name@sha256:…`) is not part of the name.
-    let image = image.split('@').next().unwrap_or(image);
     let last_segment = image.rsplit('/').next().unwrap_or(image);
     last_segment
         .split(':')
@@ -857,44 +695,8 @@ pub async fn seed_toolkits_if_configured(state: &AppState) {
 }
 
 #[cfg(test)]
-mod registry_address_pending_tests {
-    use super::registry_address_pending;
-
-    #[test]
-    fn seeding_waits_while_the_registry_is_the_placeholder() {
-        assert!(registry_address_pending(
-            "nasiko.pending.nip.io",
-            Some("nasiko.pending.nip.io")
-        ));
-    }
-
-    #[test]
-    fn seeding_runs_once_the_real_address_is_set() {
-        assert!(!registry_address_pending(
-            "nasiko.34.1.2.3.nip.io",
-            Some("nasiko.pending.nip.io")
-        ));
-    }
-
-    #[test]
-    fn seeding_runs_when_no_placeholder_is_configured() {
-        assert!(!registry_address_pending("", None));
-        assert!(!registry_address_pending("registry.example.com", None));
-    }
-}
-
-#[cfg(test)]
 mod extract_name_tests {
     use super::extract_name;
-
-    #[test]
-    fn digest_pin_is_not_part_of_the_name() {
-        assert_eq!(
-            extract_name("us-central1-docker.pkg.dev/p/agents/hr@sha256:abc123"),
-            "hr"
-        );
-        assert_eq!(extract_name("ghcr.io/org/hr:v1@sha256:abc123"), "hr");
-    }
 
     #[test]
     fn plain_dockerhub_style_ref() {
