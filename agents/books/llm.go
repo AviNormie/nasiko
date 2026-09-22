@@ -22,9 +22,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 )
 
 // ── OpenAI wire types (chat.completions) ─────────────────────────────────────
@@ -68,10 +65,6 @@ type chatResponse struct {
 		Message      chatMessage `json:"message"`
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -106,18 +99,6 @@ func newLLMClient() *llmClient {
 // chat sends one round to the LLM. traceparent is the inbound W3C trace context
 // header value (may be empty); forwarding it lets the gateway attribute the call.
 func (c *llmClient) chat(ctx context.Context, messages []chatMessage, tools []toolDef, traceparent string) (*chatMessage, error) {
-	// Explicit GenAI span: the loongsuite auto-instrumentation traces the raw
-	// HTTP call (method/URL/status/duration) but has no way to know this is an
-	// LLM call or to parse gen_ai usage out of the response body — that has to
-	// be recorded manually, same as the Rust agents' #[tracing::instrument] does.
-	ctx, span := otel.Tracer("books").Start(ctx, "ChatCompletion")
-	defer span.End()
-	span.SetAttributes(
-		attribute.String("gen_ai.operation.name", "chat"),
-		attribute.String("gen_ai.provider.name", "openai"),
-		attribute.String("gen_ai.request.model", c.model),
-	)
-
 	reqBody := chatRequest{Model: c.model, Messages: messages, Tools: tools}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -152,26 +133,26 @@ func (c *llmClient) chat(ctx context.Context, messages []chatMessage, tools []to
 	if len(out.Choices) == 0 {
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
-
-	span.SetAttributes(
-		attribute.Int64("gen_ai.usage.input_tokens", int64(out.Usage.PromptTokens)),
-		attribute.Int64("gen_ai.usage.output_tokens", int64(out.Usage.CompletionTokens)),
-	)
-
 	return &out.Choices[0].Message, nil
 }
 
 // runAgentLoop is the ReAct loop: the model decides which tool to call, we
-// execute it, feed the result back, and repeat until the model answers with
-// content instead of a tool call.
-func (c *llmClient) runAgentLoop(ctx context.Context, query, traceparent string) (string, error) {
+// execute it via `dispatch`, feed the result back, and repeat until the model
+// answers with content instead of a tool call. `tools` is the full schema
+// advertised to the model (built-ins plus any MCP gateway tools).
+func (c *llmClient) runAgentLoop(
+	ctx context.Context,
+	query, traceparent, systemExtra string,
+	tools []toolDef,
+	dispatch func(ctx context.Context, name, argsJSON string) string,
+) (string, error) {
 	messages := []chatMessage{
-		{Role: "system", Content: systemPrompt},
+		{Role: "system", Content: systemPrompt + systemExtra},
 		{Role: "user", Content: query},
 	}
 
 	for range maxToolRounds {
-		msg, err := c.chat(ctx, messages, booksTools, traceparent)
+		msg, err := c.chat(ctx, messages, tools, traceparent)
 		if err != nil {
 			return "", err
 		}
@@ -187,7 +168,7 @@ func (c *llmClient) runAgentLoop(ctx context.Context, query, traceparent string)
 		// Record the assistant turn (with its tool calls), then run each tool.
 		messages = append(messages, *msg)
 		for _, tc := range msg.ToolCalls {
-			result := dispatchTool(ctx, tc.Function.Name, tc.Function.Arguments)
+			result := dispatch(ctx, tc.Function.Name, tc.Function.Arguments)
 			messages = append(messages, chatMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,

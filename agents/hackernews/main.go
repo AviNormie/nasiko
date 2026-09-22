@@ -19,6 +19,11 @@ import (
 
 type hnExecutor struct {
 	llm *llmClient
+	// MCP gateway client — nil when the platform didn't inject
+	// MCP_GATEWAY_URL/MCP_GATEWAY_TOKEN. Configured ONCE at startup; the
+	// per-user binding rides the forwarded traceparent, so request handling
+	// needs no credential plumbing at all (see mcp.go).
+	mcp *mcpClient
 }
 
 var _ a2asrv.AgentExecutor = (*hnExecutor)(nil)
@@ -28,9 +33,20 @@ func (h *hnExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 	traceparent := firstParam(execCtx, "traceparent")
 	return func(yield func(a2a.Event, error) bool) {
 		userText := extractText(execCtx.Message)
+		// Built-in tools plus whatever the MCP gateway granted this agent.
+		tools := hnTools
+		if h.mcp != nil {
+			tools = append(append([]toolDef{}, hnTools...), h.mcp.tools...)
+		}
+		dispatch := func(ctx context.Context, name, argsJSON string) string {
+			if h.mcp != nil && h.mcp.names[name] {
+				return h.mcp.callTool(ctx, traceparent, name, argsJSON)
+			}
+			return dispatchTool(ctx, name, argsJSON)
+		}
 		// Run the LLM tool-calling loop: the model interprets the query and picks
 		// tools, we execute them, then the model synthesizes the answer.
-		result, err := h.llm.runAgentLoop(ctx, userText, traceparent)
+		result, err := h.llm.runAgentLoop(ctx, userText, traceparent, h.mcp.systemPromptHint(), tools, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -237,7 +253,14 @@ func main() {
 		},
 	}
 
-	handler := a2asrv.NewHandler(&hnExecutor{llm: newLLMClient()})
+	// MCP gateway: configured once from the deploy-injected env; tool
+	// discovery needs no flow, so it runs here rather than per request.
+	mcp := newMCPClient()
+	if mcp != nil {
+		mcp.discoverTools(context.Background())
+	}
+
+	handler := a2asrv.NewHandler(&hnExecutor{llm: newLLMClient(), mcp: mcp})
 
 	mux := http.NewServeMux()
 	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(handler))

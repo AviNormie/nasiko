@@ -17,11 +17,13 @@ use rig::OneOrMany;
 use rig::completion::message::{ToolResultContent, UserContent};
 use rig::completion::{
     AssistantContent, CompletionModel as _, CompletionRequestBuilder, CompletionResponse, Message,
+    ToolDefinition,
 };
 use rig::prelude::CompletionClient as _;
 use rig::providers::openai;
 
 use crate::github::short_hash;
+use crate::mcp;
 use crate::slack;
 use crate::telemetry;
 use crate::tools::build_tools;
@@ -49,10 +51,14 @@ pub struct RepoWatchAgent {
     /// scheduled/notification use case, where nobody types a query naming specific repos).
     /// Configured as `GITHUB_REPO="owner/a owner/b"` — space-separated in one env var.
     default_repos: Vec<String>,
+    /// MCP gateway client -- `None` when the platform didn't inject
+    /// `MCP_GATEWAY_URL`/`MCP_GATEWAY_TOKEN`. Configured ONCE at startup;
+    /// the per-user binding rides the forwarded traceparent (see mcp.rs).
+    mcp: Option<std::sync::Arc<mcp::McpClient>>,
 }
 
 impl RepoWatchAgent {
-    pub fn new() -> Self {
+    pub fn new(mcp: Option<std::sync::Arc<mcp::McpClient>>) -> Self {
         let default_repos = std::env::var("GITHUB_REPO")
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
@@ -62,6 +68,7 @@ impl RepoWatchAgent {
             api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
             default_repos,
+            mcp,
         }
     }
 
@@ -80,9 +87,15 @@ impl RepoWatchAgent {
         // OpenAI-compatible providers implement the former, not the latter.
         // Forward the inbound trace context as a W3C `traceparent` default header so the
         // LLM gateway can attribute these completions to the originating user flow.
+        // Bound once: the same header authorizes the gateway tool calls below,
+        // where it names the flow whose user the platform resolves
+        // (docs/MCP_GATEWAY_AGENT_AUTH.md).
+        let traceparent = remote_cx
+            .and_then(telemetry::traceparent_for_context)
+            .unwrap_or_default();
         let mut headers = reqwest::header::HeaderMap::new();
-        if let Some(tp) = remote_cx.and_then(telemetry::traceparent_for_context)
-            && let Ok(value) = reqwest::header::HeaderValue::from_str(&tp)
+        if !traceparent.is_empty()
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(&traceparent)
         {
             headers.insert("traceparent", value);
         }
@@ -93,9 +106,31 @@ impl RepoWatchAgent {
             .build()
             .map_err(|e| format!("LLM client setup failed: {e}"))?;
         let model = client.completion_model(&self.model);
-        let (toolset, tool_defs) = build_tools();
+        let (toolset, mut tool_defs) = build_tools();
+        // Built-in tools plus whatever the MCP gateway granted this agent. The
+        // gateway speaks the OpenAI function shape; rig wants its own struct.
+        if let Some(client) = &self.mcp {
+            tool_defs.extend(client.tool_defs().iter().filter_map(|tool| {
+                let function = tool.get("function")?;
+                Some(ToolDefinition {
+                    name: function.get("name")?.as_str()?.to_string(),
+                    description: function
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    parameters: function.get("parameters").cloned().unwrap_or_default(),
+                })
+            }));
+        }
         let now = chrono::Utc::now();
         let system = system_prompt(&self.default_repos, now);
+        // The prompt lists only the built-in tools, so without this the model
+        // ignores whatever the gateway granted (see mcp.rs).
+        let system = match &self.mcp {
+            Some(client) => format!("{system}{}", client.system_prompt_hint()),
+            None => system,
+        };
 
         let mut history: Vec<Message> = Vec::new();
         let mut prompt = Message::user(prompt_text);
@@ -154,9 +189,20 @@ impl RepoWatchAgent {
                     ));
                 }
 
-                let result = toolset
-                    .call(&tc.function.name, tc.function.arguments.to_string())
-                    .await;
+                let result = match &self.mcp {
+                    Some(client) if client.handles(&tc.function.name) => Ok(client
+                        .call_tool(
+                            &traceparent,
+                            &tc.function.name,
+                            &tc.function.arguments.to_string(),
+                        )
+                        .await),
+                    _ => {
+                        toolset
+                            .call(&tc.function.name, tc.function.arguments.to_string())
+                            .await
+                    }
+                };
                 let result_text = result.unwrap_or_else(|e| format!("Error: {e}"));
 
                 let tool_msg = Message::User {
@@ -208,7 +254,7 @@ impl RepoWatchAgent {
 
 impl Default for RepoWatchAgent {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 

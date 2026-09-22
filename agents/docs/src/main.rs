@@ -4,6 +4,7 @@ use a2a::*;
 use a2a_server::*;
 use futures::stream::BoxStream;
 
+mod mcp;
 mod telemetry;
 mod tools;
 
@@ -12,16 +13,21 @@ struct DocsAgent {
     api_key: String,
     base_url: String,
     http: reqwest::Client,
+    /// MCP gateway client -- `None` when the platform didn't inject
+    /// `MCP_GATEWAY_URL`/`MCP_GATEWAY_TOKEN`. Configured ONCE at startup;
+    /// the per-user binding rides the forwarded traceparent (see mcp.rs).
+    mcp: Option<Arc<mcp::McpClient>>,
 }
 
 impl DocsAgent {
-    fn new() -> Self {
+    fn new(mcp: Option<Arc<mcp::McpClient>>) -> Self {
         Self {
             base_url: std::env::var("OPENAI_BASE_URL")
                 .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
             api_key: std::env::var("OPENAI_API_KEY").unwrap_or_default(),
             model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
             http: reqwest::Client::new(),
+            mcp,
         }
     }
 
@@ -52,7 +58,9 @@ impl DocsAgent {
         if capture {
             tracing::Span::current().record(
                 "gen_ai.input.messages",
-                telemetry::genai_input_messages(messages).to_string().as_str(),
+                telemetry::genai_input_messages(messages)
+                    .to_string()
+                    .as_str(),
             );
         }
         let mut body = serde_json::json!({
@@ -85,7 +93,8 @@ impl DocsAgent {
             return Err(format!("LLM API {status}: {body}"));
         }
 
-        let response = resp.json::<serde_json::Value>()
+        let response = resp
+            .json::<serde_json::Value>()
             .await
             .map_err(|e| format!("JSON parse: {e}"))?;
 
@@ -102,8 +111,15 @@ impl DocsAgent {
         if capture {
             let message = &response["choices"][0]["message"];
             let text = message["content"].as_str().unwrap_or("");
-            let tool_calls = message["tool_calls"].as_array().cloned().unwrap_or_default();
-            let finish_reason = if tool_calls.is_empty() { "stop" } else { "tool_call" };
+            let tool_calls = message["tool_calls"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let finish_reason = if tool_calls.is_empty() {
+                "stop"
+            } else {
+                "tool_call"
+            };
             tracing::Span::current().record(
                 "gen_ai.output.messages",
                 telemetry::genai_output_message(text, &tool_calls, finish_reason)
@@ -117,7 +133,10 @@ impl DocsAgent {
 }
 
 impl AgentExecutor for DocsAgent {
-    fn execute(&self, ctx: ExecutorContext) -> BoxStream<'static, Result<StreamResponse, A2AError>> {
+    fn execute(
+        &self,
+        ctx: ExecutorContext,
+    ) -> BoxStream<'static, Result<StreamResponse, A2AError>> {
         // Join the caller's W3C trace (the platform forwards `traceparent`
         // through the agent proxy/orchestrator). Without adopting it, the OTel
         // SDK mints a fresh root trace id per request and the control plane's
@@ -127,6 +146,16 @@ impl AgentExecutor for DocsAgent {
             .get("traceparent")
             .and_then(|v| v.first())
             .and_then(|tp| telemetry::remote_context_from_traceparent(tp));
+
+        // The same header, kept verbatim: gateway tool calls forward it so the
+        // platform can resolve the user and authorize this agent as a recorded
+        // participant of that flow (docs/MCP_GATEWAY_AGENT_AUTH.md).
+        let traceparent = ctx
+            .service_params
+            .get("traceparent")
+            .and_then(|v| v.first())
+            .cloned()
+            .unwrap_or_default();
 
         let task_id = ctx.task_id.clone();
         let context_id = ctx.context_id.clone();
@@ -150,8 +179,8 @@ impl AgentExecutor for DocsAgent {
         // invocation, so record it as invoke_agent with the exchanged messages
         // (content gated by the platform capture flag). `session.id` lets the
         // control plane find this trace by A2A contextId directly in Tempo.
-        let agent_name = std::env::var("OTEL_SERVICE_NAME")
-            .unwrap_or_else(|_| env!("CARGO_PKG_NAME").into());
+        let agent_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| env!("CARGO_PKG_NAME").into());
         let span = tracing::info_span!(
             "a2a.execute",
             otel.kind = "server",
@@ -179,32 +208,44 @@ impl AgentExecutor for DocsAgent {
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
         let http = self.http.clone();
+        let mcp = self.mcp.clone();
         let record_span = span.clone();
 
         let stream = async_stream::stream! {
             yield Ok(status_working(&task_id, &context_id, None));
 
-            let agent = DocsAgent { model, api_key, base_url, http };
-            let tool_defs = tools::definitions();
+            let agent = DocsAgent { model, api_key, base_url, http, mcp: mcp.clone() };
+            // Built-in tools plus whatever the MCP gateway granted this agent.
+            let mut tool_defs = tools::definitions();
+            if let Some(client) = &mcp {
+                tool_defs.extend(client.tool_defs().iter().cloned());
+            }
 
             let system = "\
-You are a documentation assistant. You MUST use your tools for every answer — never respond from \
-memory alone. Every claim must be backed by tool output.\n\n\
-Tools (use these as primary sources):\n\
-- crates_io — search Rust crates (sorted by downloads by default). PRIMARY for Rust questions.\n\
-- crate_info — detailed info on a specific crate (features, deps, versions)\n\
-- npm_search / npm_package — JavaScript/TypeScript packages. PRIMARY for JS/TS questions.\n\
-- pypi_package — Python packages. PRIMARY for Python questions.\n\
-- github_readme — fetch README for usage examples and API docs\n\
-- web_search — ONLY use when registry tools don't cover the question (comparisons, tutorials, \
-  non-library questions). Prefer registry data over web results.\n\n\
-Rules:\n\
-- ALWAYS call at least one tool before answering\n\
-- For Rust: use crates_io first, then crate_info for details, then github_readme for examples\n\
-- For JS/Python: use npm_search/pypi_package first\n\
-- Always include the exact version number from tool output\n\
-- Include download counts when available — they indicate ecosystem trust\n\
-- Never invent or guess API signatures — look them up with tools";
+        You are a documentation assistant. You MUST use your tools for every answer — never respond from \
+        memory alone. Every claim must be backed by tool output.\n\n\
+        Tools (use these as primary sources):\n\
+        - crates_io — search Rust crates (sorted by downloads by default). PRIMARY for Rust questions.\n\
+        - crate_info — detailed info on a specific crate (features, deps, versions)\n\
+        - npm_search / npm_package — JavaScript/TypeScript packages. PRIMARY for JS/TS questions.\n\
+        - pypi_package — Python packages. PRIMARY for Python questions.\n\
+        - github_readme — fetch README for usage examples and API docs\n\
+        - web_search — ONLY use when registry tools don't cover the question (comparisons, tutorials, \
+        non-library questions). Prefer registry data over web results.\n\n\
+        Rules:\n\
+        - ALWAYS call at least one tool before answering\n\
+        - For Rust: use crates_io first, then crate_info for details, then github_readme for examples\n\
+        - For JS/Python: use npm_search/pypi_package first\n\
+        - Always include the exact version number from tool output\n\
+        - Include download counts when available — they indicate ecosystem trust\n\
+        - Never invent or guess API signatures — look them up with tools";
+
+            // The prompt above lists only the built-ins, so without this the model
+            // keeps answering account questions with web_search (see mcp.rs).
+            let system = match &mcp {
+                Some(client) => format!("{system}{}", client.system_prompt_hint()),
+                None => system.to_string(),
+            };
 
             let mut messages = vec![
                 serde_json::json!({"role": "system", "content": system}),
@@ -237,7 +278,12 @@ Rules:\n\
                             Some(&format!("{name}: {preview}")),
                         ));
 
-                        let result = tools::execute(name, args).await;
+                        let result = match &mcp {
+                            Some(client) if client.handles(name) => {
+                                client.call_tool(&traceparent, name, args).await
+                            }
+                            _ => tools::execute(name, args).await,
+                        };
 
                         messages.push(serde_json::json!({
                             "role": "tool",
@@ -330,14 +376,24 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8000);
 
+    // MCP gateway: configured once from the deploy-injected env. Discovery
+    // needs no flow, so it runs here rather than per request.
+    let mut mcp = mcp::McpClient::from_env();
+    if let Some(client) = &mut mcp {
+        client.discover_tools().await;
+    }
+    let mcp = mcp.map(Arc::new);
+
     let handler = Arc::new(DefaultRequestHandler::new(
-        DocsAgent::new(),
+        DocsAgent::new(mcp),
         InMemoryTaskStore::new(),
     ));
 
     let agent_card = AgentCard {
         name: "Documentation Assistant".to_string(),
-        description: "Version-accurate documentation lookup across crates.io, npm, PyPI, and GitHub".to_string(),
+        description:
+            "Version-accurate documentation lookup across crates.io, npm, PyPI, and GitHub"
+                .to_string(),
         version: "1.0.0".to_string(),
         provider: Some(AgentProvider {
             organization: "Nasiko".to_string(),
@@ -352,18 +408,21 @@ async fn main() {
         skills: vec![AgentSkill {
             id: "docs-lookup".into(),
             name: "Docs Lookup".into(),
-            description: "Look up documentation for any library across Rust, JS, and Python ecosystems".into(),
+            description:
+                "Look up documentation for any library across Rust, JS, and Python ecosystems"
+                    .into(),
             tags: vec!["docs".into(), "rust".into(), "npm".into(), "python".into()],
-            examples: None, input_modes: None, output_modes: None, security_requirements: None,
+            examples: None,
+            input_modes: None,
+            output_modes: None,
+            security_requirements: None,
         }],
         default_input_modes: vec!["text/plain".to_string()],
         default_output_modes: vec!["text/plain".to_string()],
-        supported_interfaces: vec![
-            AgentInterface::new(
-                &format!("http://0.0.0.0:{port}/"),
-                TRANSPORT_PROTOCOL_JSONRPC,
-            ),
-        ],
+        supported_interfaces: vec![AgentInterface::new(
+            &format!("http://0.0.0.0:{port}/"),
+            TRANSPORT_PROTOCOL_JSONRPC,
+        )],
         security_schemes: None,
         security_requirements: None,
         documentation_url: None,
@@ -429,7 +488,11 @@ fn extract_preview(args: &str) -> String {
         .and_then(|v| {
             v.as_object()?.values().find_map(|val| {
                 val.as_str().map(|s| {
-                    if s.len() > 60 { format!("{}...", &s[..60]) } else { s.to_string() }
+                    if s.len() > 60 {
+                        format!("{}...", &s[..60])
+                    } else {
+                        s.to_string()
+                    }
                 })
             })
         })
