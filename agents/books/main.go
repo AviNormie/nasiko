@@ -19,6 +19,11 @@ import (
 
 type booksExecutor struct {
 	llm *llmClient
+	// MCP gateway client — nil when the platform didn't inject
+	// MCP_GATEWAY_URL/MCP_GATEWAY_TOKEN. Configured ONCE at startup; the
+	// per-user binding rides the forwarded traceparent, so request handling
+	// needs no credential plumbing at all (see mcp.go).
+	mcp *mcpClient
 }
 
 var _ a2asrv.AgentExecutor = (*booksExecutor)(nil)
@@ -28,9 +33,20 @@ func (b *booksExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorCon
 	traceparent := firstParam(execCtx, "traceparent")
 	return func(yield func(a2a.Event, error) bool) {
 		userText := extractText(execCtx.Message)
+		// Built-in tools plus whatever the MCP gateway granted this agent.
+		tools := booksTools
+		if b.mcp != nil {
+			tools = append(append([]toolDef{}, booksTools...), b.mcp.tools...)
+		}
+		dispatch := func(ctx context.Context, name, argsJSON string) string {
+			if b.mcp != nil && b.mcp.names[name] {
+				return b.mcp.callTool(ctx, traceparent, name, argsJSON)
+			}
+			return dispatchTool(ctx, name, argsJSON)
+		}
 		// Run the LLM tool-calling loop: the model forms the search query, we
 		// execute it against Open Library, then the model synthesizes the answer.
-		result, err := b.llm.runAgentLoop(ctx, userText, traceparent)
+		result, err := b.llm.runAgentLoop(ctx, userText, traceparent, b.mcp.systemPromptHint(), tools, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -174,7 +190,14 @@ func main() {
 		},
 	}
 
-	handler := a2asrv.NewHandler(&booksExecutor{llm: newLLMClient()})
+	// MCP gateway: configured once from the deploy-injected env; tool
+	// discovery needs no flow, so it runs here rather than per request.
+	mcp := newMCPClient()
+	if mcp != nil {
+		mcp.discoverTools(context.Background())
+	}
+
+	handler := a2asrv.NewHandler(&booksExecutor{llm: newLLMClient(), mcp: mcp})
 
 	mux := http.NewServeMux()
 	mux.Handle("/a2a", a2asrv.NewJSONRPCHandler(handler))

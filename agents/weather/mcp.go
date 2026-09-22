@@ -27,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 )
 
 type mcpClient struct {
@@ -162,4 +163,33 @@ func (c *mcpClient) callTool(ctx context.Context, traceparent, name, argsJSON st
 		}
 	}
 	return string(result)
+}
+
+// systemPromptHint returns a system-prompt fragment naming the gateway tools,
+// for the agent to append to its own prompt. Safe on a nil client.
+//
+// Advertising the tools in the request is not enough: the agent's prompt
+// enumerates its built-ins and names one of them as the general-purpose
+// fallback, so the model keeps answering "my issues" / "my emails" from a web
+// search instead of the user's actual account. Empty when discovery found
+// nothing, leaving the prompt untouched.
+func (c *mcpClient) systemPromptHint() string {
+	if c == nil || len(c.tools) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(c.tools))
+	for _, t := range c.tools {
+		names = append(names, t.Function.Name)
+	}
+	return "\n\nConnected-account tools (MCP gateway): " + strings.Join(names, ", ") + ".\n" +
+		"These reach the user's OWN connected accounts — email, chat, issue tracker, " +
+		"calendar and so on — and return their real data.\n" +
+		"- For any question about the user's own data (\"my issues\", \"my emails\", " +
+		"\"messages I received\"), you MUST use these tools.\n" +
+		"- NEVER answer such a question with a web search: that returns public " +
+		"documentation about the product, not the user's data.\n" +
+		"- Some of these are a search-then-execute pair; read each tool's own " +
+		"description and follow it.\n" +
+		"- If a tool reports the account is not connected, say so plainly and pass on " +
+		"any authorization link it returns."
 }

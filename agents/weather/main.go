@@ -48,7 +48,7 @@ func (w *weatherExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorC
 		}
 		// Run the LLM tool-calling loop: the model extracts the location and picks
 		// tools, we execute them, then the model synthesizes the answer.
-		result, err := w.llm.runAgentLoop(ctx, userText, traceparent, tools, dispatch)
+		result, err := w.llm.runAgentLoop(ctx, userText, traceparent, w.mcp.systemPromptHint(), tools, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
