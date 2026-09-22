@@ -265,15 +265,15 @@ pub async fn a2a_dispatch_handler(
         // Organization policy goes ahead of the agent's own knowledge, which goes ahead of the
         // conversation: the ordering IS the precedence, since nothing downstream re-ranks these
         // against each other — whatever the agent reads last is qualified by what it read first.
-        let outbound_query = crate::prompt_context::prefixed(
-            state.prompt_context.org_context().await.as_deref(),
-            &with_facts,
-        );
+        let org_context = state.prompt_context.org_context().await;
+        let org_applied = org_context.is_some();
+        let outbound_query = crate::prompt_context::prefixed(org_context.as_deref(), &with_facts);
         agent_stream(
             &state,
             agent,
             &query,
             &outbound_query,
+            org_applied,
             &task_id,
             &context_id,
             user_id,
@@ -558,6 +558,9 @@ pub(crate) async fn orchestrator_stream(
     // sub-leg is a fresh conversation with a different model that never sees this preamble. One
     // resolution, two deliveries — a fan-out must not pay for this per leg.
     let org_context = state.prompt_context.org_context().await;
+    // Captured before `org_context` is moved into the config below, so the span can report
+    // whether policy was in force on this turn.
+    let org_applied = org_context.is_some();
     let preamble = match (org_context.as_deref(), agent_facts) {
         (None, facts) => facts,
         (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
@@ -594,6 +597,7 @@ pub(crate) async fn orchestrator_stream(
         gen_ai.operation.name = "invoke_agent",
         gen_ai.agent.name = "orchestrator",
         session.id = %context_id,
+        nasiko.prompt_context.org_applied = org_applied,
         gen_ai.input.messages = tracing::field::Empty,
         gen_ai.output.messages = tracing::field::Empty,
     );
@@ -1206,6 +1210,11 @@ async fn agent_stream(
     // What's actually sent to the agent in the A2A request body — `query`, or `query` with
     // injected context prepended. Never read for persistence/tracing.
     outbound_query: &str,
+    // Whether org-wide context was part of `outbound_query`. Passed rather than derived from
+    // `outbound_query != query`, which is also true when only per-agent context was added — and
+    // the question worth answering from a trace is specifically "did the org policy reach this
+    // agent", the one that separates "the agent ignored it" from "it never arrived".
+    org_applied: bool,
     task_id: &str,
     context_id: &str,
     user_id: Uuid,
@@ -1233,6 +1242,7 @@ async fn agent_stream(
         gen_ai.operation.name = "invoke_agent",
         gen_ai.agent.name = %agent.name,
         session.id = %context_id,
+        nasiko.prompt_context.org_applied = org_applied,
         gen_ai.input.messages = tracing::field::Empty,
         gen_ai.output.messages = tracing::field::Empty,
     );
