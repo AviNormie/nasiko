@@ -116,11 +116,71 @@ impl SwappablePromptContext {
     }
 }
 
+/// Adapts the prompt-context seam to `nasiko_orchestrator`'s `OutboundPrefix`.
+///
+/// The MAF worker is spawned once at startup and outlives every request, so it cannot be handed
+/// a resolved string the way the chat path's `OrchestratorConfig::outbound_prefix` is — it needs
+/// something it can ask, per execution, which is what that trait is. This is the adapter: it owns
+/// nothing, and forwards to the same `SwappablePromptContext` every request path reads, so the
+/// two orchestrators can never end up carrying different text.
+///
+/// It also supplies the join, so `nasiko-orchestrator` does not need its own copy of
+/// [`prefixed`] — that crate cannot reach `nasiko-react-agent`, and a second implementation of a
+/// three-line convention is exactly the kind of thing that drifts unnoticed.
+pub struct PromptContextOutbound(Arc<SwappablePromptContext>);
+
+impl PromptContextOutbound {
+    pub fn new(cell: Arc<SwappablePromptContext>) -> Self {
+        Self(cell)
+    }
+}
+
+impl std::fmt::Debug for PromptContextOutbound {
+    /// `OutboundPrefix` requires `Debug` because the config that carries it is logged on error
+    /// paths; the cell behind this holds a trait object with nothing useful to print, so name the
+    /// adapter and stop there rather than making the seam un-loggable.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PromptContextOutbound")
+    }
+}
+
+#[async_trait]
+impl nasiko_orchestrator::OutboundPrefix for PromptContextOutbound {
+    async fn resolve(&self) -> Option<String> {
+        self.0.org_context().await
+    }
+
+    fn compose(&self, prefix: Option<&str>, body: &str) -> String {
+        prefixed(prefix, body)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     struct FixedContextProvider(&'static str);
+
+    struct OrgContextProvider(&'static str);
+
+    #[async_trait]
+    impl PromptContextProvider for OrgContextProvider {
+        async fn context_for_agents(
+            &self,
+            _agent_ids: &[Uuid],
+            _query: &str,
+        ) -> HashMap<Uuid, String> {
+            HashMap::new()
+        }
+
+        async fn context_for_agent(&self, _agent_id: Uuid, _query: &str) -> Option<String> {
+            None
+        }
+
+        async fn org_context(&self) -> Option<String> {
+            Some(self.0.to_string())
+        }
+    }
 
     #[async_trait]
     impl PromptContextProvider for FixedContextProvider {
@@ -135,6 +195,35 @@ mod tests {
         async fn context_for_agent(&self, _agent_id: Uuid, _query: &str) -> Option<String> {
             Some(self.0.to_string())
         }
+    }
+
+    /// The MAF worker reaches org context through `OutboundPrefix` rather than the request-path
+    /// methods, so the adapter has to read the SAME cell — a worker left holding its own copy
+    /// would keep injecting whatever was installed at boot for the life of the process.
+    #[tokio::test]
+    async fn the_outbound_adapter_reads_through_the_shared_cell() {
+        use nasiko_orchestrator::OutboundPrefix as _;
+
+        let cell = Arc::new(SwappablePromptContext::new(Arc::new(
+            NoopPromptContextProvider,
+        )));
+        let outbound = PromptContextOutbound::new(cell.clone());
+
+        assert_eq!(outbound.resolve().await, None, "no provider installed yet");
+        assert_eq!(
+            outbound.compose(None, "step prompt"),
+            "step prompt",
+            "nothing to add must leave a step's prompt byte-identical"
+        );
+
+        cell.install(Arc::new(OrgContextProvider("POLICY")));
+
+        assert_eq!(outbound.resolve().await, Some("POLICY".to_string()));
+        assert_eq!(
+            outbound.compose(Some("POLICY"), "step prompt"),
+            "POLICY\n\nstep prompt",
+            "the join must match the one every other call site uses"
+        );
     }
 
     /// Reproduces the exact HITL-resume-dispatcher bug: a background task clones `AppState`

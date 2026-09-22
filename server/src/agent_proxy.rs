@@ -81,6 +81,8 @@ pub async fn agent_proxy(
         gen_ai.operation.name = "invoke_agent",
         agent.id = %agent_id,
         session.id = tracing::field::Empty,
+        // Recorded once `ensure_chat_session` below has decided; see `PersistInfo::org_applied`.
+        nasiko.prompt_context.org_applied = tracing::field::Empty,
         gen_ai.input.messages = tracing::field::Empty,
     );
     if let Some(cx) = traceparent
@@ -176,6 +178,9 @@ pub async fn agent_proxy(
     // generated contextId into the body — see `ensure_chat_session`).
     let (body_bytes, persist_info) =
         ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
+    if let Some(info) = persist_info.as_ref() {
+        proxy_span.record("nasiko.prompt_context.org_applied", info.org_applied);
+    }
 
     // Persist the user message to chat_messages (fire-and-forget, mirrors CLI
     // behaviour). No trace_id column: session_traces (below) is the
@@ -569,6 +574,9 @@ const MESSAGE_SEND_METHODS: &[&str] = &[
 struct PersistInfo {
     session_id: String,
     user_text: String,
+    /// Whether org-wide context was prepended to the forwarded text. Carried out so the caller
+    /// can record it on `a2a.proxy` — this function owns the decision, the caller owns the span.
+    org_applied: bool,
 }
 
 /// Guarantee every agent chat happens inside a persisted `chat_sessions` row.
@@ -703,10 +711,11 @@ async fn ensure_chat_session(
         true
     };
 
-    let persist_info = Some(PersistInfo {
+    let mut persist_info = PersistInfo {
         session_id: session_id.clone(),
         user_text: user_text.clone(),
-    });
+        org_applied: false,
+    };
 
     // Multi-turn continuity: unlike `a2a_dispatch.rs`'s orchestrator path, this
     // proxy forwards the caller's message byte-for-byte, so an agent that (like
@@ -729,8 +738,10 @@ async fn ensure_chat_session(
         // continuity aid that would be wrong to stitch across agents, whereas policy applies to
         // every agent invocation by definition — gating it on the same condition would silently
         // drop it on exactly the requests that carry no history.
+        let org_context = state.prompt_context.org_context().await;
+        persist_info.org_applied = org_context.is_some();
         let outbound = crate::prompt_context::prefixed(
-            state.prompt_context.org_context().await.as_deref(),
+            org_context.as_deref(),
             glued.as_deref().unwrap_or(&user_text),
         );
         // Only touch the body when the text actually changed, so a deployment with no policy and
@@ -754,9 +765,9 @@ async fn ensure_chat_session(
             tracing::error!(error = %e, "agent proxy: failed to re-serialize body after contextId/history injection");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-        return Ok((rewritten.into(), persist_info));
+        return Ok((rewritten.into(), Some(persist_info)));
     }
-    Ok((body_bytes, persist_info))
+    Ok((body_bytes, Some(persist_info)))
 }
 
 /// Extract the agent's reply text from a JSON-RPC response for persistence.
