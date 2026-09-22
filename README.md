@@ -3,8 +3,10 @@
 </p>
 
 <p align="center">
-  <strong>Deploy, route, secure, and observe any <a href="https://github.com/a2aproject/a2a-spec">A2A</a>-speaking agent
-  with a single command</strong> — no gateway, no sidecar, no glue code.
+  <strong>One open runtime for every agent you run.</strong>
+  <br />
+  Deploy any <a href="https://github.com/a2aproject/a2a-spec">A2A</a>-speaking agent with a single command, then know
+  what is running, what it can reach, and what it costs. No gateway, no sidecar, no glue code.
 </p>
 
 <p align="center">
@@ -79,11 +81,11 @@
 
 - [What is Nasiko?](#what-is-nasiko)
 - [Features](#features)
-- [Architecture](#architecture)
 - [Requirements](#requirements)
-- [Quick Start — Docker only (no Rust needed)](#quick-start--docker-only-no-rust-needed)
+- [Quick Start - Docker only (no Rust needed)](#quick-start-docker-only-no-rust-needed)
+- [Architecture](#architecture)
 - [Setup guides by operating system](#setup-guides-by-operating-system)
-- [CLI — install & use](#cli--install--use)
+- [CLI - install & use](#cli-install--use)
 - [Coding Agents & LLM Router](#coding-agents--llm-router)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
@@ -99,37 +101,103 @@
 Running more than a couple of agents quickly turns into an operations problem: *who calls whom*,
 *which key does each agent hold*, *what did that call cost*, *why did it fail?*
 
-Nasiko is a **single control-plane process** that sits in front of every agent and answers all of that.
-It terminates TLS, authenticates every request, and proxies all agent-to-agent traffic itself, so agents
-are **never publicly reachable** — every hop is a checkpoint for rate limits, ACLs, and tracing.
+Nasiko answers all of that, and it does it without changing a line of your agent code. Deploy an agent
+once and it inherits access control, tool permissions, cost attribution, and end-to-end tracing. What
+you get back is one place that knows what is running, what each agent is allowed to reach, and what
+the whole estate cost.
 
-**Different language, same A2A protocol** — bring your own agents in Python, Rust, Go, or TypeScript.
-No proprietary agent format, no lock-in.
+**Open runtime** is the claim, and it is meant literally: any framework, any language, any provider,
+and the freedom to change your mind about all three later. Bring agents written in Python, Rust, Go,
+or TypeScript. They only have to speak A2A. There is no proprietary agent format and no SDK to adopt.
 
 <p align="center">
   <img src="docs/assets/ui-dashboard.png" alt="Nasiko Dashboard" width="900" />
   <br />
-  <sub><b>Nasiko Dashboard</b> — deploy agents, route traffic, manage tools, and watch traces.</sub>
+  <sub><b>Nasiko Dashboard</b>: deploy agents, route traffic, manage tools, and watch traces.</sub>
 </p>
 
 ## Features
 
+Three things break first when an agent estate grows: spend nobody can attribute, permissions nobody
+can enumerate, and a fleet nobody can run as one system. The feature set is grouped accordingly.
+
+### TokenOps
+
 | Feature | What it does |
 |---|---|
-| **Deploy anything that speaks A2A** | `nasiko deploy` builds, pushes to the embedded registry, and runs it. No external registry required. |
-| **Intelligent routing engine** | 3-stage pipeline — shortlist by embedding similarity, rerank on conversation context, then LLM final pick. Callers don't need to know your fleet. |
-| **Single ingress, always proxied** | Agents are never publicly reachable; every agent-to-agent call is proxied through the server. |
-| **MCP Gateway** | One permanent URL gives every agent a merged, permission-filtered view of Composio toolkits and custom MCP servers — without the agent holding the credentials. |
-| **LLM Router** | Agents get an `OPENAI_BASE_URL` + a short-lived identity token instead of a real key. The router resolves provider/model/key server-side. No agent or log ever sees a real API key. |
-| **Full observability** | Every dispatch and proxy hop emits a real OTel span -> one end-to-end trace. Token usage & cost are auto-collected from `gen_ai.*` attributes. |
-| **Flow guards** | Redis-backed cascade limits (depth, fan-out, token budget, timeout, cycle detection) stop runaway agent loops. |
-| **Encrypted secrets** | Per-agent secrets are AES-256-GCM encrypted at rest, injected only at deploy time. |
-| **Access control** | User to-agent ownership/grants and an agent-to-agent allowlist gate every proxy call, independently. |
-| **Embedded OCI registry** | Self-hosted, S3-backed registry with layer dedup — `nasiko push` / `nasiko deploy` need nothing external. |
-| **CLI-first, no lock-in** | `nasiko new`, `run`, `chat`, `deploy`. Bring your own LLM provider. |
+| **LLM Router** | Agents get an `OPENAI_BASE_URL` and a short-lived identity token instead of a real key. The router resolves provider, model, and key server-side. No agent and no log ever sees a real API key. |
+| **Cost and token attribution** | Usage and cost are collected from `gen_ai.*` span attributes and broken out per agent and per model, rather than arriving as a single provider invoice you have to reverse-engineer. |
+| **One trace per interaction** | Every dispatch and proxy hop emits a real OTel span, so a request is one end-to-end trace across every agent hop, with cost attached. |
+
+### Policy, security, and governance
+
+| Feature | What it does |
+|---|---|
+| **Single ingress, always proxied** | Agents are never publicly reachable. Every agent-to-agent call is proxied through the server, so limits and tracing apply at every hop rather than only the first. |
+| **Access control, for agents as well as people** | User-to-agent ownership and grants, plus an agent-to-agent allowlist. The two gate every proxy call independently. |
+| **MCP Gateway** | One permanent URL gives every agent a merged, permission-filtered view of Composio toolkits and custom MCP servers, without the agent ever holding the credentials. An agent discovers only what it was granted. |
+| **Flow guards** | Redis-backed cascade limits (depth, fan-out, token budget, timeout, cycle detection) stop a loop between two agents from quietly consuming your budget. |
+| **Encrypted secrets** | Per-agent secrets are encrypted at rest with AES-256-GCM and injected only at deploy time, so they stay out of your repo. |
+
+### Meta-Harness
+
+| Feature | What it does |
+|---|---|
+| **Deploy anything that speaks A2A** | `nasiko deploy` builds, pushes to the embedded registry, and runs it. No external registry required, and no SDK to adopt. |
+| **Intelligent routing engine** | A 3-stage pipeline: shortlist by embedding similarity, rerank on conversation context, then an LLM makes the final pick. Callers do not need to know your fleet. |
+| **Harnesses you did not build** | Claude Code, Codex, Cursor CLI, and OpenCode can report their sessions to Nasiko, route their LLM calls through it, or both. See [Coding Agents & LLM Router](#coding-agents--llm-router). |
+| **Embedded OCI registry** | Self-hosted, S3-backed, with layer dedup, so `nasiko push` and `nasiko deploy` need nothing external. |
+| **CLI-first, no lock-in** | `nasiko new`, `run`, `chat`, `deploy`. Bring your own LLM provider, and change it later. |
+
+## Requirements
+
+| Component | Minimum version | Why |
+|---|---|---|
+| **Docker Engine + Compose V2** | Compose V2 plugin (the `docker compose` command, not the legacy standalone `docker-compose` v1 binary) | `docker-compose.yml` uses the extended `depends_on: condition: service_healthy` syntax; the Docker-only path needs nothing else. |
+| **Rust** | 1.85+ (stable) | The workspace targets `edition = "2024"` (see [`Cargo.toml`](Cargo.toml)), stabilized in Rust 1.85, and is only needed for the CLI / Path B developer setup, not the Docker-only path. |
+| **A2A protocol** | Spec **v1.0** exactly (latest upstream release: v1.0.1, Linux Foundation) | Nasiko requires and hardcodes the `A2A-Version: 1.0` header on every request; agents on older/pre-1.0 spec versions (e.g. 0.2.x, 0.3.0) are rejected with `-32009 VersionNotSupported` (see [`docs/A2A_PROTOCOL.md`](docs/A2A_PROTOCOL.md)). Any agent speaking v1.0 works, regardless of its implementation language. |
+
+## Quick Start: Docker only (no Rust needed)
+
+The fastest way to run Nasiko requires **only [Docker](https://docs.docker.com/get-docker/)** (with Compose).
+The server builds itself from source inside Docker.
+
+### 1. Clone and configure
+
+```sh
+git clone https://github.com/Nasiko-Labs/nasiko.git
+cd nasiko
+cp .env.example .env
+```
+
+Edit `.env` and set at minimum:
+
+- `OPENAI_API_KEY`: your OpenAI key (used by the routing engine and injected into agents)
+- `ADMIN_PASSWORD`: password for the bootstrap admin account
+
+### 2. Start the platform
+
+```sh
+docker compose up -d
+```
+
+This builds the server image and starts the full stack:
+**Postgres · Redis · RustFS (S3) · OTel Collector · Tempo · Loki · nasiko-server**.
+
+- First build takes a few minutes (compiles Rust inside Docker), and subsequent builds are fast.
+- Open **http://localhost:8080** for the dashboard and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+  (default `admin` / `changeme`).
+
+```sh
+docker compose logs -f server   # follow server logs
+docker compose down             # stop everything
+docker compose up -d --build    # rebuild after pulling new changes
+```
+---
+
 ## Architecture
 
-Nasiko is a **single process** — there is no separate gateway. Every inter-agent call is proxied back
+Nasiko is a **single process** with no separate gateway. Every inter-agent call is proxied back
 through the server, the single chokepoint where flow limits, ACLs, and observability are enforced.
 Durable state lives in **Postgres**, **Redis**, and **S3** (RustFS), with optional observability via
 **Tempo / Loki / the OTel Collector**.
@@ -202,60 +270,14 @@ flowchart LR
     OTEL --> LOKI
 ```
 
-> Every request to an agent is either dispatched by the routing engine or proxied generically — both
+> Every request to an agent is either dispatched by the routing engine or proxied generically, and both
 > paths originate **inside** the server. Agents never receive a direct, public request, and both call
 > back out into the LLM Router and MCP Gateway rather than holding real API keys or tool credentials.
 
 ---
 
-## Requirements
-
-| Component | Minimum version | Why |
-|---|---|---|
-| **Docker Engine + Compose V2** | Compose V2 plugin (the `docker compose` command — not the legacy standalone `docker-compose` v1 binary) | `docker-compose.yml` uses the extended `depends_on: condition: service_healthy` syntax; the Docker-only path needs nothing else. |
-| **Rust** | 1.85+ (stable) | The workspace targets `edition = "2024"` (see [`Cargo.toml`](Cargo.toml)), stabilized in Rust 1.85 — only needed for the CLI / Path B developer setup, not the Docker-only path. |
-| **A2A protocol** | Spec **v1.0** exactly (latest upstream release: v1.0.1, Linux Foundation) | Nasiko requires and hardcodes the `A2A-Version: 1.0` header on every request; agents on older/pre-1.0 spec versions (e.g. 0.2.x, 0.3.0) are rejected with `-32009 VersionNotSupported` (see [`docs/A2A_PROTOCOL.md`](docs/A2A_PROTOCOL.md)). Any agent speaking v1.0 works, regardless of its implementation language. |
-
----
-
-## Quick Start — Docker only (no Rust needed)
-
-The fastest way to run Nasiko requires **only [Docker](https://docs.docker.com/get-docker/)** (with Compose).
-The server builds itself from source inside Docker.
-
-### 1. Clone and configure
-
-```sh
-git clone https://github.com/Nasiko-Labs/nasiko.git
-cd nasiko
-cp .env.example .env
-```
-
-Edit `.env` and set at minimum:
-
-- `OPENAI_API_KEY` — your OpenAI key (used by the routing engine and injected into agents)
-- `ADMIN_PASSWORD` — password for the bootstrap admin account
-
-### 2. Start the platform
-
-```sh
-docker compose up -d
-```
-
-This builds the server image and starts the full stack:
-**Postgres · Redis · RustFS (S3) · OTel Collector · Tempo · Loki · nasiko-server**.
-
-- First build takes a few minutes (compiles Rust inside Docker) — subsequent builds are fast.
-- Open **http://localhost:8080** for the dashboard and log in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`
-  (default `admin` / `changeme`).
-
-```sh
-docker compose logs -f server   # follow server logs
-docker compose down             # stop everything
-docker compose up -d --build    # rebuild after pulling new changes
-```
-
 > No Docker? Use the [Developer / Rust setup](#path-b--developer--rust-setup) below.
+
 ## Setup guides by operating system
 
 You have **two supported paths**:
@@ -265,7 +287,7 @@ You have **two supported paths**:
 | **A. Docker-only** | Docker only | Anyone who just wants to run the platform |
 | **B. Source / Rust** | Rust + `just` | Contributors, developers, hot-reload |
 
-### Path A — Docker-only
+### Path A: Docker-only
 
 <details>
 <summary><b>Windows</b></summary>
@@ -330,7 +352,7 @@ You have **two supported paths**:
 > (see [Troubleshooting](#troubleshooting)).
 </details>
 
-### Toolchain setup — Rust, `just`, etc. (for the CLI / Path B)
+### Toolchain setup: Rust, `just`, etc. (for the CLI / Path B)
 
 <details>
 <summary><b>Windows</b></summary>
@@ -347,7 +369,7 @@ cargo install just cargo-watch
 # 3. If you plan to build native Windows binaries, also install the C++ linkers:
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
-> Building the CLI **does not** require the C++ Build Tools — it uses a pure-Rust toolchain. The
+> Building the CLI **does not** require the C++ Build Tools, since it uses a pure-Rust toolchain. The
 > C++ linkers are only needed if native crates (e.g. `ring`) fail to link on the MSVC toolchain.
 </details>
 
@@ -394,7 +416,7 @@ just --version
 docker --version  && docker compose version
 ```
 
-### Path B — Developer / Rust setup
+### Path B: Developer / Rust setup
 
 Requires **[Rust (rustup)](https://rustup.rs)**, **[`just`](https://github.com/casey/just)**
 (`cargo install just`), and **Docker**.
@@ -432,7 +454,7 @@ cargo build --release -p nasiko          # CLI binary
 cargo build --release -p nasiko-server   # Server binary
 ```
 
-## CLI — install & use
+## CLI: install & use
 
 The CLI needs **Rust** to build from source (it is a separate `cli/` crate). You also need
 [Docker](https://docs.docker.com/get-docker/) to build/deploy agent images.
@@ -459,7 +481,7 @@ nasiko chat "Hello there"                  # talk to your agent (message must co
                                             # or use --agent: nasiko chat --agent my-agent "Hello")
 ```
 
-You can also deploy agents directly from the dashboard UI — upload source, import from GitHub, or
+You can also deploy agents directly from the dashboard UI: upload source, import from GitHub, or
 pull from the artifact registry.
 
 ### Handy CLI commands
@@ -488,7 +510,7 @@ Run `nasiko --help` for the full, workflow-ordered command list.
 
 ## Coding Agents & LLM Router
 
-Nasiko can manage the coding-agent CLIs already installed on your machine — recording what they
+Nasiko can manage the coding-agent CLIs already installed on your machine, recording what they
 do, routing their LLM calls, or both. The two are independent opt-ins.
 
 Supported: Claude Code, Codex, Cursor CLI, OpenCode.
@@ -503,7 +525,7 @@ nasiko agents sync               # flush queued session-turn events to the contr
 ```
 
 Auto-install also fires on `nasiko connect` / `nasiko use` / `nasiko auth login`, but only for
-agents with **no existing install record** — it never silently rebinds an already-installed agent
+agents with **no existing install record**, and it never silently rebinds an already-installed agent
 to a new cluster. Rebind explicitly with `nasiko agents install <agent>`.
 
 Each agent gets a Stop/session-idle hook. Completed turns are queued locally under
@@ -513,7 +535,7 @@ cluster is deleted or renamed, say) land in `~/.nasiko/integrations/rejected/` a
 delete.
 
 Ingested turns show up as chat sessions right away (`nasiko sessions`, `nasiko history <id>`).
-Traces, token counts, and cost additionally require `CODING_AGENT_OTLP_ENDPOINT` — see below.
+Traces, token counts, and cost additionally require `CODING_AGENT_OTLP_ENDPOINT`, covered below.
 
 ### Routing LLM calls through Nasiko
 
@@ -531,7 +553,7 @@ credential in the `x-api-key` header rather than `Authorization`; the router acc
 
 `connect opencode` instead installs a JS plugin (`~/.config/opencode/plugins/nasiko-llm-router.js`)
 registering a `nasiko` provider and making `nasiko/router` the default model for **new** OpenCode
-sessions only — OpenCode fixes a session's model at creation time in its own database, so resuming
+sessions only, because OpenCode fixes a session's model at creation time in its own database, so resuming
 an existing session will not route it. Start a new one, or pick "Nasiko Router" explicitly.
 
 Inbound wire protocol and outbound provider are fully decoupled: `nasiko connect claude --config
@@ -553,7 +575,7 @@ nasiko llm-config get <agent>                       # resolved routing config fo
 nasiko llm-config providers                         # valid provider/model values + pricing
 ```
 
-A config's `model` field is required for routing to work — `list` shows `provider/?` when it is
+A config's `model` field is required for routing to work, and `list` shows `provider/?` when it is
 unset.
 
 ### Server configuration
@@ -628,7 +650,7 @@ docs/           Design docs (architecture, protocol, conventions)
 | Agent upload -> `500 agents_owner_id_fkey` | Log out and back in, or `docker compose down -v && docker compose up -d` then log in fresh |
 | Server can't reach Postgres | `docker compose up -d` and wait for `healthy` |
 | Agent `Name or service not known` (Linux Docker) | Recreate with `--add-host host.docker.internal:host-gateway` |
-| `SEED_TOOLKITS is set but COMPOSIO_API_KEY is not` at startup | Expected and harmless — `SEED_TOOLKITS` ships active by default in `.env.example`. Set `COMPOSIO_API_KEY` in `.env` to actually register Composio toolkits, or comment out `SEED_TOOLKITS` to silence the warning |
+| `SEED_TOOLKITS is set but COMPOSIO_API_KEY is not` at startup | Expected and harmless: `SEED_TOOLKITS` ships active by default in `.env.example`. Set `COMPOSIO_API_KEY` in `.env` to actually register Composio toolkits, or comment out `SEED_TOOLKITS` to silence the warning |
 
 ### Windows
 
@@ -658,12 +680,12 @@ docs/           Design docs (architecture, protocol, conventions)
 | `permission denied ... Docker socket` | `sudo usermod -aG docker $USER` then log out/in (or `newgrp docker`) |
 | `error: linker 'cc' not found` (building CLI) | Missing build tools: `sudo apt install -y build-essential pkg-config libssl-dev` |
 | Agent `[Errno -2] Name or service not known` | `host.docker.internal` is not provided by native Docker. See the Linux note in [Path A](#path-a--docker-only), or set `MCP_GATEWAY_PUBLIC_URL` to the bridge IP |
-| First `cargo` build very slow | Normal — it compiles the whole workspace. Prefer a native clone over a mounted/9p filesystem. |
+| First `cargo` build very slow | Normal, it compiles the whole workspace. Prefer a native clone over a mounted/9p filesystem. |
 ### All platforms
 
 | Symptom | Fix |
 |---|---|
-| `failed to connect to Postgres` at startup | Infra is not up yet — run `docker compose up -d` (or `just infra`) and wait for healthy |
+| `failed to connect to Postgres` at startup | Infra is not up yet. Run `docker compose up -d` (or `just infra`) and wait for healthy |
 | `docker: command not found` | Docker not installed/running. Install [Docker](https://docs.docker.com/get-docker/). |
 | Dashboard will not load | Verify `docker compose ps` shows `server` as `Up`; open `http://localhost:8080` |
 
@@ -714,14 +736,14 @@ docs/           Design docs (architecture, protocol, conventions)
 
 ## Documentation & Links
 
-- **Official docs** — **[docs.nasiko.com](https://docs.nasiko.com)** — guides, API reference, and concepts
-- **Design docs** — [`docs/`](docs/): architecture, the A2A protocol, agent lifecycle, MCP Gateway internals, CLI design, networking
-- **A2A protocol** — https://github.com/a2aproject/a2a-spec
-- **Rust toolchain** — https://rustup.rs
-- **Docker** — https://docs.docker.com/get-docker/
-- **`just` command runner** — https://github.com/casey/just
-- **`cargo-watch`** (hot-reload) — https://github.com/watchexec/cargo-watch
-- **Versus shields** — https://shieldcn.dev (premium README badges & charts)
+- **Official docs**: **[docs.nasiko.com](https://docs.nasiko.com)** — guides, API reference, and concepts
+- **Design docs**: [`docs/`](docs/): architecture, the A2A protocol, agent lifecycle, MCP Gateway internals, CLI design, networking
+- **A2A protocol**: https://github.com/a2aproject/a2a-spec
+- **Rust toolchain**: https://rustup.rs
+- **Docker**: https://docs.docker.com/get-docker/
+- **`just` command runner**: https://github.com/casey/just
+- **`cargo-watch`** (hot-reload): https://github.com/watchexec/cargo-watch
+- **Versus shields**: https://shieldcn.dev (premium README badges & charts)
 
 ## Support
 
@@ -735,7 +757,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for local setup, code conventions, and 
 
 ## License
 
-**Apache-2.0** — see [`LICENSE`](LICENSE).
+**Apache-2.0**. See [`LICENSE`](LICENSE).
 
 <p align="center">
   <sub>Built with love by the Nasiko team. Stars, issues, and PRs are always welcome.</sub>
