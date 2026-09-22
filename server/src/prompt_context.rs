@@ -29,7 +29,32 @@ pub trait PromptContextProvider: Send + Sync {
     /// query-relevant content can be ranked in addition to any pinned content. `None` when
     /// there's nothing to add.
     async fn context_for_agent(&self, agent_id: Uuid, query: &str) -> Option<String>;
+
+    /// Text that goes to **every** agent invocation, whichever agent is being called.
+    ///
+    /// Takes no agent id and no query on purpose, and that is the whole distinction from the two
+    /// methods above: this content is not selected, ranked, or tailored to anything — it applies
+    /// unconditionally or it is not this kind of content. Two consequences callers depend on:
+    /// it can be resolved **once per turn** and reused across every leg of a fan-out (nothing
+    /// varies per leg to invalidate it), and it is placed **ahead of** per-agent context, which is
+    /// how it outranks anything more specific that follows it.
+    ///
+    /// Defaulted rather than required, so an implementation that only has per-agent content — the
+    /// only kind that existed before this method — stays correct without naming this concern at
+    /// all.
+    async fn org_context(&self) -> Option<String> {
+        None
+    }
 }
+
+/// How a supplemental section is joined onto the text it qualifies.
+///
+/// Re-exported from `nasiko-react-agent` rather than defined here: the orchestrator's minted
+/// sub-legs apply the same convention from inside that crate, which cannot depend on this one, so
+/// the definition lives in the lower crate and every call site in the tree shares it. Imported
+/// through this module anyway, because this is where server-side callers already look for
+/// prompt-assembly concerns.
+pub use nasiko_react_agent::prefixed;
 
 /// OSS default — no enterprise context source is wired up, so every call is a no-op.
 pub struct NoopPromptContextProvider;
@@ -85,6 +110,10 @@ impl SwappablePromptContext {
     pub async fn context_for_agent(&self, agent_id: Uuid, query: &str) -> Option<String> {
         self.current().context_for_agent(agent_id, query).await
     }
+
+    pub async fn org_context(&self) -> Option<String> {
+        self.current().org_context().await
+    }
 }
 
 #[cfg(test)]
@@ -135,5 +164,12 @@ mod tests {
             Some("ee context".to_string()),
             "a clone taken before install() must still observe the swap"
         );
+    }
+
+    /// A provider that only has per-agent content must not have to know that org-wide content is
+    /// a concept — `FixedContextProvider` names no `org_context`, and gets the silent default.
+    #[tokio::test]
+    async fn a_provider_that_ignores_org_context_contributes_none() {
+        assert_eq!(FixedContextProvider("ee context").org_context().await, None);
     }
 }

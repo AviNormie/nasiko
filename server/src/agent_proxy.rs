@@ -131,7 +131,7 @@ pub async fn agent_proxy(
 
     let agent_base = match state
         .runtime
-        .forwarding_endpoint(&nasiko_runtime::ContainerId::from_uuid(agent_id))
+        .endpoint(&nasiko_runtime::ContainerId::from_uuid(agent_id))
         .await
     {
         Ok(live) => live.trim_end_matches('/').to_string(),
@@ -717,15 +717,31 @@ async fn ensure_chat_session(
     // routing/orchestrator path, so direct `--agent`/`-u` chat gets the
     // continuity its own "resume with --session-id" hint implies.
     let mut rewrite_needed = injected;
-    if !user_text.is_empty() && same_agent_session {
-        let history = SessionHistory::fetch(&session_id, &state.db, 20).await;
-        if !history.is_empty()
+    if !user_text.is_empty() {
+        let glued = if same_agent_session {
+            let history = SessionHistory::fetch(&session_id, &state.db, 20).await;
+            (!history.is_empty()).then(|| history.with_current_query(&user_text))
+        } else {
+            None
+        };
+        // Organization policy rides on top of whatever is actually going out, history or not.
+        // Unlike the history glue it is NOT conditional on `same_agent_session`: the glue is a
+        // continuity aid that would be wrong to stitch across agents, whereas policy applies to
+        // every agent invocation by definition — gating it on the same condition would silently
+        // drop it on exactly the requests that carry no history.
+        let outbound = crate::prompt_context::prefixed(
+            state.prompt_context.org_context().await.as_deref(),
+            glued.as_deref().unwrap_or(&user_text),
+        );
+        // Only touch the body when the text actually changed, so a deployment with no policy and
+        // no history re-serializes nothing — the pre-existing behaviour, byte for byte.
+        if outbound != user_text
             && let Some(part) = message
                 .get_mut("parts")
                 .and_then(|p| p.as_array_mut())
                 .and_then(|parts| parts.iter_mut().find(|p| p.get("text").is_some()))
         {
-            part["text"] = serde_json::Value::String(history.with_current_query(&user_text));
+            part["text"] = serde_json::Value::String(outbound);
             rewrite_needed = true;
         }
     }
