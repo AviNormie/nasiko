@@ -43,6 +43,13 @@ pub struct Config {
     /// `nasiko_oci::authz::Writer::BuildService`. Empty means not configured
     /// (fine for `AGENT_RUNTIME=local`, where no such build path exists).
     pub build_push_token: String,
+    /// Shared credential the EE injection proxy's internal route requires on every request —
+    /// mirrors `build_push_token`'s shape exactly (one cluster-wide secret, not a per-caller
+    /// identity): the route's only caller is the control plane's own outbound forward to an
+    /// agent, so there is no untrusted external identity to distinguish, just "is this genuinely
+    /// the control plane." Empty means not configured (fine on OSS and on EE with
+    /// `MEMORY_ENABLED=false`, where the route is never mounted at all).
+    pub injection_proxy_token: String,
     pub seed_agents: Option<String>,
     pub openai_api_key: Option<String>,
     pub openai_base_url: Option<String>,
@@ -323,6 +330,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty()),
             build_push_token: env_or("BUILD_PUSH_TOKEN", ""),
+            injection_proxy_token: env_or("INJECTION_PROXY_TOKEN", ""),
             seed_agents: std::env::var("SEED_AGENTS").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
             openai_base_url: std::env::var("OPENAI_BASE_URL").ok(),

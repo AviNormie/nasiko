@@ -139,6 +139,21 @@ pub trait ContainerRuntime: Send + Sync {
     /// Returns `RuntimeError::ContainerNotFound` if no deployment exists for `container_id`.
     async fn endpoint(&self, container_id: &ContainerId) -> Result<String>;
 
+    /// Where a forward *to* this agent should actually be sent — distinct from
+    /// [`endpoint`](ContainerRuntime::endpoint), which is the agent's real address and is also
+    /// what gets persisted into `agents.url` at deploy time. Defaults to `endpoint()`, so every
+    /// implementation and every caller gets identical behavior unless something explicitly
+    /// overrides this method — only an EE decorator that installs an injection proxy does.
+    ///
+    /// The two must stay separate methods, not one parameterized call: a decorator overriding
+    /// this to return its own address must never affect what `endpoint()` returns, because
+    /// deploy-time persistence (`resolve_agent_url`) and the injection proxy's own address
+    /// resolution both call `endpoint()` and would corrupt each other if the two purposes were
+    /// conflated behind one method.
+    async fn forwarding_endpoint(&self, container_id: &ContainerId) -> Result<String> {
+        self.endpoint(container_id).await
+    }
+
     /// Return the last `tail` lines of stdout+stderr from the agent's container(s).
     ///
     /// `tail` is clamped to 10 000 to prevent OOM. For Kubernetes backends with
