@@ -81,27 +81,10 @@ pub async fn aggregate_tools(
             else {
                 continue;
             };
-            // Listing and routing must agree: `router::route_tool` only ever
-            // hands a bare name to a system backend when its synced
-            // `tool_names` catalog claims it exactly — a tool the LIVE
-            // backend advertises but the catalog hasn't synced yet would
-            // otherwise be listed here, then have `tools/call` misroute it
-            // (with its arguments) to Composio instead of erroring. Hide it
-            // rather than list something that can't actually be called.
-            if server.system && !server.tool_names.iter().any(|t| t == &original) {
-                continue;
-            }
             if perms.decide(server.connector_id, &original) == ToolAccess::Denied {
                 continue;
             }
-            // System backends are the only generic servers exposed un-prefixed
-            // (`router::route_tool` routes their bare names first) — the tool
-            // list is the model's prompt, and `{prefix}__save_file` is worse
-            // than `save_file` for a platform-owned backend the model already
-            // trusts implicitly.
-            if !server.system {
-                obj.insert("name".to_string(), json!(format!("{prefix}__{original}")));
-            }
+            obj.insert("name".to_string(), json!(format!("{prefix}__{original}")));
             merged.push(tool);
         }
     }
@@ -157,21 +140,14 @@ fn manifest_key(
 /// Stable hash of a backend's injected headers (the credential lives here). Keys
 /// sorted for determinism; the result is a hash, so the raw secret never appears
 /// in the cache key. Empty headers → empty string (no fingerprint contribution).
-///
-/// Excludes [`crate::identity::IDENTITY_HEADER`] (case-insensitively): unlike a
-/// real injected credential, that header carries a per-request `exp`
-/// (`identity::SignedIdentity::sign`), so folding it in here would mean the
-/// manifest cache never hits at all for any user with a system connector —
-/// every `tools/list` would mint a fresh signature and bust the key.
 fn headers_fingerprint(headers: &std::collections::HashMap<String, String>) -> String {
-    let mut pairs: Vec<(&str, &str)> = headers
-        .iter()
-        .filter(|(k, _)| !k.eq_ignore_ascii_case(crate::identity::IDENTITY_HEADER))
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    if pairs.is_empty() {
+    if headers.is_empty() {
         return String::new();
     }
+    let mut pairs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     pairs.sort();
     sha256_hex16(serde_json::to_string(&pairs).unwrap_or_default().as_bytes())
 }
@@ -195,9 +171,6 @@ mod tests {
             headers: HashMap::new(),
             transport: "streamable_http".into(),
             trusted: false,
-            system: false,
-            tool_names: vec![],
-            instructions: None,
         }
     }
 
@@ -250,8 +223,6 @@ mod tests {
                 tool_search_meta_limit: 10,
                 openai_api_key: None,
                 embedding_model: "text-embedding-3-small".to_string(),
-                gateway_instructions: String::new(),
-                identity_signing_key: b"test-identity-signing-key".to_vec(),
             },
             providers: Providers {
                 composio: None,
@@ -321,85 +292,6 @@ mod tests {
         assert_eq!(
             k1, k2,
             "backends are sorted before hashing, so input order must not matter"
-        );
-    }
-
-    #[test]
-    fn manifest_key_ignores_the_identity_header_but_not_a_real_credential() {
-        let user = Uuid::new_v4();
-        let id = Uuid::new_v4();
-        let mut a = srv(ServerType::Mcp, id, "https://backend.example/mcp");
-        a.headers.insert(
-            crate::identity::IDENTITY_HEADER.to_string(),
-            "sig.one".into(),
-        );
-        // Same identity header key, different value (a later request's fresh
-        // `exp`/signature) — must NOT change the manifest key.
-        let mut b = a.clone();
-        b.headers.insert(
-            crate::identity::IDENTITY_HEADER.to_string(),
-            "sig.two-different-exp".into(),
-        );
-        let toolkits: Vec<String> = vec![];
-        let k_a = manifest_key(user, &[a.clone()], &toolkits, "h");
-        let k_b = manifest_key(user, &[b], &toolkits, "h");
-        assert_eq!(
-            k_a, k_b,
-            "the identity header carries a per-request exp and must not bust the manifest cache"
-        );
-
-        // A real header change (an actual injected credential) must still bust it.
-        let mut c = a.clone();
-        c.headers
-            .insert("authorization".into(), "Bearer other-token".into());
-        let k_c = manifest_key(user, &[c], &toolkits, "h");
-        assert_ne!(
-            k_a, k_c,
-            "a real header change must still change the manifest key"
-        );
-    }
-
-    /// `headers_fingerprint` directly (not through `manifest_key`, which adds
-    /// unrelated connector-id/url noise to the hashed tuple): a mixed-case
-    /// spelling of the identity header name must be excluded exactly like the
-    /// canonical lowercase [`crate::identity::IDENTITY_HEADER`] constant
-    /// (HTTP header names are case-insensitive on the wire — `axum`'s
-    /// `HeaderMap` normalizes them, but this fn takes a plain `HashMap` a
-    /// caller could populate with any casing), and a header map whose ONLY
-    /// entry is the identity header must fingerprint identically to a map
-    /// with no headers at all — not merely "not contribute a *different*
-    /// value", which the empty-string early-return already guarantees but
-    /// this makes an explicit, named property.
-    #[test]
-    fn headers_fingerprint_excludes_identity_header_case_insensitively() {
-        let empty: HashMap<String, String> = HashMap::new();
-        let mut lower = HashMap::new();
-        lower.insert(
-            crate::identity::IDENTITY_HEADER.to_string(),
-            "sig.one".into(),
-        );
-        let mut mixed = HashMap::new();
-        mixed.insert(
-            "X-Nasiko-Identity".to_string(),
-            "sig.two-different-value".into(),
-        );
-
-        let fp_empty = headers_fingerprint(&empty);
-        assert_eq!(
-            fp_empty, "",
-            "no headers must fingerprint as the empty-string sentinel"
-        );
-        assert_eq!(
-            headers_fingerprint(&lower),
-            fp_empty,
-            "a header map containing ONLY the identity header must fingerprint \
-             the same as an empty map"
-        );
-        assert_eq!(
-            headers_fingerprint(&mixed),
-            fp_empty,
-            "a mixed-case identity header name (X-Nasiko-Identity) must be \
-             excluded just as the canonical lowercase name is"
         );
     }
 
@@ -605,104 +497,5 @@ mod tests {
             merged[0]["name"],
             json!(format!("{}__read_email", connector_prefix(id)))
         );
-    }
-
-    #[tokio::test]
-    async fn system_server_tool_keeps_its_bare_name_but_non_system_stays_prefixed() {
-        let mut sys_backend = mockito::Server::new_async().await;
-        sys_backend
-            .mock("POST", "/mcp")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"save_file"}]}}"#)
-            .create_async()
-            .await;
-        let mut generic_backend = mockito::Server::new_async().await;
-        generic_backend
-            .mock("POST", "/mcp")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"send_email"}]}}"#)
-            .create_async()
-            .await;
-
-        let sys_id = Uuid::new_v4();
-        let generic_id = Uuid::new_v4();
-        let mut sys = srv(
-            ServerType::Mcp,
-            sys_id,
-            &format!("{}/mcp", sys_backend.url()),
-        );
-        sys.system = true;
-        sys.tool_names = vec!["save_file".to_string()];
-        let generic = srv(
-            ServerType::Mcp,
-            generic_id,
-            &format!("{}/mcp", generic_backend.url()),
-        );
-
-        let state = test_state();
-        let merged = aggregate_tools(
-            &state,
-            Uuid::new_v4(),
-            &[sys, generic],
-            &[],
-            &perms_enabling(&[sys_id, generic_id]),
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(merged.len(), 2);
-        assert!(
-            merged.iter().any(|t| t["name"] == json!("save_file")),
-            "a system server's tool must keep its bare name: {merged:?}"
-        );
-        assert!(
-            merged.iter().any(
-                |t| t["name"] == json!(format!("{}__send_email", connector_prefix(generic_id)))
-            ),
-            "a non-system generic server's tool must still be prefixed: {merged:?}"
-        );
-    }
-
-    /// Listing and routing must agree (review finding): a system backend can
-    /// advertise a tool the synced `tool_names` catalog hasn't caught up to
-    /// yet — `router::route_tool` would never hand a bare name for it to
-    /// this backend, so listing it here would produce a tool the agent can
-    /// call but that silently misroutes (to Composio, with its arguments) at
-    /// `tools/call` time. Only catalog-listed tools may appear.
-    #[tokio::test]
-    async fn system_server_only_lists_tools_present_in_its_synced_catalog() {
-        let mut backend = mockito::Server::new_async().await;
-        backend
-            .mock("POST", "/mcp")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(
-                r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"save_file"},{"name":"secret_tool"}]}}"#,
-            )
-            .create_async()
-            .await;
-
-        let sys_id = Uuid::new_v4();
-        let mut sys = srv(ServerType::Mcp, sys_id, &format!("{}/mcp", backend.url()));
-        sys.system = true;
-        sys.tool_names = vec!["save_file".to_string()]; // catalog hasn't synced secret_tool
-
-        let state = test_state();
-        let merged = aggregate_tools(
-            &state,
-            Uuid::new_v4(),
-            &[sys],
-            &[],
-            &perms_enabling(&[sys_id]),
-            None,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(merged.len(), 1, "{merged:?}");
-        assert_eq!(merged[0]["name"], json!("save_file"));
     }
 }

@@ -214,12 +214,6 @@ pub struct TestServer {
     /// observations (`set_instances`) and drive the hours meter directly.
     #[allow(dead_code)]
     pub runtime: Arc<FakeRuntime>,
-    /// Clone of the running server's `AppState::flow_events` — lets a test
-    /// subscribe to a flow's `FlowEventBus` channel directly and assert on
-    /// what actually got published (or didn't), rather than only on the HTTP
-    /// response.
-    #[allow(dead_code)]
-    pub flow_events: nasiko_flow::FlowEventBus,
     db_name: String,
     admin_pool: PgPool,
 }
@@ -326,7 +320,6 @@ impl TestServer {
         );
         let state =
             AppState::from_config_with_db(config, auth, runtime, oci_storage, db.clone()).await;
-        let flow_events = state.flow_events.clone();
 
         let app = nasiko_server::build_app(state, fallback);
 
@@ -342,7 +335,6 @@ impl TestServer {
             client: reqwest::Client::new(),
             db: db.clone(),
             runtime: fake_handle,
-            flow_events,
             db_name,
             admin_pool: admin,
         }
@@ -369,7 +361,6 @@ impl TestServer {
         self.admin_pool.close().await;
     }
 
-    #[allow(dead_code)]
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
@@ -409,16 +400,11 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         agent_image_registry: String::new(),
         agent_registry_username: None,
         agent_registry_password: None,
-        agent_registry_host: None,
-        seed_image_platform: "linux/amd64".into(),
-        agent_image_registry_placeholder: None,
         build_push_token: String::new(),
         seed_agents: None,
         openai_api_key: None,
         openai_base_url: None,
         openai_model: "gpt-4o".into(),
-        decomposer_api_url: None,
-        decomposer_api_key: None,
         router_model: "gpt-4o".into(),
         capability_generator_model: "gpt-4o".into(),
         mcp_description_model: "gpt-4o".into(),
@@ -452,24 +438,9 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         github_client_secret: None,
         router_shortlist_threshold: 15,
         router_shortlist_size: 10,
+        max_router_history_messages: 20,
         embedding_model: "text-embedding-3-small".into(),
-        agent_call_timeout_secs: 600,
-        pacms_history_pool_size: 150,
-        savings_factor_refresh_secs: 86_400,
-        savings_factor_min_samples: 1_600,
-        savings_factor_window_days: 30,
-        minimal_code_holdout_pct: 0, // no flow withheld, so the ladder is deterministic under test
-        react_compress_enabled: false,
-        react_compress_min_bytes: 2048,
-        history_compress_enabled: false,
-        history_compress_min_bytes: 2048,
-        pacms_budget_low: 500,
-        pacms_budget_medium: 1000,
-        pacms_budget_high: 5000,
-        pacms_history_mandatory_recent: 3,
-        context_k_low: 1,
-        context_k_medium: 5,
-        context_k_high: 20,
+        router_agent_timeout_secs: 60,
         github_callback_url: None,
         github_central_callback_url: None,
         docker_agent_network: None,
@@ -524,7 +495,6 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         mcp_perm_cache_ttl_seconds: 30,
         mcp_manifest_ttl_seconds: 300,
         mcp_upload_max_bytes: 50 * 1024 * 1024,
-        mcp_gateway_max_body_bytes: 8 * 1024 * 1024,
         mcp_upload_default_port: 8080,
         mcp_servers_network: "nasiko-mcp-servers-net".to_string(),
         mcp_upload_max_replicas: 1,
@@ -545,15 +515,6 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         allow_personal_emails: false,
         nasiko_bff_url: None,
         mcp_tool_search_meta_limit: 0,
-        mcp_gateway_instructions: String::new(),
-        // This literal is built directly, not through `Config::from_env` — so
-        // it bypasses that function's JWT_SECRET-derived fallback (which
-        // domain-separates with an `mcp-identity::` prefix; see
-        // `Config::from_env`'s own derivation in `nasiko-config`). Set directly to
-        // `TEST_JWT_SECRET`'s own value, unprefixed, so tests deriving the
-        // signing key for `identity::SignedIdentity::verify` have a fixed,
-        // known value to use (see `mcp_system_connector.rs`).
-        mcp_identity_signing_key: TEST_JWT_SECRET.to_string(),
     }
 }
 
