@@ -96,7 +96,7 @@ async fn route_returns_error_when_no_agents_in_db() {
     };
 
     // With no running agents in DB, should return NoAgentsAvailable
-    let result = engine.route(req, &pool).await;
+    let result = engine.route(req, &pool, None).await;
     // Either succeeds (if agents exist) or fails with NoAgentsAvailable
     match result {
         Ok(_) | Err(nasiko_orchestrator::RouterError::NoAgentsAvailable) => {}

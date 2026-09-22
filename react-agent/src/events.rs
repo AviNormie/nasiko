@@ -83,11 +83,15 @@ pub enum OrchestratorEvent {
         kind: PolicyRejectionKind,
     },
 
-    /// One completion's disjoint usage. Estimates are used only when the provider
-    /// supplied no usable usage; they never imply measured cache hits.
+    /// Token usage from an LLM call. Non-streaming turns report exact
+    /// provider counts; streamed turns report a character-based estimate
+    /// (`estimated: true`) because the rig 0.11 stream surfaces no usage
+    /// chunk — consumers must label estimated figures as approximate.
     Usage {
-        #[serde(flatten)]
-        usage: crate::CallUsage,
+        input_tokens: u64,
+        output_tokens: u64,
+        model: String,
+        estimated: bool,
     },
 
     /// An error occurred during orchestration.

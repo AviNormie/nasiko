@@ -21,7 +21,7 @@ use nasiko_react_agent::{
 };
 use nasiko_types::a2a::{self as a2a, JsonRpcRequest, PartContent, StreamResponse};
 
-use nasiko_orchestrator::{AgentSelector, ContextTiers, context_selection};
+use nasiko_orchestrator::{AgentSelector, SessionHistory};
 
 use nasiko_flow::FlowContext;
 
@@ -29,6 +29,7 @@ use crate::acl::CpCallGuard;
 use crate::auth::Claims;
 use crate::orchestrator_policy::TurnKind;
 use crate::state::AppState;
+use crate::usage::TokenUsageBuilder;
 
 /// Doc-only stand-in for the real request type (`nasiko_types::a2a::JsonRpcRequest`,
 /// re-exported from the external `a2a-lf` crate, which has no `ToSchema` impl and
@@ -83,15 +84,7 @@ pub(crate) fn log_inbound_headers(entry: &str, headers: &HeaderMap) {
         .iter()
         .map(|(name, value)| {
             let n = name.as_str();
-            // The gateway's signed `x-nasiko-identity` header (`oss/mcp-gateway/
-            // src/identity.rs`) is redacted alongside the other credential-bearing
-            // headers — this logger isn't currently wired to the workspace route
-            // that header is forwarded to, but a header carrying a caller's
-            // identity must never be logged in plain text if it ever is.
-            let v = if n.eq_ignore_ascii_case("authorization")
-                || n.eq_ignore_ascii_case("cookie")
-                || n.eq_ignore_ascii_case(nasiko_mcp_gateway::identity::IDENTITY_HEADER)
-            {
+            let v = if n.eq_ignore_ascii_case("authorization") || n.eq_ignore_ascii_case("cookie") {
                 "<redacted>"
             } else {
                 value.to_str().unwrap_or("<non-utf8>")
@@ -211,9 +204,32 @@ pub async fn a2a_dispatch_handler(
         Err(e) => return Ok(e.into_response()),
     };
 
-    // Resolved before the history fetch: the target's switch decides IP-4.
-    let target_agent = if is_orchestrator {
-        None
+    // Prefer the explicit metadata.session_id (web UI), fall back to the
+    // message contextId — the CLI reuses its CP session id as contextId, so
+    // multi-turn chats keep their history either way. An unknown id simply
+    // fetches zero rows.
+    let history_sid = session_id.as_deref().unwrap_or(&context_id);
+    let history = SessionHistory::fetch(history_sid, &state.db, 20).await;
+
+    let query = history.with_current_query(&text);
+
+    if is_orchestrator {
+        orchestrator_stream(
+            &state,
+            OrchestratorTurn {
+                query: &query,
+                raw_text: &text,
+                task_id: &task_id,
+                context_id: &context_id,
+                user_id,
+                is_superuser: claims.is_superuser,
+                client_owns_transcript: session_id.is_some(),
+                transcript_role: "user",
+                file_parts: vec![],
+                kind: TurnKind::User,
+            },
+        )
+        .await
     } else {
         let target = agent_id.as_deref().unwrap();
         // Resolve the target (UUID or name) to a concrete agent row FIRST, then
@@ -230,36 +246,6 @@ pub async fn a2a_dispatch_handler(
         if !crate::acl::can_access_agent(&state, &claims, agent.id).await {
             return Err(A2aDispatchError::AgentNotFound(target.to_string()));
         }
-        Some(agent)
-    };
-    // Whoever reads this history decides whether it is compressed: the addressed agent on a direct
-    // chat, nobody on an orchestrator-routed one (the Orchestrator's own model reads it, and what
-    // reaches an agent afterwards is what that model wrote). Read off the row already in hand
-    // rather than re-queried.
-    let compress_history = target_agent.as_ref().is_none_or(|a| a.compress_enabled);
-
-    // Prefer the explicit metadata.session_id (web UI), fall back to the
-    // message contextId — the CLI reuses its CP session id as contextId, so
-    // multi-turn chats keep their history either way. An unknown id simply
-    // fetches zero rows.
-    let history_sid = session_id.as_deref().unwrap_or(&context_id);
-    let history_store = state.history_vector_store();
-    let history = context_selection::fetch_for_user(
-        &state.db,
-        user_id,
-        history_sid,
-        &history_store,
-        &text,
-        &ContextTiers::from_config(&state.config)
-            .with_overrides(&state.db)
-            .await,
-        compress_history,
-    )
-    .await;
-
-    let query = history.with_current_query(&text);
-
-    if let Some(agent) = target_agent {
         // Supplemental context for this one, already-chosen agent, ranked against the real
         // query text (in addition to any pinned content) — a no-op on OSS. Kept in a separate
         // `outbound_query` local, distinct from `query`: `agent_stream` persists/traces `query`
@@ -280,33 +266,12 @@ pub async fn a2a_dispatch_handler(
             &state,
             agent,
             &query,
-            &text,
             &outbound_query,
             &task_id,
             &context_id,
             user_id,
             &[],
             session_id,
-            history.user_turn_count(),
-            Some(&history.report),
-        )
-        .await
-    } else {
-        orchestrator_stream(
-            &state,
-            OrchestratorTurn {
-                query: &query,
-                raw_text: &text,
-                task_id: &task_id,
-                context_id: &context_id,
-                user_id,
-                is_superuser: claims.is_superuser,
-                client_owns_transcript: session_id.is_some(),
-                transcript_role: "user",
-                file_parts: vec![],
-                kind: TurnKind::User,
-                context_report: Some(&history.report),
-            },
         )
         .await
     }
@@ -435,10 +400,6 @@ pub(crate) struct OrchestratorTurn<'a> {
     /// turn already did. The operator's policy may treat the two differently —
     /// see [`TurnKind`].
     pub(crate) kind: TurnKind,
-    /// What history selection chose from and kept for this turn. Carried rather than recorded at
-    /// the call site because the request span it belongs on is created inside the stream function,
-    /// several hundred lines after selection ran.
-    pub(crate) context_report: Option<&'a nasiko_orchestrator::ContextReport>,
 }
 
 pub(crate) async fn orchestrator_stream(
@@ -456,7 +417,6 @@ pub(crate) async fn orchestrator_stream(
         transcript_role,
         file_parts,
         kind,
-        context_report,
     } = turn;
     // Orchestrator-routed chats never had a `chat_sessions` row, unlike
     // `agent_proxy.rs`'s `ensure_chat_session` for direct agent chat — so
@@ -585,15 +545,6 @@ pub(crate) async fn orchestrator_stream(
         Some(text)
     };
 
-    // IP-3 skips opted-out agents' results; unreadable switches turn it off for the turn.
-    let uncompressed_tools = match opted_out_agent_tools(&state.db).await {
-        Ok(tools) => Some(tools),
-        Err(e) => {
-            tracing::warn!(error = %e, "IP-3 off for this turn: agent switches unreadable");
-            None
-        }
-    };
-
     let config = OrchestratorConfig {
         // `state.config.openai_model` is already loaded via `env_or("OPENAI_MODEL",
         // "gpt-4o-mini")` (oss/config/src/lib.rs) — read that shared, validated
@@ -608,17 +559,7 @@ pub(crate) async fn orchestrator_stream(
         temperature: Some(0.2),
         policy: policy.clone(),
         preamble,
-        // IP-3. Read here rather than defaulted, because `ContextConfig::default()` is
-        // deliberately inert — without this the compressor is compiled in but unreachable.
-        context: nasiko_react_agent::ContextConfig {
-            compress: nasiko_compress::Policy {
-                enabled: state.config.react_compress_enabled && uncompressed_tools.is_some(),
-                min_bytes: state.config.react_compress_min_bytes,
-                ..Default::default()
-            },
-            uncompressed_tools: uncompressed_tools.unwrap_or_default(),
-            ..nasiko_react_agent::ContextConfig::default()
-        },
+        ..Default::default()
     };
 
     // Real root span for this exchange. Its ids seed the FlowContext, so the
@@ -647,41 +588,16 @@ pub(crate) async fn orchestrator_stream(
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
     let traceparent = crate::telemetry::traceparent_for(&flow_ctx);
-
-    // Selection ran in the caller, before any of this existed; `dispatch_span` is the span the
-    // trace page looks for, so the report is attached here. `agent_id` stays unset — routing has
-    // not chosen one yet — and the read path resolves it through `session_traces`, which this turn
-    // writes as soon as it dispatches.
-    if let Some(report) = context_report {
-        crate::telemetry::record_context_report(
-            &state.db,
-            &dispatch_span,
-            report,
-            crate::telemetry::ContextRecord {
-                user_id,
-                agent_id: None,
-                session_id: Some(context_id.to_string()),
-                trace_id: Some(flow_id.clone()),
-                span_id: Some(flow_ctx.parent_span_id.clone()),
-            },
-        );
-    }
-
     state.flow_guard.init_flow(&flow_ctx, "orchestrator").await;
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — mirrors the direct-agent proxy
     // (`agent_proxy.rs`). `derive_boundary_signals` reads `metadata->>'context_id'`.
-    // `user_message` is what the LLM gateway's salience gate and classifier score;
-    // only a user-started turn has one — a HITL resume's `raw_text` is platform-written.
     //
     // Re-opens on conflict for the same reason as the proxy path: a repeat
     // request under one traceparent must not inherit the `completed` status the
     // previous one left, or strict attribution denies the agent's LLM calls.
-    let flow_metadata = match kind {
-        TurnKind::User => serde_json::json!({ "context_id": context_id, "user_message": raw_text }),
-        TurnKind::Continuation => serde_json::json!({ "context_id": context_id }),
-    };
+    let flow_metadata = serde_json::json!({ "context_id": context_id });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, 'orchestrator', $3, 'running', $4)
@@ -730,14 +646,7 @@ pub(crate) async fn orchestrator_stream(
         caller_uuid,
     );
 
-    // `A2aClient`'s own default is deliberately short — it is shared with agent
-    // card / discovery fetches, where a long hang is the wrong behaviour. This
-    // client makes real agent turns, including the `message/send` fallback taken
-    // by agents that reject `message/stream`, so it carries the agent budget.
     let a2a_client = nasiko_react_agent::A2aClient::new()
-        .with_timeout(std::time::Duration::from_secs(
-            state.config.agent_call_timeout_secs,
-        ))
         .with_headers(vec![("traceparent".to_string(), traceparent)]);
 
     // Each agent the orchestrator calls authenticates to /api/mcp with its own
@@ -751,15 +660,7 @@ pub(crate) async fn orchestrator_stream(
         .await
         .map_err(|e| A2aDispatchError::Internal(e.to_string()))?;
 
-    // Taken before the run, read after it: `run_stream` compresses inside a spawned task holding a
-    // *clone* of the context manager, so this shared handle is the only way the turn's IP-3
-    // measurement is visible out here (see `CompressionTally`).
-    let compression_tally = orchestrator.compression_tally();
-
-    let mut rx = {
-        let _entered = dispatch_span.enter();
-        orchestrator.run_stream(query, file_parts)
-    };
+    let mut rx = orchestrator.run_stream(query, file_parts);
     let task_id = task_id.to_string();
     let context_id = context_id.to_string();
     let artifact_id = Uuid::new_v4().to_string();
@@ -779,7 +680,6 @@ pub(crate) async fn orchestrator_stream(
     let policy_for_persist = policy.clone();
     // Accumulated orchestrator-turn usage for the terminal `usage_meta` event.
     let mut turn_usage = super::usage_meta::TurnUsage::default();
-    let pricing = state.pricing.clone();
 
     let stream = async_stream::stream! {
         yield Ok::<_, Infallible>(to_sse(a2a::status_event(a2a::working(&task_id, &context_id))));
@@ -793,9 +693,13 @@ pub(crate) async fn orchestrator_stream(
         }
 
         let mut content_started = false;
-        // Persist on Usage, before yielding a terminal event. Only attribution
-        // waits for the next ToolCall; client disconnect cannot lose a pending row.
-        let mut pending_usage: Option<Uuid> = None;
+        // A `Usage` event carries no agent reference (it's the orchestrator's
+        // own reasoning-LLM call, evidence: react_loop.rs emits `Usage`
+        // immediately before the `ToolCall` it produces, same turn) — held
+        // here so the *next* event can attach the selected agent's real id
+        // before the DB insert, giving `usage/by-agent` real attribution
+        // instead of every orchestrator-tracked row being agent_id NULL.
+        let mut pending_usage: Option<(u64, u64, String, bool)> = None;
 
         loop {
             tokio::select! {
@@ -809,13 +713,37 @@ pub(crate) async fn orchestrator_stream(
                             yield Ok(to_sse(a2a::status_event(a2a::working_with_message(&task_id, &context_id, msg))));
                         }
                         OrchestratorEvent::ToolCall { agent, message, turn, policy_score } => {
-                            if let Some(usage_id) = pending_usage.take() {
-                                let result = sqlx::query(
-                                    "UPDATE token_usage SET agent_id = (SELECT id FROM agents WHERE name = $2 AND status = 'running') WHERE id = $1 AND user_id = $3",
-                                ).bind(usage_id).bind(&agent).bind(user_id).execute(&db).await;
-                                if let Err(error) = result {
-                                    tracing::warn!(%error, "failed to attribute orchestrator usage");
-                                }
+                            // This ToolCall is the direct result of the reasoning
+                            // turn `pending_usage` was reported for — attach the
+                            // agent it resolved to before inserting.
+                            if let Some((it, ot, m, est)) = pending_usage.take() {
+                                let tracker = usage_tracker.clone();
+                                let uid = user_id;
+                                let fid = flow_id_cleanup.clone();
+                                let db2 = db.clone();
+                                let agent_name = agent.clone();
+                                tokio::spawn(async move {
+                                    let agent_uuid: Option<Uuid> = sqlx::query_scalar(
+                                        "SELECT id FROM agents WHERE name = $1 AND status = 'running'",
+                                    )
+                                    .bind(&agent_name)
+                                    .fetch_optional(&db2)
+                                    .await
+                                    .ok()
+                                    .flatten();
+
+                                    let mut builder = TokenUsageBuilder::new(uid, "orchestrator", "openai", &m)
+                                        .tokens(it as i32, ot as i32)
+                                        .session_id(&fid)
+                                        .streaming(false)
+                                        .metadata(json!({"key_source": "platform", "estimated": est}));
+                                    if let Some(aid) = agent_uuid {
+                                        builder = builder.agent_id(aid);
+                                    }
+                                    if let Err(e) = tracker.track_tokens(builder.build()).await {
+                                        tracing::warn!(error = %e, "failed to track orchestrator token usage (tool-call turn)");
+                                    }
+                                });
                             }
 
                             // An earlier pause's `awaiting_human` step is closed by
@@ -924,20 +852,32 @@ pub(crate) async fn orchestrator_stream(
                             })));
                             yield Ok(to_sse(a2a::status_event(a2a::working_with_message(&task_id, &context_id, msg))));
                         }
-                        OrchestratorEvent::Usage { usage } => {
-                            let input_tokens = usage.input_tokens;
-                            let output_tokens = usage.output_tokens;
-                            let model = usage.model.clone();
-                            let priced = super::usage_meta::PricedTurn::price(&pricing, usage).await;
-                            turn_usage.add(&priced);
+                        OrchestratorEvent::Usage { input_tokens, output_tokens, model, estimated } => {
+                            turn_usage.add(input_tokens, output_tokens, &model, estimated);
 
-                            pending_usage = match priced.persist(&usage_tracker, user_id, &flow_id_cleanup, None).await {
-                                Ok(id) => Some(id),
-                                Err(error) => {
-                                    tracing::warn!(%error, "failed to persist orchestrator usage");
-                                    None
-                                }
-                            };
+                            // Flush a previous turn's usage that never got a
+                            // following ToolCall (e.g. a final synthesis-only
+                            // turn that just answers directly) — unattributed,
+                            // same as before this change.
+                            if let Some((it, ot, m, est)) = pending_usage.take() {
+                                let tracker = usage_tracker.clone();
+                                let uid = user_id;
+                                let fid = flow_id_cleanup.clone();
+                                tokio::spawn(async move {
+                                    let usage = TokenUsageBuilder::new(uid, "orchestrator", "openai", &m)
+                                        .tokens(it as i32, ot as i32)
+                                        .session_id(&fid)
+                                        .streaming(false)
+                                        .metadata(json!({"key_source": "platform", "estimated": est}))
+                                        .build();
+                                    if let Err(e) = tracker.track_tokens(usage).await {
+                                        tracing::warn!(error = %e, "failed to track orchestrator token usage");
+                                    }
+                                });
+                            }
+                            // Hold this turn's usage — the ToolCall arm above
+                            // attaches the real agent_id if one follows.
+                            pending_usage = Some((input_tokens, output_tokens, model.clone(), estimated));
 
                             // Also record in OTel GenAI metrics
                             genai_metrics.record_tokens(
@@ -1175,23 +1115,20 @@ pub(crate) async fn orchestrator_stream(
             }
         }
 
-        // IP-3's turn-level saving. Emitted here rather than at each `push_tool_result` because
-        // the loop's spawned task is finished by the time this line runs — the stream exits when
-        // the orchestrator's channel closes — so the tally is complete and this is the one point
-        // where it and the request's identity are both in scope. A pause (HITL) reaches here too,
-        // and the results compressed before the pause are a real saving that the resumed turn does
-        // not re-compress, so it is recorded rather than discarded.
-        crate::telemetry::record_tool_result_savings(
-            &db,
-            &dispatch_span,
-            &compression_tally,
-            crate::telemetry::ToolResultRecord {
-                user_id,
-                agent_id: None,
-                session_id: Some(context_id.clone()),
-                flow_id: Some(flow_id_cleanup.clone()),
-            },
-        );
+        // Stream ended (Done/Error/channel-closed) with a still-unflushed
+        // final turn's usage (no ToolCall ever followed it) — flush it here,
+        // unattributed, so it's never silently dropped.
+        if let Some((it, ot, m, est)) = pending_usage.take() {
+            let usage = TokenUsageBuilder::new(user_id, "orchestrator", "openai", &m)
+                .tokens(it as i32, ot as i32)
+                .session_id(&flow_id_cleanup)
+                .streaming(false)
+                .metadata(json!({"key_source": "platform", "estimated": est}))
+                .build();
+            if let Err(e) = usage_tracker.track_tokens(usage).await {
+                tracing::warn!(error = %e, "failed to track orchestrator token usage (final flush)");
+            }
+        }
 
         // Guarded on `status = 'running'` so a pause (which already stamped 'paused'/'failed'
         // above, before breaking the loop) isn't immediately overwritten back to 'completed' —
@@ -1222,12 +1159,11 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
     // Excludes `is_internal` agents unconditionally, including for the owning
     // superuser — this is the platform's only generic A2A entry point, and an
     // internal agent (e.g. Weave's dashboard-generator) must be reachable
-    // exclusively through its own dedicated route, never here, or the
-    // superuser-ACL-bypass would leak it into ordinary chat
+    // exclusively through its own dedicated route (`ee/server/src/weave_surface.rs`),
+    // never here, or the superuser-ACL-bypass would leak it into ordinary chat
     // history/usage tracking.
     sqlx::query_as::<_, AgentRow>(
-        "SELECT id, name, status, minimal_code_enabled, skills, compress_enabled \
-         FROM agents \
+        "SELECT id, name, status FROM agents \
          WHERE (id::text = $1 OR name = $1) AND status = 'running' AND NOT is_internal",
     )
     .bind(target)
@@ -1235,22 +1171,6 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
     .await
     .map_err(|e| A2aDispatchError::Internal(e.to_string()))?
     .ok_or_else(|| A2aDispatchError::AgentNotFound(target.to_string()))
-}
-
-/// Orchestrator tool names of the agents whose Token optimization switch is off.
-async fn opted_out_agent_tools(
-    db: &sqlx::PgPool,
-) -> Result<std::collections::HashSet<String>, sqlx::Error> {
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM agents \
-         WHERE status = 'running' AND NOT is_internal AND NOT compress_enabled",
-    )
-    .fetch_all(db)
-    .await?;
-    Ok(names
-        .iter()
-        .map(|name| nasiko_react_agent::A2aTool::tool_name(name))
-        .collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1263,8 +1183,6 @@ async fn agent_stream(
     // agent without also being recorded as "what the user said" in the flow UI or an
     // observability/audit trail.
     query: &str,
-    // What the caller typed, before history packing — recorded on the flow for the LLM gateway.
-    user_message: &str,
     // What's actually sent to the agent in the A2A request body — `query`, or `query` with
     // injected context prepended. Never read for persistence/tracing.
     outbound_query: &str,
@@ -1282,16 +1200,6 @@ async fn agent_stream(
     // `Sse::new(...).into_response()` requires to be `'static` — a caller-borrowed `&str`
     // cannot satisfy that, only a value this function owns and moves into the generator can.
     session_id: Option<String>,
-    // Prior user turns in this session (`history.user_turn_count()` at the call
-    // site) — picks which minimal-code ladder variant to inject below. A fresh
-    // session has nothing in its workspace yet to search for; forcing the full
-    // search-first ladder there only spends tokens finding nothing. An
-    // established session (several turns in) leans the other way — see
-    // nasiko-coding-policy's minimal_code_addendum() doc comment.
-    prior_turn_count: usize,
-    // As `OrchestratorTurn::context_report`: this function owns the `a2a.dispatch` span the
-    // report has to be attached to.
-    context_report: Option<&nasiko_orchestrator::ContextReport>,
 ) -> Result<Response, A2aDispatchError> {
     let endpoint = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
         .await
@@ -1318,35 +1226,7 @@ async fn agent_stream(
     let flow_ctx = crate::telemetry::flow_context_from_span(&dispatch_span)
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
-
-    if let Some(report) = context_report {
-        crate::telemetry::record_context_report(
-            &state.db,
-            &dispatch_span,
-            report,
-            crate::telemetry::ContextRecord {
-                user_id,
-                agent_id: Some(agent.id),
-                session_id: Some(context_id.to_string()),
-                trace_id: Some(flow_id.clone()),
-                span_id: Some(flow_ctx.parent_span_id.clone()),
-            },
-        );
-    }
-
     state.flow_guard.init_flow(&flow_ctx, &agent.name).await;
-
-    // Minimal-code eligibility + holdout, decided once up front so the flow row recorded below and
-    // the addendum injection further down (which only skips when withheld) can't disagree about
-    // which arm this flow landed in. See `nasiko_coding_policy::in_minimal_code_holdout` for why a
-    // control arm is withheld at all — same reasoning as the brevity directive's own holdout.
-    let minimal_code_eligible =
-        agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills);
-    let minimal_code_holdout = minimal_code_eligible
-        && nasiko_coding_policy::in_minimal_code_holdout(
-            &flow_id,
-            state.config.minimal_code_holdout_pct,
-        );
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — same reason as the orchestrator
@@ -1354,20 +1234,9 @@ async fn agent_stream(
     // falls back to the per-turn flow_id, so every turn of one conversation looks
     // like a new conversation and the sticky decision is never reused.
     //
-    // `user_message` (the text before history packing) feeds the LLM gateway's
-    // salience gate and classifier — see the orchestrator branch above.
-    //
     // Re-opens on conflict — see the orchestrator branch above: a repeat request
     // under one traceparent must not inherit the previous one's `completed`.
-    let mut flow_metadata =
-        serde_json::json!({ "context_id": context_id, "user_message": user_message });
-    if minimal_code_eligible {
-        flow_metadata["minimal_code"] = if minimal_code_holdout {
-            serde_json::json!({ "applied": false, "skipped": "holdout" })
-        } else {
-            serde_json::json!({ "applied": true })
-        };
-    }
+    let flow_metadata = serde_json::json!({ "context_id": context_id });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
@@ -1405,44 +1274,6 @@ async fn agent_stream(
     .execute(&state.db)
     .await;
 
-    // Minimal-code ladder injection: only what's actually FORWARDED to the
-    // agent gets the addendum appended — `query` itself stays untouched, so
-    // everything above that already used it (the flow title, the span's
-    // captured input, session_traces) keeps showing the real conversation,
-    // not an implementation detail. The agent needs zero code of its own to
-    // support this: it just sees a longer task description, exactly as it
-    // would if a human had pasted the same extra paragraph in by hand.
-    //
-    // `prior_turn_count` picks the ladder variant: a session's first turn has
-    // an empty workspace, so the full "search the codebase first" ladder just
-    // spends tokens finding nothing there — confirmed empirically (chat
-    // 2026-09-22) to cost more per turn than not having the ladder on at all,
-    // on exactly this kind of from-scratch task. See nasiko-coding-policy's
-    // minimal_code_addendum() doc comment for the three-tier reasoning.
-    // Built from `outbound_query`, never from `query`: `outbound_query` is `query` plus any
-    // server-injected context (enterprise supplemental knowledge), and it is what the agent is
-    // meant to receive. Building from `query` here silently dropped that injection — the
-    // context was resolved on every dispatch and then thrown away.
-    let effective_query = if minimal_code_eligible && !minimal_code_holdout {
-        let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
-        tracing::info!(
-            agent_id = %agent.id,
-            %context_id,
-            prior_turn_count,
-            "a2a_dispatch: injecting minimal-code ladder"
-        );
-        format!("{outbound_query}\n{addendum}")
-    } else {
-        if minimal_code_holdout {
-            tracing::debug!(
-                agent_id = %agent.id,
-                %context_id,
-                "a2a_dispatch: minimal-code ladder withheld for this flow's holdout arm"
-            );
-        }
-        outbound_query.to_string()
-    };
-
     // Streaming first (`message/stream`): agents that stream (all the Rust
     // seed agents, and python a2a-sdk servers) deliver live tokens and tool
     // activity. The SSE loop below terminates itself on the first terminal
@@ -1451,10 +1282,10 @@ async fn agent_stream(
     // (or reject `message/stream`) fall through to the non-streaming branch,
     // which retries with `message/send`.
     let req_body = if file_parts.is_empty() {
-        nasiko_types::a2a::build_stream_request(&effective_query, Some(context_id))
+        nasiko_types::a2a::build_stream_request(outbound_query, Some(context_id))
     } else {
         nasiko_types::a2a::build_stream_request_with_parts(
-            &effective_query,
+            outbound_query,
             Some(context_id),
             file_parts,
         )
@@ -1469,13 +1300,11 @@ async fn agent_stream(
             .post(&endpoint)
             .header("A2A-Version", nasiko_types::a2a::A2A_VERSION_HEADER_VALUE)
             .header("traceparent", crate::telemetry::traceparent_for(&flow_ctx))
-            // Agent turns can legitimately run past the shared client's short
-            // default (long tool calls, multi-step orchestration); override
+            // Agent turns can legitimately run past the shared client's default
+            // 60s timeout (long tool calls, multi-step orchestration); override
             // per-request instead of raising the global default for every caller
             // of `state.http_client`.
-            .timeout(std::time::Duration::from_secs(
-                state.config.agent_call_timeout_secs,
-            ))
+            .timeout(std::time::Duration::from_secs(600))
     };
 
     let response = build_agent_req()
@@ -1652,13 +1481,11 @@ async fn agent_stream(
                     yield Ok(to_sse(a2a::status_event(a2a::completed(&task_id, &context_id))));
                 }
 
-                // Guarded on 'running' like the other completion sites: a terminal
-                // 'failed'/'paused' is never downgraded by a later completion.
                 let _ = sqlx::query(
                     r#"UPDATE flows SET status = 'completed',
                        duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                        completed_at = now()
-                       WHERE flow_id = $1 AND status = 'running'"#,
+                       WHERE flow_id = $1"#,
                 ).bind(&flow_id_cleanup).execute(&db).await;
                 flow_events.remove(&flow_id_cleanup).await;
             }
@@ -1676,7 +1503,7 @@ async fn agent_stream(
         // retry once with plain `message/send`.
         if resp_body.get("error").is_some() {
             let retry_body =
-                nasiko_types::a2a::build_send_request(&effective_query, Some(&context_id));
+                nasiko_types::a2a::build_send_request(outbound_query, Some(&context_id));
             let retry = build_agent_req()
                 .json(&retry_body)
                 .send()
@@ -1790,13 +1617,11 @@ async fn agent_stream(
 
             yield Ok(to_sse(a2a::status_event(a2a::completed(&task_id, &context_id))));
 
-            // Guarded on 'running' like the other completion sites: a terminal
-            // 'failed'/'paused' is never downgraded by a later completion.
             let _ = sqlx::query(
                 r#"UPDATE flows SET status = 'completed',
                    duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                    completed_at = now()
-                   WHERE flow_id = $1 AND status = 'running'"#,
+                   WHERE flow_id = $1"#,
             ).bind(&flow_id_cleanup).execute(&db).await;
             flow_events.remove(&flow_id_cleanup).await;
         };
@@ -1998,9 +1823,6 @@ pub async fn a2a_upload_handler(
             transcript_role: "user",
             file_parts: collected_files,
             kind: TurnKind::User,
-            // This path mints a fresh context id, so no history was selected and there is nothing
-            // to report. A zero row here would count as a request that optimized nothing.
-            context_report: None,
         },
     )
     .await
@@ -2050,8 +1872,8 @@ async fn ensure_orchestrator_chat_session(
     };
 
     let _ = sqlx::query(
-        "INSERT INTO chat_sessions (session_id, user_id, agent_id, agent_url, title, session_type) \
-         VALUES ($1, $2, NULL, '/api/orchestrator/a2a', $3, 'orchestrator') \
+        "INSERT INTO chat_sessions (session_id, user_id, agent_id, agent_url, title) \
+         VALUES ($1, $2, NULL, '/api/orchestrator/a2a', $3) \
          ON CONFLICT (session_id) DO NOTHING",
     )
     .bind(context_id)
@@ -2064,21 +1886,13 @@ async fn ensure_orchestrator_chat_session(
         return;
     }
 
-    // 10s dedup guard: mirrors the one in agent_proxy.rs — the CLI's A2A
-    // method negotiation can hit this path twice for the same logical
-    // message when it retries under a different JSON-RPC method name.
-    let _ = sqlx::query(
-        "INSERT INTO chat_messages (session_id, role, content) \
-         SELECT $1, $2, $3 WHERE NOT EXISTS ( \
-             SELECT 1 FROM chat_messages \
-             WHERE session_id = $1 AND role = $2 AND content = $3 \
-               AND timestamp > now() - INTERVAL '10 seconds')",
-    )
-    .bind(context_id)
-    .bind(role)
-    .bind(query)
-    .execute(&state.db)
-    .await;
+    let _ =
+        sqlx::query("INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3)")
+            .bind(context_id)
+            .bind(role)
+            .bind(query)
+            .execute(&state.db)
+            .await;
 }
 
 pub(crate) async fn resolve_endpoint(
@@ -2487,15 +2301,6 @@ struct AgentRow {
     id: Uuid,
     name: String,
     status: String,
-    /// Plain column (migration 0032), not a secret — read fresh on every
-    /// dispatch so the minimal-code ladder injection below applies
-    /// immediately when toggled, with no agent restart needed.
-    minimal_code_enabled: bool,
-    /// The agent card's skills, classified here rather than in SQL so the dispatch path and
-    /// the settings page share one answer — see [`catalog::models::has_coding_skills`].
-    skills: sqlx::types::Json<Vec<crate::catalog::models::Skill>>,
-    /// Decides whether the history sent to this agent is compressed (IP-4).
-    compress_enabled: bool,
 }
 
 #[derive(Debug)]
