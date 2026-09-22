@@ -246,22 +246,16 @@ pub async fn a2a_dispatch_handler(
         if !crate::acl::can_access_agent(&state, &claims, agent.id).await {
             return Err(A2aDispatchError::AgentNotFound(target.to_string()));
         }
-        // Supplemental context for this one, already-chosen agent, ranked against the real
-        // query text (in addition to any pinned content) — a no-op on OSS. Kept in a separate
-        // `outbound_query` local, distinct from `query`: `agent_stream` persists/traces `query`
-        // verbatim (`flows.title`, `gen_ai.input.messages`) and must never record injected
-        // context as if the user had typed it — see `crate::prompt_context` module docs.
-        // Same "## Known facts" framing the routed path uses (below) so the agent can tell
-        // injected admin knowledge apart from the user's own message by structure, not just by
-        // reading closely — consistent provenance cues on both injection paths.
-        let outbound_query = match state
-            .prompt_context
-            .context_for_agent(agent.id, &query)
-            .await
-        {
-            Some(context) => format!("## Known facts about this agent\n{context}\n\n{query}"),
-            None => query.clone(),
-        };
+        // Supplemental per-agent context (L1A) is no longer injected here: it now rides the EE
+        // injection proxy, which sits on every outbound forward `forwarding_endpoint()` resolves
+        // to — including this one — so injecting it a second time in-process here would double
+        // it up. `outbound_query` stays equal to `query`; kept as a separate local (rather than
+        // collapsing the two `agent_stream` args into one) to minimize the diff against a
+        // call site that still legitimately distinguishes "what was persisted/traced"
+        // (`query`) from "what was sent to the agent" (`outbound_query`) — the planner preamble
+        // (`context_for_agents`, the routed path below) is the only injection that still happens
+        // in-process, because it folds into the LLM's own prompt rather than an outbound forward.
+        let outbound_query = query.clone();
         agent_stream(
             &state,
             agent,
@@ -511,14 +505,14 @@ pub(crate) async fn orchestrator_stream(
     // directly, or route with that context already in hand. A no-op on OSS
     // (`NoopPromptContextProvider`); see `crate::prompt_context`.
     //
-    // Known scope limit (v1, deliberate): this only reaches the *planner's own* preamble — a
-    // minted sub-leg's actual outbound request to the chosen agent (built in
-    // `nasiko-react-agent`'s `AgentTool::call()`, a lower-level OSS crate with no path to this
-    // EE-installed context) does NOT itself carry the target agent's L1A. The planner may relay
-    // some of what it saw into the sub-task text it writes, but that's LLM-mediated, not
-    // guaranteed. Closing this needs either threading the injection seam down into
-    // `nasiko-react-agent`, or a proxy that injects on the minted sub-leg directly — real,
-    // separate scope, not something this call site can add on its own.
+    // This reaches only the *planner's own* preamble, and that's now permanent rather than a v1
+    // gap: a minted sub-leg's actual outbound request (built in `nasiko-react-agent`'s
+    // `A2aTool::call()`, a lower-level OSS crate with no path to this EE-installed context)
+    // carries its own L1A separately, injected by the EE injection proxy that
+    // `forwarding_endpoint()` routes every outbound forward through — see
+    // `ee/server/src/injection_proxy.rs`. The planner preamble can't move to that proxy because
+    // it isn't an outbound forward at all; it's text folded into the LLM's own prompt before any
+    // agent is chosen.
     // From `agents` (the post-endpoint-resolution roster actually rendered below), not
     // `agent_summaries` — looking up context for a candidate that gets dropped for having no
     // endpoint would waste a domain lookup (and possibly an embedding call) on an id the
@@ -1930,8 +1924,12 @@ pub(crate) async fn resolve_endpoint(
     };
 
     // Prefer live runtime endpoint (Docker port mapping can change on restart).
+    // `forwarding_endpoint()`, not `endpoint()`: this resolves the address an actual outbound
+    // A2A call goes to (a no-op alias for `endpoint()` on OSS/no-memory EE; the EE injection
+    // proxy's address when memory is enabled) — never the deploy-time persisted snapshot, which
+    // `resolve_agent_url` computes separately via plain `endpoint()`.
     let container_id = nasiko_runtime::ContainerId::from_uuid(agent_id);
-    match state.runtime.endpoint(&container_id).await {
+    match state.runtime.forwarding_endpoint(&container_id).await {
         Ok(endpoint) => {
             let base = endpoint.trim_end_matches('/');
             return Ok(format!("{base}{path}"));
