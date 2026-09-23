@@ -214,11 +214,7 @@ impl AgentExecutor for LegalAgent {
             yield Ok(status_working(&task_id, &context_id, None));
 
             let agent = LegalAgent { model, api_key, base_url, http, mcp: mcp.clone() };
-            // Built-in tools plus whatever the MCP gateway granted this agent.
-            let mut tool_defs = tools::definitions();
-            if let Some(client) = &mcp {
-                tool_defs.extend(client.tool_defs().iter().cloned());
-            }
+
 
             let system = "\
         You are a Legal Research assistant. You MUST use your tools for every answer — never respond from \
@@ -236,10 +232,20 @@ impl AgentExecutor for LegalAgent {
         - SEC data is US-only — state jurisdictional scope clearly\n\
         - End with: 'This is informational only, not legal advice.'";
 
+            // One session per request: `tools/list` is query-aware, so the set
+            // depends on this request's traceparent and grows when the model
+            // searches (see mcp.rs).
+            let mut mcp_session = match &mcp {
+                Some(client) => {
+                    Some(mcp::McpSession::open(client.clone(), &traceparent).await)
+                }
+                None => None,
+            };
+
             // The prompt above lists only the built-ins, so without this the model
             // keeps answering account questions with web_search (see mcp.rs).
-            let system = match &mcp {
-                Some(client) => format!("{system}{}", client.system_prompt_hint()),
+            let system = match &mcp_session {
+                Some(session) => format!("{system}{}", session.system_prompt_hint()),
                 None => system.to_string(),
             };
 
@@ -251,6 +257,12 @@ impl AgentExecutor for LegalAgent {
             let mut final_text = String::new();
 
             for round in 0..6 {
+                // Rebuilt every round: a `nasiko_search_tools` call adds the
+                // tools it found, and the model can only call what it is shown.
+                let mut tool_defs = tools::definitions();
+                if let Some(session) = &mcp_session {
+                    tool_defs.extend(session.tool_defs().iter().cloned());
+                }
                 // Force the last allowed round to be tool-less so the model must
                 // produce a plain-text answer instead of the loop exhausting with
                 // final_text still empty (silently returning no answer at all).
@@ -279,9 +291,9 @@ impl AgentExecutor for LegalAgent {
                             Some(&format!("{name}: {preview}")),
                         ));
 
-                        let result = match &mcp {
-                            Some(client) if client.handles(name) => {
-                                client.call_tool(&traceparent, name, args).await
+                        let result = match &mut mcp_session {
+                            Some(session) if session.handles(name) => {
+                                session.call_tool(name, args).await
                             }
                             _ => tools::execute(name, args).await,
                         };
@@ -377,13 +389,13 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8000);
 
-    // MCP gateway: configured once from the deploy-injected env. Discovery
-    // needs no flow, so it runs here rather than per request.
-    let mut mcp = mcp::McpClient::from_env();
-    if let Some(client) = &mut mcp {
-        client.discover_tools().await;
+    // MCP gateway: configured once from the deploy-injected env. Only a health
+    // check here — the tool set is query-scoped and fetched per request
+    // (docs/MCP_TOOL_SEARCH_DESIGN.md), see McpSession.
+    let mcp = mcp::McpClient::from_env().map(Arc::new);
+    if let Some(client) = &mcp {
+        client.probe().await;
     }
-    let mcp = mcp.map(Arc::new);
 
     let handler = Arc::new(DefaultRequestHandler::new(
         LegalAgent::new(mcp),

@@ -321,11 +321,7 @@ impl AgentExecutor for InfraAgent {
             yield Ok(status_working(&task_id, &context_id, None));
 
             let agent = InfraAgent { model, api_key, base_url, http, mcp: mcp.clone() };
-            // Built-in tools plus whatever the MCP gateway granted this agent.
-            let mut tool_defs = tools::definitions();
-            if let Some(client) = &mcp {
-                tool_defs.extend(client.tool_defs().iter().cloned());
-            }
+
 
             let system = "\
         You are an Infrastructure Engineer assistant. You MUST use your tools for every answer — never \
@@ -343,10 +339,20 @@ impl AgentExecutor for InfraAgent {
         - Always include specific versions and pin recommendations\n\
         - All data must come from tool output, never from memory";
 
+            // One session per request: `tools/list` is query-aware, so the set
+            // depends on this request's traceparent and grows when the model
+            // searches (see mcp.rs).
+            let mut mcp_session = match &mcp {
+                Some(client) => {
+                    Some(mcp::McpSession::open(client.clone(), &traceparent).await)
+                }
+                None => None,
+            };
+
             // The prompt above lists only the built-ins, so without this the model
             // keeps answering account questions with web_search (see mcp.rs).
-            let system = match &mcp {
-                Some(client) => format!("{system}{}", client.system_prompt_hint()),
+            let system = match &mcp_session {
+                Some(session) => format!("{system}{}", session.system_prompt_hint()),
                 None => system.to_string(),
             };
 
@@ -366,6 +372,12 @@ impl AgentExecutor for InfraAgent {
             let mut full_text = String::new();
 
             'rounds: for _ in 0..6 {
+                // Rebuilt every round: a `nasiko_search_tools` call adds the
+                // tools it found, and the model can only call what it is shown.
+                let mut tool_defs = tools::definitions();
+                if let Some(session) = &mcp_session {
+                    tool_defs.extend(session.tool_defs().iter().cloned());
+                }
                 let mut round_content = String::new();
                 let mut round_tool_calls: Vec<ToolCallBuilder> = Vec::new();
                 let mut round_stream = std::pin::pin!(agent.chat_stream(messages.clone(), tool_defs.clone(), remote_cx.clone()));
@@ -433,9 +445,9 @@ impl AgentExecutor for InfraAgent {
                         Some(&format!("{}: {preview}", tc.name)),
                     ));
 
-                    let result = match &mcp {
-                        Some(client) if client.handles(&tc.name) => {
-                            client.call_tool(&traceparent, &tc.name, &tc.arguments).await
+                    let result = match &mut mcp_session {
+                        Some(session) if session.handles(&tc.name) => {
+                            session.call_tool(&tc.name, &tc.arguments).await
                         }
                         _ => tools::execute(&tc.name, &tc.arguments).await,
                     };
@@ -509,13 +521,13 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8000);
 
-    // MCP gateway: configured once from the deploy-injected env. Discovery
-    // needs no flow, so it runs here rather than per request.
-    let mut mcp = mcp::McpClient::from_env();
-    if let Some(client) = &mut mcp {
-        client.discover_tools().await;
+    // MCP gateway: configured once from the deploy-injected env. Only a health
+    // check here — the tool set is query-scoped and fetched per request
+    // (docs/MCP_TOOL_SEARCH_DESIGN.md), see McpSession.
+    let mcp = mcp::McpClient::from_env().map(Arc::new);
+    if let Some(client) = &mcp {
+        client.probe().await;
     }
-    let mcp = mcp.map(Arc::new);
 
     let handler = Arc::new(DefaultRequestHandler::new(
         InfraAgent::new(mcp),
