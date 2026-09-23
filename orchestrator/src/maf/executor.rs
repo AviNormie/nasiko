@@ -104,6 +104,8 @@ pub async fn run_maf(
         total_cost,
         &output_generation,
         llm,
+        outbound,
+        outbound_prefix.as_deref(),
     )
     .await
 }
@@ -245,6 +247,8 @@ pub async fn run_maf_from(
         total_cost,
         &output_generation,
         llm,
+        outbound,
+        outbound_prefix.as_deref(),
     )
     .await
 }
@@ -591,16 +595,25 @@ fn build_paused_step(
 
 /// LLM call 4: synthesise the final output once every step has succeeded — shared tail of
 /// `run_maf`/`run_maf_from`.
+#[allow(clippy::too_many_arguments)]
 async fn finish_run(
     step_results: Vec<StepResult>,
     mut total_tokens: i64,
     total_cost: f64,
     output_generation: &str,
     llm: &LlmClient,
+    outbound: &dyn OutboundPrefix,
+    outbound_prefix: Option<&str>,
 ) -> Result<StepOutcome, String> {
-    let (output, output_tokens) = generate_final_output(&step_results, output_generation, llm)
-        .await
-        .map_err(|e| format!("final output generation failed: {e}"))?;
+    let (output, output_tokens) = generate_final_output(
+        &step_results,
+        output_generation,
+        llm,
+        outbound,
+        outbound_prefix,
+    )
+    .await
+    .map_err(|e| format!("final output generation failed: {e}"))?;
     total_tokens += output_tokens;
 
     Ok(StepOutcome::Completed(ExecutionResult {
@@ -1055,6 +1068,8 @@ async fn generate_final_output(
     step_results: &[StepResult],
     guidelines: &str,
     llm: &LlmClient,
+    outbound: &dyn OutboundPrefix,
+    outbound_prefix: Option<&str>,
 ) -> Result<(String, i64), String> {
     // System prompt matches Python's MAFExecutor._create_final_output exactly.
     let system = "You are a Multi-Agent Flow (MAF) final output generator.\n\
@@ -1124,10 +1139,21 @@ async fn generate_final_output(
         "additionalProperties": false
     });
 
+    // This is the one LLM on the MAF path whose output the USER reads. Every step's agent gets
+    // the prefix on its own prompt, but those agents only feed this synthesiser, which is then
+    // free to put anything it was handed into the final answer — so a rule like "never repeat a
+    // customer email address" is obeyed by every agent and then broken here, by the platform
+    // itself, unless the same text governs this call too. Prepended to the system prompt rather
+    // than the user turn so it also precedes the one-shot exchange below.
+    //
+    // With nothing configured `compose` returns `system` unchanged, so the prompt stays
+    // byte-identical to Python's `MAFExecutor._create_final_output`.
+    let system = outbound.compose(outbound_prefix, system);
+
     let (json, tokens) = llm
         .chat_json_schema(
             vec![
-                ChatMessage::system(system),
+                ChatMessage::system(&system),
                 ChatMessage::user(one_shot_human),
                 ChatMessage::assistant(one_shot_assistant),
                 ChatMessage::user(user),
@@ -1428,6 +1454,102 @@ fn build_context(step_results: &[StepResult]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `OutboundPrefix` that supplies a recognisable prefix and joins it the way the real
+    /// server adapter does (`nasiko_react_agent::prefixed`, which this crate cannot reach).
+    #[derive(Debug)]
+    struct FixedPrefix(&'static str);
+
+    #[async_trait::async_trait]
+    impl crate::outbound::OutboundPrefix for FixedPrefix {
+        async fn resolve(&self) -> Option<String> {
+            Some(self.0.to_string())
+        }
+
+        fn compose(&self, prefix: Option<&str>, body: &str) -> String {
+            match prefix {
+                Some(p) if !p.trim().is_empty() => format!("{}\n\n{body}", p.trim_end()),
+                _ => body.to_string(),
+            }
+        }
+    }
+
+    /// The MAF synthesiser (LLM call 4) is the only model on that path whose output the USER
+    /// reads. Every step's agent is handed the prefix on its own prompt, but those agents just
+    /// feed this call, which is then free to put anything it was given into the final answer — so
+    /// a rule like "never repeat a customer email address" is honoured by every agent and then
+    /// broken by the platform itself. Asserted on the wire, against the SYSTEM message, because
+    /// that is the only place the guarantee actually lives.
+    #[tokio::test]
+    async fn the_final_output_synthesiser_is_governed_by_the_outbound_prefix() {
+        let mut llm_api = mockito::Server::new_async().await;
+        let hit = llm_api
+            .mock("POST", "/chat/completions")
+            // Keys come out alphabetical (`serde_json` without `preserve_order`), so the
+            // message serialises as `{"content":...,"role":...}`. Anchoring on the content that
+            // STARTS with the prefix and still carries the synthesiser's own opening line pins
+            // the prefix to the system prompt specifically, not merely somewhere in the body.
+            .match_body(mockito::Matcher::Regex(
+                r#""content":"ORG POLICY[\s\S]*You are a Multi-Agent Flow"#.into(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{"choices":[{"message":{"content":"{\"final_output\":\"done\"}"}}],"usage":{"total_tokens":7}}"#,
+            )
+            .create_async()
+            .await;
+
+        let llm = LlmClient::new(
+            reqwest::Client::new(),
+            "k".into(),
+            Some(llm_api.url()),
+            "test-model".into(),
+        );
+        let prefix = FixedPrefix("ORG POLICY");
+        let (out, _) = generate_final_output(&[], "guidelines", &llm, &prefix, Some("ORG POLICY"))
+            .await
+            .expect("synthesiser call");
+
+        hit.assert_async().await;
+        assert_eq!(out, "done");
+    }
+
+    /// And with nothing configured the system prompt must go out byte-identical to Python's
+    /// `MAFExecutor._create_final_output` — the parity this file's own comment claims.
+    #[tokio::test]
+    async fn an_unconfigured_deployment_leaves_the_synthesiser_prompt_untouched() {
+        let mut llm_api = mockito::Server::new_async().await;
+        let hit = llm_api
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                r#""content":"You are a Multi-Agent Flow"#.into(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"{"choices":[{"message":{"content":"{\"final_output\":\"done\"}"}}],"usage":{"total_tokens":7}}"#,
+            )
+            .create_async()
+            .await;
+
+        let llm = LlmClient::new(
+            reqwest::Client::new(),
+            "k".into(),
+            Some(llm_api.url()),
+            "test-model".into(),
+        );
+        let (_, _) = generate_final_output(
+            &[],
+            "guidelines",
+            &llm,
+            &crate::outbound::NoOutboundPrefix,
+            None,
+        )
+        .await
+        .expect("synthesiser call");
+
+        hit.assert_async().await;
+    }
+
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
     use nasiko_observability::{
