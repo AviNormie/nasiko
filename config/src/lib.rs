@@ -519,6 +519,19 @@ impl Config {
     pub fn validate_secrets_key(&self) -> Result<(), String> {
         validate_secrets_key_format(&self.secrets_encryption_key)
     }
+
+    /// Fail fast if the EE injection proxy would be mounted (`memory_enabled`) but has no
+    /// `INJECTION_PROXY_TOKEN` to protect it. Without this check, an operator who flips
+    /// `MEMORY_ENABLED=true` without also setting the token gets no error anywhere — the proxy
+    /// still mounts, but every outbound agent forward silently 401s (`injection_proxy.rs`'s
+    /// `expected_token_hash` is `None` when the token is empty, and an empty hash never matches
+    /// any presented credential), which looks like agents are unreachable, not like a
+    /// misconfiguration. `memory_enabled` is passed in rather than read from `Config` itself:
+    /// `MEMORY_ENABLED` is an EE-only concern (`ee/memory::MemoryConfig` owns its real parsing),
+    /// and `Config` (OSS-shared) has no business knowing about it directly.
+    pub fn validate_injection_proxy_token(&self, memory_enabled: bool) -> Result<(), String> {
+        validate_injection_proxy_token_format(&self.injection_proxy_token, memory_enabled)
+    }
 }
 
 /// Strips a trailing `/v1` (and any trailing slashes) from an OpenAI-compatible
@@ -535,6 +548,21 @@ impl Config {
 pub fn openai_base_url_without_v1(base_url: &str) -> &str {
     let trimmed = base_url.trim_end_matches('/');
     trimmed.strip_suffix("/v1").unwrap_or(trimmed)
+}
+
+/// See [`Config::validate_injection_proxy_token`]'s doc comment for why this check exists.
+/// A free function, like [`validate_secrets_key_format`] above, so tests don't need a full
+/// `Config` (a ~60-field struct) just to exercise this one rule.
+fn validate_injection_proxy_token_format(token: &str, memory_enabled: bool) -> Result<(), String> {
+    if memory_enabled && token.is_empty() {
+        return Err(
+            "MEMORY_ENABLED=true requires INJECTION_PROXY_TOKEN to be set — without it \
+             every outbound agent forward is rejected with 401, silently, with nothing in \
+             the logs pointing at why. Set INJECTION_PROXY_TOKEN before enabling memory."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_secrets_key_format(key: &str) -> Result<(), String> {
@@ -578,6 +606,18 @@ mod tests {
     #[test]
     fn invalid_base64_fails() {
         assert!(validate_secrets_key_format("not base64 at all!!!").is_err());
+    }
+
+    #[test]
+    fn injection_proxy_token_required_only_when_memory_enabled() {
+        assert!(validate_injection_proxy_token_format("", false).is_ok());
+        assert!(validate_injection_proxy_token_format("", true).is_err());
+    }
+
+    #[test]
+    fn injection_proxy_token_present_passes_regardless() {
+        assert!(validate_injection_proxy_token_format("some-token", false).is_ok());
+        assert!(validate_injection_proxy_token_format("some-token", true).is_ok());
     }
 
     #[test]
