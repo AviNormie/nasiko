@@ -738,7 +738,25 @@ async fn ensure_chat_session(
     //   the file and answers, and a rule about what it may say back governs that turn exactly as
     //   much as any other. Nesting this under the text check let precisely those requests through
     //   unpoliced, and reported `org_applied=false` while every other path reported true.
-    let org_context = state.prompt_context.org_context().await;
+    //
+    // One case is deliberately excluded: a message carrying a `taskId` is a CONTINUATION of a
+    // task the agent is already holding — a human answering the question it paused on. That task
+    // was opened by a message which did carry the policy, and the agent must be stateful to have
+    // paused at all, so re-sending it buys nothing; meanwhile the payload here is the human's
+    // literal answer ("yes", "owner/repo"), and prepending a block to that risks the agent
+    // reading the block as the answer. The two server-side resume dispatchers
+    // (`hitl/mod.rs::deliver` and the MAF executor's `continue_paused_step`) already behave this
+    // way; without this the proxy was the odd one out, so the same deployment policed a resume or
+    // not depending on which route delivered it.
+    let is_task_continuation = message
+        .get("taskId")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| !t.is_empty());
+    let org_context = if is_task_continuation {
+        None
+    } else {
+        state.prompt_context.org_context().await
+    };
 
     if !user_text.is_empty() || org_context.is_some() {
         let glued = if same_agent_session && !user_text.is_empty() {
