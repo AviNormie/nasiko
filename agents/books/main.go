@@ -33,20 +33,18 @@ func (b *booksExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorCon
 	traceparent := firstParam(execCtx, "traceparent")
 	return func(yield func(a2a.Event, error) bool) {
 		userText := extractText(execCtx.Message)
-		// Built-in tools plus whatever the MCP gateway granted this agent.
-		tools := booksTools
-		if b.mcp != nil {
-			tools = append(append([]toolDef{}, booksTools...), b.mcp.tools...)
-		}
+		// One session per request: tools/list is query-aware, so the set depends
+		// on this request's traceparent and grows when the model searches.
+		session := b.mcp.openSession(ctx, traceparent)
 		dispatch := func(ctx context.Context, name, argsJSON string) string {
-			if b.mcp != nil && b.mcp.names[name] {
-				return b.mcp.callTool(ctx, traceparent, name, argsJSON)
+			if session.handles(name) {
+				return session.callTool(ctx, name, argsJSON)
 			}
 			return dispatchTool(ctx, name, argsJSON)
 		}
 		// Run the LLM tool-calling loop: the model forms the search query, we
 		// execute it against Open Library, then the model synthesizes the answer.
-		result, err := b.llm.runAgentLoop(ctx, userText, traceparent, b.mcp.systemPromptHint(), tools, dispatch)
+		result, err := b.llm.runAgentLoop(ctx, userText, traceparent, session.systemPromptHint(), booksTools, session, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -190,12 +188,11 @@ func main() {
 		},
 	}
 
-	// MCP gateway: configured once from the deploy-injected env; tool
-	// discovery needs no flow, so it runs here rather than per request.
+	// MCP gateway: configured once from the deploy-injected env. Only a health
+	// check here — the tool set is query-scoped and fetched per request
+	// (docs/MCP_TOOL_SEARCH_DESIGN.md), see mcpSession.
 	mcp := newMCPClient()
-	if mcp != nil {
-		mcp.discoverTools(context.Background())
-	}
+	mcp.probe(context.Background())
 
 	handler := a2asrv.NewHandler(&booksExecutor{llm: newLLMClient(), mcp: mcp})
 

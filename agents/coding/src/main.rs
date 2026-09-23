@@ -143,17 +143,21 @@ impl AgentExecutor for CodingAgent {
             };
 
             let agent = CodingAgent { model, api_key, base_url, http, mcp: mcp.clone() };
-            // Built-in tools plus whatever the MCP gateway granted this agent.
-            let mut tool_defs = tools::definitions();
-            if let Some(client) = &mcp {
-                tool_defs.extend(client.tool_defs().iter().cloned());
-            }
+            // One session per request: `tools/list` is query-aware, so the set
+            // depends on this request's traceparent and grows when the model
+            // searches (see mcp.rs).
+            let mut mcp_session = match &mcp {
+                Some(client) => {
+                    Some(mcp::McpSession::open(client.clone(), &traceparent).await)
+                }
+                None => None,
+            };
 
             let mut messages = vec![
-                serde_json::json!({"role": "system", "content": match &mcp {
+                serde_json::json!({"role": "system", "content": match &mcp_session {
                     // SYSTEM_PROMPT lists only the built-ins, so without this the
                     // model ignores the gateway tools (see mcp.rs).
-                    Some(client) => format!("{SYSTEM_PROMPT}{}", client.system_prompt_hint()),
+                    Some(session) => format!("{SYSTEM_PROMPT}{}", session.system_prompt_hint()),
                     None => SYSTEM_PROMPT.to_string(),
                 }}),
                 serde_json::json!({"role": "user", "content": user_text}),
@@ -162,6 +166,12 @@ impl AgentExecutor for CodingAgent {
             let mut final_text = String::new();
 
             for _ in 0..MAX_TURNS {
+                // Rebuilt every round: a `nasiko_search_tools` call adds the
+                // tools it found, and the model can only call what it is shown.
+                let mut tool_defs = tools::definitions();
+                if let Some(session) = &mcp_session {
+                    tool_defs.extend(session.tool_defs().iter().cloned());
+                }
                 let resp = match agent.chat(&messages, &tool_defs).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -182,9 +192,9 @@ impl AgentExecutor for CodingAgent {
                         let preview = extract_preview(name, args);
                         yield Ok(status_working(&task_id, &context_id, Some(&preview)));
 
-                        let result = match &mcp {
-                            Some(client) if client.handles(name) => {
-                                client.call_tool(&traceparent, name, args).await
+                        let result = match &mut mcp_session {
+                            Some(session) if session.handles(name) => {
+                                session.call_tool(name, args).await
                             }
                             _ => tools::execute(sandbox.as_ref(), name, args).await,
                         };
@@ -266,13 +276,13 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8000);
 
-    // MCP gateway: configured once from the deploy-injected env. Discovery
-    // needs no flow, so it runs here rather than per request.
-    let mut mcp = mcp::McpClient::from_env();
-    if let Some(client) = &mut mcp {
-        client.discover_tools().await;
+    // MCP gateway: configured once from the deploy-injected env. Only a health
+    // check here — the tool set is query-scoped and fetched per request
+    // (docs/MCP_TOOL_SEARCH_DESIGN.md), see McpSession.
+    let mcp = mcp::McpClient::from_env().map(Arc::new);
+    if let Some(client) = &mcp {
+        client.probe().await;
     }
-    let mcp = mcp.map(Arc::new);
 
     let handler = Arc::new(DefaultRequestHandler::new(
         CodingAgent::new(mcp),

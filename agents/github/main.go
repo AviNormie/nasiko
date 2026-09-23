@@ -36,20 +36,18 @@ func (g *githubExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorCo
 	traceparent := firstParam(execCtx, "traceparent")
 	return func(yield func(a2a.Event, error) bool) {
 		userText := extractText(execCtx.Message)
-		// Built-in tools plus whatever the MCP gateway granted this agent.
-		tools := githubTools
-		if g.mcp != nil {
-			tools = append(append([]toolDef{}, githubTools...), g.mcp.tools...)
-		}
+		// One session per request: tools/list is query-aware, so the set depends
+		// on this request's traceparent and grows when the model searches.
+		session := g.mcp.openSession(ctx, traceparent)
 		dispatch := func(ctx context.Context, name, argsJSON string) string {
-			if g.mcp != nil && g.mcp.names[name] {
-				return g.mcp.callTool(ctx, traceparent, name, argsJSON)
+			if session.handles(name) {
+				return session.callTool(ctx, name, argsJSON)
 			}
 			return dispatchTool(ctx, name, argsJSON)
 		}
 		// Run the LLM tool-calling loop: the model picks the GitHub tools, we
 		// execute them, then the model synthesizes the answer.
-		result, err := g.llm.runAgentLoop(ctx, userText, traceparent, g.mcp.systemPromptHint(), tools, dispatch)
+		result, err := g.llm.runAgentLoop(ctx, userText, traceparent, session.systemPromptHint(), githubTools, session, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -309,12 +307,11 @@ func main() {
 		},
 	}
 
-	// MCP gateway: configured once from the deploy-injected env; tool
-	// discovery needs no flow, so it runs here rather than per request.
+	// MCP gateway: configured once from the deploy-injected env. Only a health
+	// check here — the tool set is query-scoped and fetched per request
+	// (docs/MCP_TOOL_SEARCH_DESIGN.md), see mcpSession.
 	mcp := newMCPClient()
-	if mcp != nil {
-		mcp.discoverTools(context.Background())
-	}
+	mcp.probe(context.Background())
 
 	handler := a2asrv.NewHandler(&githubExecutor{llm: newLLMClient(), mcp: mcp})
 

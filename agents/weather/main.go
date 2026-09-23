@@ -35,20 +35,18 @@ func (w *weatherExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorC
 	traceparent := firstParam(execCtx, "traceparent")
 	return func(yield func(a2a.Event, error) bool) {
 		userText := extractText(execCtx.Message)
-		// Built-in tools plus whatever the MCP gateway granted this agent.
-		tools := weatherTools
-		if w.mcp != nil {
-			tools = append(append([]toolDef{}, weatherTools...), w.mcp.tools...)
-		}
+		// One session per request: tools/list is query-aware, so the set depends
+		// on this request's traceparent and grows when the model searches.
+		session := w.mcp.openSession(ctx, traceparent)
 		dispatch := func(ctx context.Context, name, argsJSON string) string {
-			if w.mcp != nil && w.mcp.names[name] {
-				return w.mcp.callTool(ctx, traceparent, name, argsJSON)
+			if session.handles(name) {
+				return session.callTool(ctx, name, argsJSON)
 			}
 			return dispatchTool(ctx, name, argsJSON)
 		}
 		// Run the LLM tool-calling loop: the model extracts the location and picks
 		// tools, we execute them, then the model synthesizes the answer.
-		result, err := w.llm.runAgentLoop(ctx, userText, traceparent, w.mcp.systemPromptHint(), tools, dispatch)
+		result, err := w.llm.runAgentLoop(ctx, userText, traceparent, session.systemPromptHint(), weatherTools, session, dispatch)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -233,12 +231,11 @@ func main() {
 		},
 	}
 
-	// MCP gateway: configured once from the deploy-injected env; tool
-	// discovery runs at startup with agent-only identity (no flow needed).
+	// MCP gateway: configured once from the deploy-injected env. Only a health
+	// check here — the tool set is query-scoped and fetched per request
+	// (docs/MCP_TOOL_SEARCH_DESIGN.md), see mcpSession.
 	mcp := newMCPClient()
-	if mcp != nil {
-		mcp.discoverTools(context.Background())
-	}
+	mcp.probe(context.Background())
 
 	handler := a2asrv.NewHandler(&weatherExecutor{llm: newLLMClient(), mcp: mcp})
 

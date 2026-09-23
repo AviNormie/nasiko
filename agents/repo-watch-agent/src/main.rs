@@ -43,13 +43,14 @@ async fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    // MCP gateway: configured once from the deploy-injected env. Discovery
-    // needs no flow, so it runs here rather than per request.
-    let mut mcp = mcp::McpClient::from_env();
-    if let Some(client) = &mut mcp {
-        client.discover_tools().await;
+    // MCP gateway: configured once from the deploy-injected env. Only a health
+    // check here — the tool set is query-scoped and fetched per request
+    // (docs/MCP_TOOL_SEARCH_DESIGN.md), see McpSession.
+    let mcp = mcp::McpClient::from_env().map(Arc::new);
+    if let Some(client) = &mcp {
+        client.probe().await;
     }
-    let agent = RepoWatchAgent::new(mcp.map(Arc::new));
+    let agent = RepoWatchAgent::new(mcp);
     spawn_digest_scheduler(agent.clone());
 
     let handler = Arc::new(DefaultRequestHandler::new(agent, InMemoryTaskStore::new()));

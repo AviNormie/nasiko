@@ -143,7 +143,8 @@ func (c *llmClient) chat(ctx context.Context, messages []chatMessage, tools []to
 func (c *llmClient) runAgentLoop(
 	ctx context.Context,
 	query, traceparent, systemExtra string,
-	tools []toolDef,
+	builtins []toolDef,
+	session *mcpSession,
 	dispatch func(ctx context.Context, name, argsJSON string) string,
 ) (string, error) {
 	messages := []chatMessage{
@@ -152,6 +153,13 @@ func (c *llmClient) runAgentLoop(
 	}
 
 	for range maxToolRounds {
+		// Rebuilt every round: a nasiko_search_tools call adds the tools it
+		// found, and the model can only call what it is shown.
+		tools := builtins
+		if gateway := session.toolDefs(); len(gateway) > 0 {
+			tools = append(append([]toolDef{}, builtins...), gateway...)
+		}
+
 		msg, err := c.chat(ctx, messages, tools, traceparent)
 		if err != nil {
 			return "", err

@@ -106,29 +106,19 @@ impl RepoWatchAgent {
             .build()
             .map_err(|e| format!("LLM client setup failed: {e}"))?;
         let model = client.completion_model(&self.model);
-        let (toolset, mut tool_defs) = build_tools();
-        // Built-in tools plus whatever the MCP gateway granted this agent. The
-        // gateway speaks the OpenAI function shape; rig wants its own struct.
-        if let Some(client) = &self.mcp {
-            tool_defs.extend(client.tool_defs().iter().filter_map(|tool| {
-                let function = tool.get("function")?;
-                Some(ToolDefinition {
-                    name: function.get("name")?.as_str()?.to_string(),
-                    description: function
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .unwrap_or_default()
-                        .to_string(),
-                    parameters: function.get("parameters").cloned().unwrap_or_default(),
-                })
-            }));
-        }
+        let (toolset, builtin_tool_defs) = build_tools();
+        // One session per digest: `tools/list` is query-aware, so the set depends
+        // on this run's traceparent and grows when the model searches (see mcp.rs).
+        let mut mcp_session = match &self.mcp {
+            Some(client) => Some(mcp::McpSession::open(client.clone(), &traceparent).await),
+            None => None,
+        };
         let now = chrono::Utc::now();
         let system = system_prompt(&self.default_repos, now);
         // The prompt lists only the built-in tools, so without this the model
         // ignores whatever the gateway granted (see mcp.rs).
-        let system = match &self.mcp {
-            Some(client) => format!("{system}{}", client.system_prompt_hint()),
+        let system = match &mcp_session {
+            Some(session) => format!("{system}{}", session.system_prompt_hint()),
             None => system,
         };
 
@@ -138,6 +128,24 @@ impl RepoWatchAgent {
         let capture = telemetry::capture_content();
 
         for _ in 0..MAX_TOOL_TURNS {
+            // Rebuilt every round: a `nasiko_search_tools` call adds the tools it
+            // found, and the model can only call what it is shown. The gateway
+            // speaks the OpenAI function shape; rig wants its own struct.
+            let mut tool_defs = builtin_tool_defs.clone();
+            if let Some(session) = &mcp_session {
+                tool_defs.extend(session.tool_defs().iter().filter_map(|tool| {
+                    let function = tool.get("function")?;
+                    Some(ToolDefinition {
+                        name: function.get("name")?.as_str()?.to_string(),
+                        description: function
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        parameters: function.get("parameters").cloned().unwrap_or_default(),
+                    })
+                }));
+            }
             let req = model
                 .completion_request(prompt.clone())
                 .preamble(system.clone())
@@ -189,13 +197,9 @@ impl RepoWatchAgent {
                     ));
                 }
 
-                let result = match &self.mcp {
-                    Some(client) if client.handles(&tc.function.name) => Ok(client
-                        .call_tool(
-                            &traceparent,
-                            &tc.function.name,
-                            &tc.function.arguments.to_string(),
-                        )
+                let result = match &mut mcp_session {
+                    Some(session) if session.handles(&tc.function.name) => Ok(session
+                        .call_tool(&tc.function.name, &tc.function.arguments.to_string())
                         .await),
                     _ => {
                         toolset
