@@ -129,12 +129,12 @@ pub async fn agent_proxy(
             nasiko_agent_proxy::ResolveError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         })?;
 
-    let agent_base = match state
+    let (agent_base, forward_headers) = match state
         .runtime
         .forwarding_endpoint(&nasiko_runtime::ContainerId::from_uuid(agent_id))
         .await
     {
-        Ok(live) => live.trim_end_matches('/').to_string(),
+        Ok(target) => (target.url.trim_end_matches('/').to_string(), target.headers),
         Err(e) => {
             let Some(stored) = &agent.endpoint else {
                 tracing::error!(
@@ -143,11 +143,20 @@ pub async fn agent_proxy(
                 );
                 return Err(StatusCode::BAD_GATEWAY);
             };
+            // Falls back to the plain stored address, bypassing whatever `forwarding_endpoint()`
+            // would otherwise route through (the injection proxy, when memory is enabled) — so
+            // this forward gets no L1A. Rare (only on a transient runtime lookup failure) and
+            // fails toward availability rather than blocking the call entirely, but worth a line
+            // in the logs: a silent L1A skip looks identical to "L1A had nothing to say."
             tracing::warn!(
                 error = %e, %agent_id,
-                "agent proxy: live endpoint lookup failed, falling back to stored agents.url"
+                "agent proxy: live endpoint lookup failed, falling back to stored agents.url \
+                 (bypasses the injection proxy — this forward gets no L1A)"
             );
-            format!("http://{}:{}", stored.host, stored.port)
+            (
+                format!("http://{}:{}", stored.host, stored.port),
+                Vec::new(),
+            )
         }
     };
     // The forwarded path. See `resolve_forwarded_path`'s doc comment for the root-mount case.
@@ -269,6 +278,14 @@ pub async fn agent_proxy(
         {
             forwarded = forwarded.header(name.as_str(), val_str);
         }
+    }
+
+    // Whatever `forwarding_endpoint()` asked to have attached (the injection proxy's own
+    // `Authorization` credential when memory is enabled; empty otherwise). This is consumed by
+    // that hop, not the real agent — `injection_proxy.rs`'s own relay explicitly drops
+    // `authorization` before continuing on, so it never reaches the agent container.
+    for (name, value) in &forward_headers {
+        forwarded = forwarded.header(name, value);
     }
 
     // Propagate trace context and caller identity to the agent

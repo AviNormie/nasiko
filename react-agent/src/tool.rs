@@ -8,7 +8,6 @@ use serde_json::json;
 use crate::a2a::{A2aClient, A2aClientError, AgentStreamEvent, PauseInfo, SendOutcome};
 use crate::events::OrchestratorEvent;
 use crate::policy::DelegationPolicy;
-use crate::prompt::prefixed;
 use crate::registry::AgentInfo;
 
 /// Wraps a remote A2A agent as a Rig `Tool` so the orchestrator LLM can invoke it.
@@ -26,9 +25,6 @@ pub struct A2aTool {
     /// Operator policy, which may require extra arguments on this tool. `None`
     /// leaves the schema as the loop itself defines it.
     policy: Option<Arc<dyn DelegationPolicy>>,
-    /// Prepended to the message on every call. `None` sends the LLM's own
-    /// wording unchanged. See `OrchestratorConfig::outbound_prefix`.
-    outbound_prefix: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,7 +73,6 @@ impl A2aTool {
             progress: None,
             file_parts: vec![],
             policy: None,
-            outbound_prefix: None,
         }
     }
 
@@ -88,16 +83,6 @@ impl A2aTool {
     /// passes `config.policy.clone()` unconditionally.
     pub fn with_policy(mut self, policy: Option<Arc<dyn DelegationPolicy>>) -> Self {
         self.policy = policy;
-        self
-    }
-
-    /// Text to prepend to the message of every call this tool makes.
-    ///
-    /// Takes the `Option` the config already holds, for the same reason
-    /// [`Self::with_policy`] does: every caller passes it unconditionally, so
-    /// the unconfigured case is one call site fewer to get wrong.
-    pub fn with_outbound_prefix(mut self, prefix: Option<String>) -> Self {
-        self.outbound_prefix = prefix;
         self
     }
 
@@ -217,27 +202,26 @@ impl Tool for A2aTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         tracing::info!(agent = %self.agent.name, message = %args.message, "invoking A2A agent");
 
-        // Rebind ONCE, here, rather than at each send site. The streaming path and the
-        // non-streaming fallback below read the message from two different places, and a prefix
-        // applied at each of them is a bug waiting for whichever path the next change forgets —
-        // silently, because the forgotten path still works, it just stops carrying the prefix.
-        // Logged above in its original form on purpose: what the model asked for is the useful
-        // line, and the prefix is identical on every call in the process.
-        let args = A2aToolArgs {
-            message: prefixed(self.outbound_prefix.as_deref(), &args.message),
-            context_id: args.context_id,
-        };
-
         // No per-call user credential: the invoked agent authenticates to
         // /api/mcp with its own deploy-time MCP_GATEWAY_TOKEN; the user binding
         // rides the client-wide `traceparent` + the flow_participants record
         // the platform's CallGuard writes before this call.
 
+        // Whatever `endpoint` requires as a header to actually accept the call — e.g. the EE
+        // injection proxy's own credential, when `endpoint` is the proxy's address rather than
+        // the agent's real one. Not a caller credential: this is consumed by the hop `endpoint`
+        // points at, same as `agent_proxy.rs`'s and `a2a_dispatch.rs`'s own outbound calls.
+        let per_call_headers: Vec<(String, String)> =
+            self.agent.auth_header.iter().cloned().collect();
+
         // Streaming first when a progress channel is attached; the match below
         // decides per error whether falling back to non-streaming is safe.
         let streamed = match self.progress {
             Some(ref orch_tx) => {
-                match self.call_streaming(&args, orch_tx.clone(), &[]).await {
+                match self
+                    .call_streaming(&args, orch_tx.clone(), &per_call_headers)
+                    .await
+                {
                     Ok(SendOutcome::Text(text)) => Some(text),
                     Ok(SendOutcome::AwaitingHuman(pause)) => {
                         return Err(A2aToolError::AwaitingHuman {
@@ -274,7 +258,7 @@ impl Tool for A2aTool {
                         &self.agent.endpoint,
                         &args.message,
                         args.context_id.as_deref(),
-                        &[],
+                        &per_call_headers,
                         &self.file_parts,
                     )
                     .await
@@ -417,6 +401,7 @@ mod tests {
             description: "for tests".to_string(),
             endpoint: endpoint.to_string(),
             skills: vec![],
+            auth_header: None,
         }
     }
 
@@ -455,64 +440,6 @@ mod tests {
         mock.assert_async().await;
         assert!(result.is_ok());
     }
-
-    /// The prefix must reach the WIRE, not just the struct. This is the only proof that
-    /// organization policy actually gets to a minted sub-leg's agent: the orchestrator resolves
-    /// it once per turn and hands it to every tool, but if `call` failed to apply it the turn
-    /// still succeeds and the policy is simply, silently absent.
-    #[tokio::test]
-    async fn an_outbound_prefix_is_prepended_to_the_message_on_the_wire() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/")
-            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "params": {"message": {"parts": [{"text": "POLICY\n\nhi"}]}}
-            })))
-            .with_status(200)
-            .with_body(a2a_response_body())
-            .create_async()
-            .await;
-
-        let tool = A2aTool::new(test_agent(&server.url()), Arc::new(A2aClient::new()))
-            .with_outbound_prefix(Some("POLICY".into()));
-        let result = tool
-            .call(A2aToolArgs {
-                message: "hi".into(),
-                context_id: None,
-            })
-            .await;
-
-        mock.assert_async().await;
-        assert!(result.is_ok());
-    }
-
-    /// With no prefix configured the wire body must carry the model's own wording untouched —
-    /// the open-source path, and the one every existing deployment is on.
-    #[tokio::test]
-    async fn without_an_outbound_prefix_the_message_goes_out_verbatim() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/")
-            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "params": {"message": {"parts": [{"text": "hi"}]}}
-            })))
-            .with_status(200)
-            .with_body(a2a_response_body())
-            .create_async()
-            .await;
-
-        let tool = A2aTool::new(test_agent(&server.url()), Arc::new(A2aClient::new()));
-        let result = tool
-            .call(A2aToolArgs {
-                message: "hi".into(),
-                context_id: None,
-            })
-            .await;
-
-        mock.assert_async().await;
-        assert!(result.is_ok());
-    }
-
     fn input_required_response_body() -> String {
         serde_json::json!({
             "jsonrpc": "2.0",
