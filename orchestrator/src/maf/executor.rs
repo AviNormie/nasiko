@@ -595,7 +595,6 @@ fn build_paused_step(
 
 /// LLM call 4: synthesise the final output once every step has succeeded — shared tail of
 /// `run_maf`/`run_maf_from`.
-#[allow(clippy::too_many_arguments)]
 async fn finish_run(
     step_results: Vec<StepResult>,
     mut total_tokens: i64,
@@ -1466,11 +1465,12 @@ mod tests {
             Some(self.0.to_string())
         }
 
+        /// Delegates to the real join rather than re-spelling it. A hand-rolled copy here made
+        /// the assertion below self-fulfilling: it would have kept passing if
+        /// `nasiko_react_agent::prefixed` changed, which is exactly the drift
+        /// `OutboundPrefix::compose` exists to prevent.
         fn compose(&self, prefix: Option<&str>, body: &str) -> String {
-            match prefix {
-                Some(p) if !p.trim().is_empty() => format!("{}\n\n{body}", p.trim_end()),
-                _ => body.to_string(),
-            }
+            nasiko_react_agent::prefixed(prefix, body)
         }
     }
 
