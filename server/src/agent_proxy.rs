@@ -81,6 +81,8 @@ pub async fn agent_proxy(
         gen_ai.operation.name = "invoke_agent",
         agent.id = %agent_id,
         session.id = tracing::field::Empty,
+        // Recorded once `ensure_chat_session` below has decided; see `PersistInfo::org_applied`.
+        nasiko.prompt_context.org_applied = tracing::field::Empty,
         gen_ai.input.messages = tracing::field::Empty,
     );
     if let Some(cx) = traceparent
@@ -174,6 +176,9 @@ pub async fn agent_proxy(
     // generated contextId into the body — see `ensure_chat_session`).
     let (body_bytes, persist_info) =
         ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
+    if let Some(info) = persist_info.as_ref() {
+        proxy_span.record("nasiko.prompt_context.org_applied", info.org_applied);
+    }
 
     // Persist the user message to chat_messages (fire-and-forget, mirrors CLI
     // behaviour). No trace_id column: session_traces (below) is the
@@ -598,6 +603,9 @@ const MESSAGE_SEND_METHODS: &[&str] = &[
 struct PersistInfo {
     session_id: String,
     user_text: String,
+    /// Whether org-wide context was prepended to the forwarded text. Carried out so the caller
+    /// can record it on `a2a.proxy` — this function owns the decision, the caller owns the span.
+    org_applied: bool,
 }
 
 /// Guarantee every agent chat happens inside a persisted `chat_sessions` row.
@@ -732,10 +740,11 @@ async fn ensure_chat_session(
         true
     };
 
-    let persist_info = Some(PersistInfo {
+    let mut persist_info = PersistInfo {
         session_id: session_id.clone(),
         user_text: user_text.clone(),
-    });
+        org_applied: false,
+    };
 
     // Multi-turn continuity: unlike `a2a_dispatch.rs`'s orchestrator path, this
     // proxy forwards the caller's message byte-for-byte, so an agent that (like
@@ -746,16 +755,70 @@ async fn ensure_chat_session(
     // routing/orchestrator path, so direct `--agent`/`-u` chat gets the
     // continuity its own "resume with --session-id" hint implies.
     let mut rewrite_needed = injected;
-    if !user_text.is_empty() && same_agent_session {
-        let history = SessionHistory::fetch(&session_id, &state.db, 20).await;
-        if !history.is_empty()
-            && let Some(part) = message
-                .get_mut("parts")
-                .and_then(|p| p.as_array_mut())
-                .and_then(|parts| parts.iter_mut().find(|p| p.get("text").is_some()))
+
+    // Organization policy rides on top of whatever is actually going out, history or not, and is
+    // resolved OUTSIDE the text handling below rather than within it. Two conditions it must not
+    // inherit:
+    //
+    // * `same_agent_session`, which gates the history glue — that is a continuity aid it would be
+    //   wrong to stitch across agents, whereas policy applies to every agent invocation.
+    // * a non-empty `user_text`. A message can legitimately carry no text at all (a file-only
+    //   send through `/api/agents/{id}`), and that is still an agent invocation: the agent reads
+    //   the file and answers, and a rule about what it may say back governs that turn exactly as
+    //   much as any other. Nesting this under the text check let precisely those requests through
+    //   unpoliced, and reported `org_applied=false` while every other path reported true.
+    //
+    // One case is deliberately excluded: a message carrying a `taskId` is a CONTINUATION of a
+    // task the agent is already holding — a human answering the question it paused on. That task
+    // was opened by a message which did carry the policy, and the agent must be stateful to have
+    // paused at all, so re-sending it buys nothing; meanwhile the payload here is the human's
+    // literal answer ("yes", "owner/repo"), and prepending a block to that risks the agent
+    // reading the block as the answer. The two server-side resume dispatchers
+    // (`hitl/mod.rs::deliver` and the MAF executor's `continue_paused_step`) already behave this
+    // way; without this the proxy was the odd one out, so the same deployment policed a resume or
+    // not depending on which route delivered it.
+    let is_task_continuation = message
+        .get("taskId")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| !t.is_empty());
+    let org_context = if is_task_continuation {
+        None
+    } else {
+        state.prompt_context.org_context().await
+    };
+
+    if !user_text.is_empty() || org_context.is_some() {
+        let glued = if same_agent_session && !user_text.is_empty() {
+            let history = SessionHistory::fetch(&session_id, &state.db, 20).await;
+            (!history.is_empty()).then(|| history.with_current_query(&user_text))
+        } else {
+            None
+        };
+        let body = glued.as_deref().unwrap_or(&user_text);
+        // `prefixed` joins with a blank line, which on an empty body leaves a dangling separator;
+        // a message with no text of its own carries the policy and nothing else.
+        let outbound = match (org_context.as_deref(), body.is_empty()) {
+            (Some(org), true) => org.to_string(),
+            (org, _) => crate::prompt_context::prefixed(org, body),
+        };
+
+        // Only touch the body when the text actually changed, so a deployment with no policy and
+        // no history re-serializes nothing — the pre-existing behaviour, byte for byte.
+        if outbound != user_text
+            && let Some(parts) = message.get_mut("parts").and_then(|p| p.as_array_mut())
         {
-            part["text"] = serde_json::Value::String(history.with_current_query(&user_text));
+            match parts.iter_mut().find(|p| p.get("text").is_some()) {
+                Some(part) => part["text"] = serde_json::Value::String(outbound),
+                // No text part at all — the file-only case. Prepend one rather than dropping the
+                // policy on the floor. `{"kind":"text"}` is the shape this tree's own A2A client
+                // emits (`react-agent/src/a2a.rs`), and index 0 because agents that read a single
+                // text part read the first one.
+                None => parts.insert(0, serde_json::json!({ "kind": "text", "text": outbound })),
+            }
             rewrite_needed = true;
+            // Set only once the rewrite actually happened, so the span cannot claim policy was
+            // applied to a body it never reached (a message with no `parts` array at all).
+            persist_info.org_applied = org_context.is_some();
         }
     }
 
@@ -767,9 +830,9 @@ async fn ensure_chat_session(
             tracing::error!(error = %e, "agent proxy: failed to re-serialize body after contextId/history injection");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-        return Ok((rewritten.into(), persist_info));
+        return Ok((rewritten.into(), Some(persist_info)));
     }
-    Ok((body_bytes, persist_info))
+    Ok((body_bytes, Some(persist_info)))
 }
 
 /// Extract the agent's reply text from a JSON-RPC response for persistence.
