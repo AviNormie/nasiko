@@ -8,9 +8,10 @@
 //!
 //! This lives in its own public module rather than inside the gateway handler because more than
 //! one layer has to make this decision, and each one making it *itself* is how the rule drifts.
-//! `crate::catalog`'s EE counterpart records what that costs: it kept a private copy of token
-//! extraction and JWT decode, and every rule later added to the shared validator silently did not
-//! apply to it. One implementation, called from everywhere, is the fix.
+//! That is not hypothetical: a request-interception layer elsewhere in this codebase once kept its
+//! own copy of token extraction and JWT decode, and every rule later added to the shared validator
+//! silently failed to apply to the endpoints it covered, leaving a stale identity authenticated on
+//! them. One implementation, called from everywhere, is the fix.
 
 use axum::{
     http::{HeaderMap, StatusCode},
