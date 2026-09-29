@@ -33,16 +33,53 @@
 
 use serde_json::Value;
 
-/// Append `text` as a new `{"kind": "text", "text": ...}` part onto `message`'s `parts` array.
+/// Whether an appended part needs an explicit `"kind": "text"` discriminator — this platform's
+/// real `a2a` (a2a-lf) `Part` type has **no such field at all**: its `Serialize`/`Deserialize`
+/// impls (`a2a::types::Part`) use field-presence union semantics, exactly like
+/// `oss/react-agent/src/a2a.rs`'s private `Dialect` enum already accounts for on the
+/// request-*building* side (`Dialect::Proto` → untagged `{"text": ...}`; `Dialect::JsonRpc` →
+/// tagged `{"kind": "text", ...}`, for the small set of agents — `preferredTransport: JSONRPC`,
+/// e.g. the Python a2a-sdk — that expect that shape instead). An appended context part has to
+/// match whichever shape the *rest of this specific message* already uses, not a fixed choice —
+/// the caller determines that with [`tagging_for_method`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartTagging {
+    /// `{"text": "..."}` — this platform's own real `Part` schema, and what every one of its own
+    /// `oss/agents/*` example agents (all a2a-lf-based) actually parses.
+    Untagged,
+    /// `{"kind": "text", "text": "..."}` — for agents on the JSON-RPC-standard `message/send`
+    /// dialect that expect an explicit discriminator.
+    Tagged,
+}
+
+/// Maps a request's own JSON-RPC `method` to the [`PartTagging`] its parts already use — mirrors
+/// `oss/react-agent/src/a2a.rs`'s `Dialect::method`/`Dialect::text_part` mapping exactly, so the
+/// two can't drift: `"message/send"`/`"message/stream"` (the JSON-RPC-standard names) are tagged;
+/// `"SendMessage"`/`"SendStreamingMessage"` (the proto-style names this platform's own builders —
+/// `nasiko_types::a2a::build_request` and the MAF executor's outbound call — always use) are not.
+/// Defaults to [`PartTagging::Untagged`] for anything else, since that is this platform's own real
+/// wire shape and the safer assumption when a method name isn't recognized.
+pub fn tagging_for_method(method: &str) -> PartTagging {
+    match method {
+        "message/send" | "message/stream" => PartTagging::Tagged,
+        _ => PartTagging::Untagged,
+    }
+}
+
+/// Append `text` as a new part onto `message`'s `parts` array, shaped per `tagging`.
 ///
 /// `message` is the A2A `params.message` object (the value at `/params/message` in a
 /// `message/send`/`message/stream` JSON-RPC body) — not the whole request, and not one specific
 /// part. Returns `None`, leaving `message` untouched, when there's no `parts` array to append to;
 /// callers already treat a `None` here as "nothing to inject" and relay the original body
 /// unmodified, so this composes with the existing fail-open posture without any special casing.
-pub fn append_context_part(message: &mut Value, text: &str) -> Option<()> {
+pub fn append_context_part(message: &mut Value, text: &str, tagging: PartTagging) -> Option<()> {
     let parts = message.get_mut("parts")?.as_array_mut()?;
-    parts.push(serde_json::json!({ "kind": "text", "text": text }));
+    let part = match tagging {
+        PartTagging::Untagged => serde_json::json!({ "text": text }),
+        PartTagging::Tagged => serde_json::json!({ "kind": "text", "text": text }),
+    };
+    parts.push(part);
     Some(())
 }
 
@@ -51,12 +88,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appends_without_touching_the_existing_part() {
+    fn method_names_map_to_the_tagging_dialect_text_part_already_uses() {
+        // Mirrors `oss/react-agent/src/a2a.rs`'s `Dialect::method`/`Dialect::text_part` mapping —
+        // a regression here would silently desync the two.
+        assert_eq!(tagging_for_method("message/send"), PartTagging::Tagged);
+        assert_eq!(tagging_for_method("message/stream"), PartTagging::Tagged);
+        assert_eq!(tagging_for_method("SendMessage"), PartTagging::Untagged);
+        assert_eq!(
+            tagging_for_method("SendStreamingMessage"),
+            PartTagging::Untagged
+        );
+        // Unrecognized methods default to this platform's own real wire shape.
+        assert_eq!(tagging_for_method("whatever"), PartTagging::Untagged);
+    }
+
+    #[test]
+    fn untagged_matches_the_real_a2a_lf_part_schema() {
+        // a2a-lf's own `Part` type has no `"kind"` field at all (field-presence union
+        // serialization) — this is the shape this platform's own agents actually parse, and the
+        // one every call site built on `nasiko_types::a2a::build_request` (proto-style method
+        // names) must use.
         let mut message = serde_json::json!({
-            "parts": [{"kind": "text", "text": "Current message: hello"}],
+            "parts": [{"text": "Current message: hello"}],
             "contextId": "ctx-1"
         });
-        append_context_part(&mut message, "## Known facts about this agent\nfact one").unwrap();
+        append_context_part(
+            &mut message,
+            "## Known facts about this agent\nfact one",
+            PartTagging::Untagged,
+        )
+        .unwrap();
 
         let parts = message["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2);
@@ -67,7 +128,30 @@ mod tests {
             parts[1]["text"],
             "## Known facts about this agent\nfact one"
         );
+        assert!(
+            parts[1].get("kind").is_none(),
+            "an untagged part must not carry a `kind` field a real a2a-lf agent would reject: {parts:?}"
+        );
+    }
+
+    #[test]
+    fn tagged_carries_the_explicit_kind_discriminator() {
+        let mut message = serde_json::json!({
+            "parts": [{"kind": "text", "text": "Current message: hello"}]
+        });
+        append_context_part(
+            &mut message,
+            "## Known facts about this agent\nfact one",
+            PartTagging::Tagged,
+        )
+        .unwrap();
+
+        let parts = message["parts"].as_array().unwrap();
         assert_eq!(parts[1]["kind"], "text");
+        assert_eq!(
+            parts[1]["text"],
+            "## Known facts about this agent\nfact one"
+        );
     }
 
     #[test]
@@ -75,9 +159,14 @@ mod tests {
         // The whole point: a marker-aware extractor (`text.find("\n\nCurrent message: ")`,
         // then take the tail) must still find exactly one marker, in the original part only.
         let mut message = serde_json::json!({
-            "parts": [{"kind": "text", "text": "Current message: hello"}]
+            "parts": [{"text": "Current message: hello"}]
         });
-        append_context_part(&mut message, "## Known facts about this agent\nfact one").unwrap();
+        append_context_part(
+            &mut message,
+            "## Known facts about this agent\nfact one",
+            PartTagging::Untagged,
+        )
+        .unwrap();
         let injected_text = message["parts"][1]["text"].as_str().unwrap();
         assert!(!injected_text.contains("Current message: "));
     }
@@ -85,7 +174,7 @@ mod tests {
     #[test]
     fn no_parts_array_is_a_clean_miss() {
         let mut message = serde_json::json!({"contextId": "ctx-1"});
-        assert!(append_context_part(&mut message, "facts").is_none());
+        assert!(append_context_part(&mut message, "facts", PartTagging::Untagged).is_none());
         // Untouched, not partially mutated.
         assert_eq!(message, serde_json::json!({"contextId": "ctx-1"}));
     }
@@ -95,10 +184,20 @@ mod tests {
         // The shape L0 (org policy) and L1A both need: each caller appends its own part,
         // independently, with no knowledge of whether the other has already run.
         let mut message = serde_json::json!({
-            "parts": [{"kind": "text", "text": "Current message: hello"}]
+            "parts": [{"text": "Current message: hello"}]
         });
-        append_context_part(&mut message, "## Organization policy\nrule one").unwrap();
-        append_context_part(&mut message, "## Known facts about this agent\nfact one").unwrap();
+        append_context_part(
+            &mut message,
+            "## Organization policy\nrule one",
+            PartTagging::Untagged,
+        )
+        .unwrap();
+        append_context_part(
+            &mut message,
+            "## Known facts about this agent\nfact one",
+            PartTagging::Untagged,
+        )
+        .unwrap();
 
         let parts = message["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 3);

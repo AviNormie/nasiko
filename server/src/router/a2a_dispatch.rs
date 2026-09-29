@@ -1229,12 +1229,18 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
 /// marker inside the same part. A no-op when `org_context` is `None` — most turns.
 fn append_org_policy_part(req: &mut JsonRpcRequest, org_context: Option<&str>) {
     let Some(org) = org_context else { return };
+    // `nasiko_types::a2a::build_request` (what builds every `req` this function ever sees) always
+    // uses the proto-style method names, so this is always `PartTagging::Untagged` in practice —
+    // still read from `req.method` rather than hardcoded, so this stays correct if that ever
+    // changes. See `nasiko_agent_proxy::context_part`'s module doc for why the tag matters at all:
+    // this platform's real agents (a2a-lf-based) reject an unexpected `"kind"` field outright.
+    let tagging = nasiko_agent_proxy::context_part::tagging_for_method(&req.method);
     let Some(message) = req.params.as_mut().and_then(|p| p.get_mut("message")) else {
         return;
     };
     // `org_context()` already returns a complete, self-headed block ("## Organization
     // Policy\n\n..."), unlike L1A's raw facts — no extra heading to add here.
-    let _ = nasiko_agent_proxy::context_part::append_context_part(message, org);
+    let _ = nasiko_agent_proxy::context_part::append_context_part(message, org, tagging);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2568,7 +2574,28 @@ mod org_policy_part_tests {
             "the query part must be untouched"
         );
         assert_eq!(parts[1]["text"], "## Organization Policy\n\n- rule: text");
+        // `build_stream_request` always uses the proto-style method name ("SendStreamingMessage"),
+        // and this platform's real `a2a-lf` `Part` type has no `kind` field at all — an appended
+        // part carrying one is rejected outright by a real agent's strict parser (confirmed live).
+        assert!(
+            parts[1].get("kind").is_none(),
+            "a part built for a proto-dialect request must never carry `kind`: {parts:?}"
+        );
+    }
+
+    #[test]
+    fn org_context_is_tagged_when_the_request_uses_the_jsonrpc_dialect() {
+        // `append_org_policy_part` always sees a proto-style method in production today (every
+        // caller builds via `nasiko_types::a2a::build_request`), but it derives tagging from
+        // `req.method` rather than assuming that, so this pins the OTHER half of the mapping
+        // stays correct too.
+        let mut req = nasiko_types::a2a::build_stream_request("hello", Some("ctx-1"));
+        req.method = "message/stream".to_string();
+        append_org_policy_part(&mut req, Some("POLICY"));
+
+        let parts = parts_of(&req);
         assert_eq!(parts[1]["kind"], "text");
+        assert_eq!(parts[1]["text"], "POLICY");
     }
 
     #[test]
