@@ -85,7 +85,6 @@ pub async fn run_maf(
             &mut total_tokens,
             &mut total_cost,
             llm,
-            outbound,
             outbound_prefix.as_deref(),
         )
         .await
@@ -228,7 +227,6 @@ pub async fn run_maf_from(
             &mut total_tokens,
             &mut total_cost,
             llm,
-            outbound,
             outbound_prefix.as_deref(),
         )
         .await
@@ -271,7 +269,6 @@ async fn execute_step(
     total_tokens: &mut i64,
     total_cost: &mut f64,
     llm: &LlmClient,
-    outbound: &dyn OutboundPrefix,
     outbound_prefix: Option<&str>,
 ) -> StepLoopOutcome {
     step_results[i].status = "running".to_string();
@@ -304,18 +301,18 @@ async fn execute_step(
     )
     .await;
 
-    // Composed into a separate local, never back into `actual_prompt`. That value is persisted
-    // to `step_results[i].prompt` below and read back verbatim on resume, so prefixing it in
-    // place would put the prefix in the record — and then re-prefix the already-prefixed copy on
-    // every resume. Same split as the chat path's `outbound_query` vs `query`.
-    let outbound_prompt = outbound.compose(outbound_prefix, &actual_prompt);
-
+    // Org policy is appended as its own part inside `call_agent`, never composed back into
+    // `actual_prompt`: that value is persisted to `step_results[i].prompt` below and read back
+    // verbatim on resume, so folding the policy into it in place would put the policy in the
+    // record — and then re-append it to the already-appended copy on every resume. Same split as
+    // the chat path's `outbound_query` vs `query`.
     let call_result = call_agent(
         client,
         &step.agent_endpoint,
         &execution_id.to_string(),
         &user_id.to_string(),
-        &outbound_prompt,
+        &actual_prompt,
+        outbound_prefix,
         &traceparent,
     )
     .await;
@@ -1245,8 +1242,17 @@ async fn call_agent(
     context_id: &str,
     user_id: &str,
     prompt: &str,
+    // Organization policy (L0), appended as its own part — never spliced into `prompt`, which is
+    // persisted verbatim to `step_results[i].prompt` and read back on resume (see this function's
+    // caller). Same representation `a2a_dispatch.rs`/`agent_proxy.rs`/`tool.rs` use for the exact
+    // same reason: a second, independently-addressable part rather than a merged string.
+    outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
+    let mut parts = vec![serde_json::json!({"text": prompt})];
+    if let Some(org) = outbound_prefix {
+        parts.push(serde_json::json!({ "kind": "text", "text": org }));
+    }
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "1",
@@ -1262,7 +1268,7 @@ async fn call_agent(
                 "messageId": uuid::Uuid::new_v4().to_string(),
                 "contextId": context_id,
                 "role": "ROLE_USER",
-                "parts": [{"text": prompt}]
+                "parts": parts
             }
         }
     });
@@ -1874,5 +1880,80 @@ mod tests {
             err.contains("does not match"),
             "error should name the actual mismatch: {err}"
         );
+    }
+
+    /// `call_agent` must append org policy as its OWN part, never compose it into `prompt`'s own
+    /// text — mirrors the direct-dispatch/agent-proxy/ReAct-sub-leg tests for the identical
+    /// property, on the one remaining call site that used to splice instead.
+    #[tokio::test]
+    async fn call_agent_appends_org_policy_as_its_own_part() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/jsonrpc")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "params": {"message": {"parts": [
+                    {"text": "do the thing"},
+                    {"kind": "text", "text": "POLICY"}
+                ]}}
+            })))
+            .with_status(200)
+            .with_body(completed_agent_response())
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = call_agent(
+            &client,
+            &server.url(),
+            "ctx-1",
+            "user-1",
+            "do the thing",
+            Some("POLICY"),
+            "00-trace-span-01",
+        )
+        .await;
+
+        mock.assert_async().await;
+        assert!(matches!(result, Ok(AgentCallOutcome::Completed(_))));
+    }
+
+    /// The ordinary case, alongside it: no policy configured must send exactly one part, the
+    /// prompt's own text, unchanged.
+    #[tokio::test]
+    async fn call_agent_sends_only_the_prompt_when_no_policy_is_configured() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/jsonrpc")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "params": {"message": {"parts": [{"text": "do the thing"}]}}
+            })))
+            .with_status(200)
+            .with_body(completed_agent_response())
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = call_agent(
+            &client,
+            &server.url(),
+            "ctx-1",
+            "user-1",
+            "do the thing",
+            None,
+            "00-trace-span-01",
+        )
+        .await;
+
+        mock.assert_async().await;
+        assert!(matches!(result, Ok(AgentCallOutcome::Completed(_))));
+    }
+
+    fn completed_agent_response() -> String {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}
+        })
+        .to_string()
     }
 }
