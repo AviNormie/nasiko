@@ -794,31 +794,35 @@ async fn ensure_chat_session(
         } else {
             None
         };
-        let body = glued.as_deref().unwrap_or(&user_text);
-        // `prefixed` joins with a blank line, which on an empty body leaves a dangling separator;
-        // a message with no text of its own carries the policy and nothing else.
-        let outbound = match (org_context.as_deref(), body.is_empty()) {
-            (Some(org), true) => org.to_string(),
-            (org, _) => crate::prompt_context::prefixed(org, body),
-        };
 
-        // Only touch the body when the text actually changed, so a deployment with no policy and
-        // no history re-serializes nothing — the pre-existing behaviour, byte for byte.
-        if outbound != user_text
+        // History glue, independent of org policy below: only touch the text part when the glue
+        // actually changed it, so a deployment with no history re-serializes nothing — the
+        // pre-existing behaviour, byte for byte.
+        if let Some(glued_text) = glued.as_deref()
+            && glued_text != user_text
             && let Some(parts) = message.get_mut("parts").and_then(|p| p.as_array_mut())
+            && let Some(part) = parts.iter_mut().find(|p| p.get("text").is_some())
         {
-            match parts.iter_mut().find(|p| p.get("text").is_some()) {
-                Some(part) => part["text"] = serde_json::Value::String(outbound),
-                // No text part at all — the file-only case. Prepend one rather than dropping the
-                // policy on the floor. `{"kind":"text"}` is the shape this tree's own A2A client
-                // emits (`react-agent/src/a2a.rs`), and index 0 because agents that read a single
-                // text part read the first one.
-                None => parts.insert(0, serde_json::json!({ "kind": "text", "text": outbound })),
-            }
+            part["text"] = serde_json::Value::String(glued_text.to_string());
             rewrite_needed = true;
-            // Set only once the rewrite actually happened, so the span cannot claim policy was
-            // applied to a body it never reached (a message with no `parts` array at all).
-            persist_info.org_applied = org_context.is_some();
+        }
+
+        // Organization policy, appended as its own part rather than spliced into the text part
+        // above: that part may carry the history glue's `"Current message: "` marker, and any
+        // agent that follows the platform's own documented convention for extracting just the
+        // current turn (`oss/llm-router::latest_user_query`) silently discards whatever was
+        // prepended ahead of that marker inside the same part. See
+        // `nasiko_agent_proxy::context_part`'s module doc. `org_context()` already returns a
+        // complete, self-headed block ("## Organization Policy\n\n...") — no extra heading to add
+        // here, and this covers the file-only case (empty `user_text`) too: there is nothing to
+        // find-and-replace, only a new part to append.
+        if let Some(org) = org_context.as_deref()
+            && nasiko_agent_proxy::context_part::append_context_part(message, org).is_some()
+        {
+            rewrite_needed = true;
+            // Set only once the append actually happened, so the span cannot claim policy was
+            // applied to a message that had no `parts` array to append to.
+            persist_info.org_applied = true;
         }
     }
 
