@@ -632,13 +632,19 @@ async fn ensure_chat_session(
     let Ok(mut rpc) = serde_json::from_slice::<serde_json::Value>(&body_bytes) else {
         return Ok((body_bytes, None));
     };
-    let is_send = rpc
+    // Owned, not borrowed: `rpc.pointer_mut(...)` below needs a mutable borrow, and this platform's
+    // real agents (a2a-lf-based) reject an unexpected `"kind"` field on a part — see
+    // `nasiko_agent_proxy::context_part`'s module doc — so the method name has to survive to the
+    // point org policy is actually appended, not just this early check.
+    let method = rpc
         .get("method")
         .and_then(|m| m.as_str())
-        .is_some_and(|m| MESSAGE_SEND_METHODS.contains(&m));
-    if !is_send {
+        .unwrap_or("")
+        .to_string();
+    if !MESSAGE_SEND_METHODS.contains(&method.as_str()) {
         return Ok((body_bytes, None));
     }
+    let tagging = nasiko_agent_proxy::context_part::tagging_for_method(&method);
     let Some(message) = rpc.pointer_mut("/params/message") else {
         return Ok((body_bytes, None));
     };
@@ -817,7 +823,8 @@ async fn ensure_chat_session(
         // here, and this covers the file-only case (empty `user_text`) too: there is nothing to
         // find-and-replace, only a new part to append.
         if let Some(org) = org_context.as_deref()
-            && nasiko_agent_proxy::context_part::append_context_part(message, org).is_some()
+            && nasiko_agent_proxy::context_part::append_context_part(message, org, tagging)
+                .is_some()
         {
             rewrite_needed = true;
             // Set only once the append actually happened, so the span cannot claim policy was

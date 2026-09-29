@@ -1249,9 +1249,15 @@ async fn call_agent(
     outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
+    // Untagged (`{"text": ...}`, no `"kind"`) — this always builds a proto-style `"SendMessage"`
+    // request (below), and this platform's real `a2a-lf` `Part` type has no `"kind"` field at all
+    // (field-presence union serialization); a real agent's strict parser rejects an unexpected
+    // one outright. See `nasiko_agent_proxy::context_part`'s module doc for the full dialect
+    // picture — this call site doesn't depend on that crate since its method name is a fixed
+    // literal, never negotiated.
     let mut parts = vec![serde_json::json!({"text": prompt})];
     if let Some(org) = outbound_prefix {
-        parts.push(serde_json::json!({ "kind": "text", "text": org }));
+        parts.push(serde_json::json!({ "text": org }));
     }
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -1893,7 +1899,7 @@ mod tests {
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "params": {"message": {"parts": [
                     {"text": "do the thing"},
-                    {"kind": "text", "text": "POLICY"}
+                    {"text": "POLICY"}
                 ]}}
             })))
             .with_status(200)
