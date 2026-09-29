@@ -244,13 +244,19 @@ async fn translated_attempt(
         );
     }
     let mut guard = AttemptGuard::new(ctx, routed, attempt, started, parsed.stream);
-    let provider = provider_for(attempt, &ctx.http, &ctx.cfg).map_err(|error| {
+    let provider = provider_for(
+        &attempt.provider,
+        attempt.custom_endpoint.as_ref(),
+        &ctx.http,
+        &ctx.cfg,
+    )
+    .map_err(|error| {
         guard.fail("routing", &error);
         TranslatedAttemptError::Configuration(error)
     })?;
     let mut request = parsed.chat.clone();
     let mut config = attempt.clone();
-    let mut applied = Vec::new();
+    let mut dropped = Vec::new();
     loop {
         if parsed.stream {
             match provider.chat_stream(&request, &config).await {
@@ -265,12 +271,12 @@ async fn translated_attempt(
                     return Ok(response);
                 }
                 Err(error) => {
-                    if fallback::try_fix_param(
+                    if fallback::try_drop_param(
                         &*provider,
                         &error,
                         &mut request,
                         &mut config,
-                        &mut applied,
+                        &mut dropped,
                     ) {
                         continue;
                     }
@@ -312,12 +318,12 @@ async fn translated_attempt(
                     return Ok(mark_lossy(Json(value).into_response()));
                 }
                 Err(error) => {
-                    if fallback::try_fix_param(
+                    if fallback::try_drop_param(
                         &*provider,
                         &error,
                         &mut request,
                         &mut config,
-                        &mut applied,
+                        &mut dropped,
                     ) {
                         continue;
                     }
@@ -707,7 +713,6 @@ fn response_usage(value: Option<&Value>) -> Option<ResponseUsage> {
             prompt_tokens_details: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
-            cache_creation: None,
         },
         cached_tokens: value
             .get("input_tokens_details")
@@ -781,13 +786,6 @@ impl AttemptGuard {
                 flow_id: routed.flow_id.clone(),
                 attribution_source: routed.attribution_source,
                 platform_paid: attempt.platform_paid,
-                // Never compressed: this surface does not go through `chat_core`.
-                compress_metadata: None,
-                // /v1/responses does not share chat_core, so IP-1/IP-2 never run here (PRD §9).
-                brevity_metadata: None,
-                // Nothing was compressed, so there is nothing to credit to a savings layer.
-                compress_bytes: None,
-                request_bytes: None,
             }),
         }
     }
@@ -819,7 +817,7 @@ impl Drop for AttemptGuard {
             record.latency_ms = record
                 .latency_ms
                 .max(self.started.elapsed().as_millis() as i64);
-            usage::spawn_log(self.ctx.db.clone(), self.ctx.pricing.clone(), record);
+            usage::spawn_log(self.ctx.db.clone(), record);
         }
     }
 }
@@ -839,7 +837,6 @@ fn log_response_usage(
         .and_then(|details| details.reasoning_tokens);
     usage::spawn_log(
         ctx.db.clone(),
-        ctx.pricing.clone(),
         UsageRecord {
             owner_id: routed.owner_id,
             agent_id: routed.agent_id,
@@ -855,11 +852,6 @@ fn log_response_usage(
             flow_id: routed.flow_id,
             attribution_source: routed.attribution_source,
             platform_paid: attempt.platform_paid,
-            // Never compressed: this surface does not go through `chat_core`.
-            compress_metadata: None,
-            brevity_metadata: None,
-            compress_bytes: None,
-            request_bytes: None,
         },
     );
 }
@@ -998,7 +990,6 @@ mod tests {
             _: Uuid,
         ) -> Result<Option<AgentConfigResult>, sqlx::Error> {
             Ok(Some(AgentConfigResult {
-                compress_enabled: false,
                 config: Some(LLMConfig {
                     provider: self.provider.into(),
                     model: Some("resolved-model".into()),
@@ -1011,6 +1002,10 @@ mod tests {
                     tier1_model: None,
                     tier2_model: None,
                     tier3_model: None,
+                    embedding_provider: None,
+                    embedding_model: None,
+                    embedding_api_key_secret_name: None,
+                    embedding_model_override: false,
                 }),
                 agent_pinned_model: None,
                 is_coding_agent: true,
@@ -1036,6 +1031,11 @@ mod tests {
         ) -> Result<Option<crate::resolver::CustomProvider>, sqlx::Error> {
             Ok(None)
         }
+        async fn fetch_org_embedding_default(
+            &self,
+        ) -> Result<Option<crate::resolver::OrgEmbeddingDefault>, sqlx::Error> {
+            Ok(None)
+        }
     }
 
     fn ctx(base: String) -> LlmRouterCtx {
@@ -1058,10 +1058,6 @@ mod tests {
             tier_registry: Arc::new(NoTiers),
             cell_store: Arc::new(crate::routing::InMemoryCellStore::new()),
             salience_gate: Arc::new(crate::routing::salience::AllowAllGate),
-            classifier: Arc::new(crate::routing::RegexClassifier),
-            pricing: Arc::new(nasiko_pricing::PricingEngine::new(
-                PgPool::connect_lazy("postgres://u:p@127.0.0.1:5999/none").unwrap(),
-            )),
         }
     }
 
@@ -1490,7 +1486,6 @@ mod tests {
             platform_paid: false,
             custom_endpoint: None,
             is_coding_agent: false,
-            compress_enabled: false,
         };
         let routed = RoutedRequest {
             agent_id: AGENT.into(),
@@ -1878,7 +1873,6 @@ mod tests {
                 platform_paid: true,
                 custom_endpoint: None,
                 is_coding_agent: false,
-                compress_enabled: false,
             },
             flow_id: None,
             attribution_source: None,
