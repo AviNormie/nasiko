@@ -8,7 +8,6 @@ use serde_json::json;
 use crate::a2a::{A2aClient, A2aClientError, AgentStreamEvent, PauseInfo, SendOutcome};
 use crate::events::OrchestratorEvent;
 use crate::policy::DelegationPolicy;
-use crate::prompt::prefixed;
 use crate::registry::AgentInfo;
 
 /// Wraps a remote A2A agent as a Rig `Tool` so the orchestrator LLM can invoke it.
@@ -217,16 +216,19 @@ impl Tool for A2aTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         tracing::info!(agent = %self.agent.name, message = %args.message, "invoking A2A agent");
 
-        // Rebind ONCE, here, rather than at each send site. The streaming path and the
-        // non-streaming fallback below read the message from two different places, and a prefix
-        // applied at each of them is a bug waiting for whichever path the next change forgets —
-        // silently, because the forgotten path still works, it just stops carrying the prefix.
-        // Logged above in its original form on purpose: what the model asked for is the useful
-        // line, and the prefix is identical on every call in the process.
-        let args = A2aToolArgs {
-            message: prefixed(self.outbound_prefix.as_deref(), &args.message),
-            context_id: args.context_id,
-        };
+        // Organization policy (L0), appended as its own message part — computed ONCE, here, rather
+        // than at each send site below, for the same reason the old prefix rebind was: a fix
+        // applied at only one of the two send sites is a bug the other path hides silently. Never
+        // spliced into `args.message`, which is the LLM's own fresh wording for this sub-task and
+        // is sent to the agent, persisted, and traced verbatim — same representation
+        // `a2a_dispatch.rs`/`agent_proxy.rs` use via `nasiko_agent_proxy::context_part`, built here
+        // through the `extra_parts` mechanism this client already uses for `file_parts`, because
+        // this client constructs its own request body from scratch rather than mutating an
+        // already-serialized one.
+        let mut extra_parts = self.file_parts.clone();
+        if let Some(org) = self.outbound_prefix.as_deref() {
+            extra_parts.push(serde_json::json!({ "kind": "text", "text": org }));
+        }
 
         // No per-call user credential: the invoked agent authenticates to
         // /api/mcp with its own deploy-time MCP_GATEWAY_TOKEN; the user binding
@@ -245,7 +247,7 @@ impl Tool for A2aTool {
         let streamed = match self.progress {
             Some(ref orch_tx) => {
                 match self
-                    .call_streaming(&args, orch_tx.clone(), &per_call_headers)
+                    .call_streaming(&args, orch_tx.clone(), &per_call_headers, &extra_parts)
                     .await
                 {
                     Ok(SendOutcome::Text(text)) => Some(text),
@@ -285,7 +287,7 @@ impl Tool for A2aTool {
                         &args.message,
                         args.context_id.as_deref(),
                         &per_call_headers,
-                        &self.file_parts,
+                        &extra_parts,
                     )
                     .await
                     .map_err(|e| A2aToolError::Failed {
@@ -362,6 +364,7 @@ impl A2aTool {
         args: &A2aToolArgs,
         orch_tx: tokio::sync::mpsc::Sender<OrchestratorEvent>,
         per_call_headers: &[(String, String)],
+        extra_parts: &[serde_json::Value],
     ) -> Result<SendOutcome, A2aClientError> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentStreamEvent>(64);
         let agent_name = self.agent.name.clone();
@@ -405,7 +408,7 @@ impl A2aTool {
                 args.context_id.as_deref(),
                 Some(tx),
                 per_call_headers,
-                &self.file_parts,
+                extra_parts,
             )
             .await;
 
@@ -472,12 +475,20 @@ mod tests {
     /// it once per turn and hands it to every tool, but if `call` failed to apply it the turn
     /// still succeeds and the policy is simply, silently absent.
     #[tokio::test]
-    async fn an_outbound_prefix_is_prepended_to_the_message_on_the_wire() {
+    async fn an_outbound_prefix_is_appended_as_its_own_message_part() {
+        // Appended as a SEPARATE part, never spliced into the model's own wording — same
+        // representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
+        // `nasiko_agent_proxy::context_part::append_context_part`. The exact array (not just a
+        // partial match on part 0) is what actually pins that the query stays untouched AND the
+        // policy lands as an additional part, not merged into it.
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/")
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "params": {"message": {"parts": [{"text": "POLICY\n\nhi"}]}}
+                "params": {"message": {"parts": [
+                    {"text": "hi"},
+                    {"kind": "text", "text": "POLICY"}
+                ]}}
             })))
             .with_status(200)
             .with_body(a2a_response_body())
@@ -486,6 +497,42 @@ mod tests {
 
         let tool = A2aTool::new(test_agent(&server.url()), Arc::new(A2aClient::new()))
             .with_outbound_prefix(Some("POLICY".into()));
+        let result = tool
+            .call(A2aToolArgs {
+                message: "hi".into(),
+                context_id: None,
+            })
+            .await;
+
+        mock.assert_async().await;
+        assert!(result.is_ok());
+    }
+
+    /// Both a file part (set at construction, always present) and org policy (appended per-call)
+    /// must coexist without either clobbering the other — the shape a fan-out with both a file
+    /// upload and an active org policy actually produces.
+    #[tokio::test]
+    async fn a_file_part_and_an_outbound_prefix_coexist_without_clobbering() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "params": {"message": {"parts": [
+                    {"text": "hi"},
+                    {"kind": "file", "file": {"name": "report.csv"}},
+                    {"kind": "text", "text": "POLICY"}
+                ]}}
+            })))
+            .with_status(200)
+            .with_body(a2a_response_body())
+            .create_async()
+            .await;
+
+        let tool = A2aTool::new(test_agent(&server.url()), Arc::new(A2aClient::new()))
+            .with_outbound_prefix(Some("POLICY".into()))
+            .with_file_parts(vec![
+                serde_json::json!({"kind": "file", "file": {"name": "report.csv"}}),
+            ]);
         let result = tool
             .call(A2aToolArgs {
                 message: "hi".into(),
