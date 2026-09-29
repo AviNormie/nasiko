@@ -396,6 +396,31 @@ pub(crate) struct OrchestratorTurn<'a> {
     pub(crate) kind: TurnKind,
 }
 
+/// Assembles the routed path's preamble in strict precedence order — L0 (org policy) outranks
+/// L1A (per-agent facts) outranks L2 (per-user recall) — by construction: each layer is placed
+/// ahead of the ones that follow it in the text, so nothing downstream has to re-rank them.
+/// `None` at every layer (the common case: OSS, or an EE deployment with nothing configured or
+/// recalled yet) must return `None`, not an empty string, so `OrchestratorConfig.preamble` stays
+/// exactly what it was before any of these three seams existed.
+fn build_preamble(
+    org_context: Option<&str>,
+    agent_facts: Option<&str>,
+    user_context: Option<&str>,
+) -> Option<String> {
+    let user_section = user_context.map(|user| format!("## What you know about this user\n{user}"));
+    let agent_and_user = match (agent_facts, user_section.as_deref()) {
+        (None, None) => None,
+        (Some(facts), None) => Some(facts.to_string()),
+        (None, Some(user)) => Some(user.to_string()),
+        (Some(facts), Some(user)) => Some(crate::prompt_context::prefixed(Some(facts), user)),
+    };
+    match (org_context, agent_and_user) {
+        (None, facts) => facts,
+        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
+        (Some(org), None) => Some(org.to_string()),
+    }
+}
+
 pub(crate) async fn orchestrator_stream(
     state: &AppState,
     turn: OrchestratorTurn<'_>,
@@ -544,6 +569,13 @@ pub(crate) async fn orchestrator_stream(
         Some(text)
     };
 
+    // User-scoped recall — unlike `agent_facts` above, not tied to any candidate agent, so it is
+    // the one channel that reaches a **zero-leg** answer (the planner responds directly, without
+    // delegating): a minted sub-leg's own outbound call carries no path back to this trait, and a
+    // zero-leg turn never reaches one at all. `None` on OSS and on an EE deployment with nothing
+    // user-scoped to add yet — see `PromptContextProvider::context_for_user`.
+    let user_context = state.prompt_context.context_for_user(user_id, query).await;
+
     // Organization-wide context, resolved once for the whole turn. It reaches the routed path
     // TWICE, and both are needed: the planner's own preamble, because a zero-leg turn is answered
     // by the planner and never reaches an agent at all; and `outbound_prefix`, because a minted
@@ -553,11 +585,11 @@ pub(crate) async fn orchestrator_stream(
     // Captured before `org_context` is moved into the config below, so the span can report
     // whether policy was in force on this turn.
     let org_applied = org_context.is_some();
-    let preamble = match (org_context.as_deref(), agent_facts) {
-        (None, facts) => facts,
-        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
-        (Some(org), None) => Some(org.to_string()),
-    };
+    let preamble = build_preamble(
+        org_context.as_deref(),
+        agent_facts.as_deref(),
+        user_context.as_deref(),
+    );
 
     let config = OrchestratorConfig {
         // `state.config.openai_model` is already loaded via `env_or("OPENAI_MODEL",
@@ -2426,6 +2458,65 @@ mod hitl_pause_tests {
         assert_eq!(
             pause_kind(AUTH_REQUIRED_PAYLOAD),
             nasiko_hitl::HitlKind::AuthRequired
+        );
+    }
+}
+
+/// `build_preamble`'s only job is precedence ordering — L0 > L1A > L2 — over three independently
+/// optional inputs. Pure and DB-free, so every combination is cheap to pin hermetically without
+/// standing up `orchestrator_stream`'s full DB/state dependencies.
+#[cfg(test)]
+mod build_preamble_tests {
+    use super::*;
+
+    #[test]
+    fn nothing_configured_or_recalled_is_none_not_an_empty_string() {
+        // The common case (OSS, or an EE deployment with nothing to add yet) must leave
+        // `OrchestratorConfig.preamble` exactly `None`, not `Some(String::new())` — a caller that
+        // only checks `.is_some()` would otherwise start behaving as if something was injected.
+        assert_eq!(build_preamble(None, None, None), None);
+    }
+
+    #[test]
+    fn each_layer_alone_surfaces_on_its_own() {
+        assert_eq!(
+            build_preamble(Some("ORG"), None, None),
+            Some("ORG".to_string())
+        );
+        assert_eq!(
+            build_preamble(None, Some("FACTS"), None),
+            Some("FACTS".to_string())
+        );
+        assert_eq!(
+            build_preamble(None, None, Some("RECALL")),
+            Some("## What you know about this user\nRECALL".to_string())
+        );
+    }
+
+    #[test]
+    fn all_three_land_in_precedence_order_l0_then_l1a_then_l2() {
+        let preamble = build_preamble(Some("ORG"), Some("FACTS"), Some("RECALL")).unwrap();
+        let org_at = preamble.find("ORG").expect("org policy present");
+        let facts_at = preamble.find("FACTS").expect("agent facts present");
+        let user_at = preamble
+            .find("## What you know about this user")
+            .expect("user recall present");
+        assert!(
+            org_at < facts_at && facts_at < user_at,
+            "L0 must precede L1A must precede L2, got: {preamble:?}"
+        );
+    }
+
+    #[test]
+    fn user_recall_is_headed_but_agent_facts_are_not_double_headed() {
+        // `agent_facts` already carries its own "## Known facts..." heading from its own call
+        // site — `build_preamble` must not add a second one on top of it.
+        let preamble =
+            build_preamble(None, Some("## Known facts about specific agents\nX"), None).unwrap();
+        assert_eq!(
+            preamble.matches("##").count(),
+            1,
+            "agent_facts must not be re-headed: {preamble:?}"
         );
     }
 }
