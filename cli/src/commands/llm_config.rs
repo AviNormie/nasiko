@@ -8,8 +8,91 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::api::{Client, unwrap_data};
+use crate::EmbeddingArgs;
+use crate::api::{ApiFailure, Attempt, Client, unwrap_data};
 use crate::commands::agents::resolve_agent_id;
+
+/// The `code` the server returns when an embedding provider/model change needs the
+/// caller's explicit acknowledgement. Must match `oss/server/src/embedding_change.rs`.
+const EMBEDDING_CONFIRM_CODE: &str = "embedding_change_requires_confirmation";
+
+/// The embedding side of `llm-config update`, grouped so the already-long parameter list
+/// doesn't grow by three more positional booleans.
+pub struct EmbeddingUpdate {
+    pub args: EmbeddingArgs,
+    /// `--clear-embedding-model`: unset the destination entirely.
+    pub clear: bool,
+    /// `--yes`: confirm a destructive embedding change without prompting.
+    pub confirmed: bool,
+}
+
+/// Embedding fields as the API expects them, folded into a request body.
+fn embedding_body_fields(args: &EmbeddingArgs) -> Vec<(&'static str, Value)> {
+    vec![
+        ("embedding_provider", json!(args.embedding_provider)),
+        ("embedding_model", json!(args.embedding_model)),
+        (
+            "embedding_api_key_secret_name",
+            json!(args.embedding_secret_name),
+        ),
+        ("embedding_secret_value", json!(args.embedding_secret_value)),
+    ]
+}
+
+/// Send a request, and on the server's 428 show the exact transition and ask once.
+///
+/// The rule lives on the server (both write surfaces enforce it), so this function never
+/// decides *whether* a change is dangerous — it only relays the server's answer and
+/// retries with the flag. Any other failure is returned unchanged, so error messages are
+/// identical to every other command's.
+fn send_with_embedding_confirmation<F>(mut send: F, already_confirmed: bool) -> Result<Value>
+where
+    F: FnMut(bool) -> Result<Attempt<Value>>,
+{
+    match send(already_confirmed)? {
+        Attempt::Ok(v) => Ok(v),
+        Attempt::Rejected(failure) => {
+            if already_confirmed || failure.code() != Some(EMBEDDING_CONFIRM_CODE) {
+                return Err(failure.into_error());
+            }
+            if !confirm_embedding_change(&failure)? {
+                anyhow::bail!("Cancelled; the embedding model was not changed.");
+            }
+            match send(true)? {
+                Attempt::Ok(v) => Ok(v),
+                Attempt::Rejected(f) => Err(f.into_error()),
+            }
+        }
+    }
+}
+
+/// Show the server's `from` → `to` and ask. Without a TTY there is nobody to ask, so we
+/// fail with the server's own wording rather than blocking forever — `--yes` is the
+/// non-interactive path.
+fn confirm_embedding_change(failure: &ApiFailure) -> Result<bool> {
+    let side = |key: &str| -> String {
+        let Some(v) = failure.details().and_then(|d| d.get(key)) else {
+            return "none".to_string();
+        };
+        let field = |k: &str| v.get(k).and_then(|x| x.as_str());
+        match (field("provider"), field("model")) {
+            (Some(p), Some(m)) => format!("{p}/{m}"),
+            (Some(p), None) => p.to_string(),
+            (None, Some(m)) => m.to_string(),
+            (None, None) => "none".to_string(),
+        }
+    };
+    println!("{}", failure.message());
+    println!("  from: {}", side("from"));
+    println!("    to: {}", side("to"));
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        anyhow::bail!("Refusing to change the embedding model without confirmation; pass --yes.");
+    }
+    Ok(dialoguer::Confirm::new()
+        .with_prompt("Change the embedding model anyway?")
+        .default(false)
+        .interact()?)
+}
 
 /// `nasiko llm-config create --name … --provider … --model …` — add a reusable config.
 #[allow(clippy::too_many_arguments)]
@@ -25,9 +108,10 @@ pub fn create(
     pin: bool,
     pinned_model: Option<String>,
     default: bool,
+    embedding: EmbeddingArgs,
 ) -> Result<()> {
     let client = Client::from_active_cluster()?;
-    let body = json!({
+    let mut body = json!({
         "name": name,
         "provider": provider,
         "model": model,
@@ -39,9 +123,19 @@ pub fn create(
         "pinned": pin,
         "pinned_model": pinned_model,
         "is_default": default,
+        "embedding_model_override": embedding.embedding_model_override,
     });
+    for (key, value) in embedding_body_fields(&embedding) {
+        body[key] = value;
+    }
     let _: Value = client.post_json("/llm-configs", &body)?;
     println!("Created LLM config '{name}' → {provider}/{model}");
+    if let (Some(p), Some(m)) = (&embedding.embedding_provider, &embedding.embedding_model) {
+        println!("  embeddings → {p}/{m}");
+        if embedding.embedding_model_override {
+            println!("  this embedding model overrides whatever the agent asks for");
+        }
+    }
     if default {
         println!("  marked as your default");
     }
@@ -75,7 +169,14 @@ pub fn list(json_out: bool) -> Result<()> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let marker = if is_default { " (default)" } else { "" };
-        println!("  {name:<24} {provider}/{model}{marker}");
+        let embedding = match (
+            c.get("embedding_provider").and_then(|v| v.as_str()),
+            c.get("embedding_model").and_then(|v| v.as_str()),
+        ) {
+            (Some(p), Some(m)) => format!("  embeddings: {p}/{m}"),
+            _ => String::new(),
+        };
+        println!("  {name:<24} {provider}/{model}{marker}{embedding}");
     }
     Ok(())
 }
@@ -103,12 +204,20 @@ pub fn update(
     no_pin: bool,
     pinned_model: Option<String>,
     clear_pinned_model: bool,
+    embedding: EmbeddingUpdate,
 ) -> Result<()> {
     if pin && no_pin {
         anyhow::bail!("--pin and --no-pin are mutually exclusive");
     }
     if clear_pinned_model && pinned_model.is_some() {
         anyhow::bail!("--clear-pinned-model and --pinned-model are mutually exclusive");
+    }
+    if embedding.clear
+        && (embedding.args.embedding_provider.is_some() || embedding.args.embedding_model.is_some())
+    {
+        anyhow::bail!(
+            "--clear-embedding-model cannot be combined with --embedding-provider/--embedding-model"
+        );
     }
     let client = Client::from_active_cluster()?;
     let existing = fetch_config_by_ref(&client, config)?;
@@ -128,7 +237,7 @@ pub fn update(
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
     };
-    let body = build_update_body(
+    let mut body = build_update_body(
         &existing,
         name,
         provider,
@@ -143,7 +252,22 @@ pub fn update(
         pinned_model,
         clear_pinned_model,
     );
-    let _: Value = client.patch_json(&format!("/llm-configs/{id}"), &body)?;
+    for (key, value) in embedding_body_fields(&embedding.args) {
+        body[key] = value;
+    }
+    body["clear_embedding_model"] = json!(embedding.clear);
+    if embedding.args.embedding_model_override {
+        body["embedding_model_override"] = json!(true);
+    }
+    // The server owns the rule; this only relays its 428 and retries once confirmed.
+    send_with_embedding_confirmation(
+        |confirmed| {
+            let mut attempt_body = body.clone();
+            attempt_body["confirm_embedding_change"] = json!(confirmed);
+            client.patch_json_attempt(&format!("/llm-configs/{id}"), &attempt_body)
+        },
+        embedding.confirmed,
+    )?;
 
     let p = body.get("provider").and_then(|v| v.as_str()).unwrap_or("?");
     let m = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
