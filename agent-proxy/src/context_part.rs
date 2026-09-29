@@ -1,6 +1,8 @@
-//! Appending admin-injected context (L1A knowledge today; org policy and L2 beliefs are the
-//! next two callers) to an outbound A2A message as its **own part**, rather than splicing it
-//! into the text part an agent may parse for the platform's own history-glue marker.
+//! Appending admin-injected context (L1A knowledge and org policy/L0 today, at their independent
+//! call sites — `ee/server/src/injection_proxy.rs` and `oss/server/src/router/a2a_dispatch.rs` /
+//! `oss/server/src/agent_proxy.rs` respectively; a future L2 belief is the next caller) to an
+//! outbound A2A message as its **own part**, rather than splicing it into the text part an agent
+//! may parse for the platform's own history-glue marker.
 //!
 //! `session_history.rs`'s glue convention (`"{history}\n\nCurrent message: {query}"`) is a
 //! documented, real pattern this codebase's own `oss/llm-router::latest_user_query` implements:

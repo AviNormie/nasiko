@@ -250,19 +250,17 @@ pub async fn a2a_dispatch_handler(
         // injection proxy, which sits on every outbound forward `forwarding_endpoint()` resolves
         // to — including this one — so injecting it a second time in-process here would double
         // it up. Organization policy (L0) is unrelated to that seam — the proxy never reads
-        // `org_context()` — so it still has to be folded in here, in a separate `outbound_query`
-        // local distinct from `query`: `agent_stream` persists/traces `query` verbatim
+        // `org_context()` — so it still has to be folded in here, appended as its own message
+        // part inside `agent_stream` (never spliced into `query`'s text — see
+        // `append_org_policy_part`): `agent_stream` persists/traces `query` verbatim
         // (`flows.title`, `gen_ai.input.messages`) and must never record injected context as if
         // the user had typed it — see `crate::prompt_context` module docs.
         let org_context = state.prompt_context.org_context().await;
-        let org_applied = org_context.is_some();
-        let outbound_query = crate::prompt_context::prefixed(org_context.as_deref(), &query);
         agent_stream(
             &state,
             agent,
             &query,
-            &outbound_query,
-            org_applied,
+            org_context.as_deref(),
             &task_id,
             &context_id,
             user_id,
@@ -1191,6 +1189,22 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
     .ok_or_else(|| A2aDispatchError::AgentNotFound(target.to_string()))
 }
 
+/// Folds organization policy (L0) into an already-built request as its own message part, never
+/// by prepending to the text part a caller already set: that text may be history-glued with
+/// `session_history.rs`'s `"Current message: "` marker, and any agent that follows the
+/// platform's own documented convention for extracting just the current turn
+/// (`oss/llm-router::latest_user_query`) silently discards whatever was prepended ahead of that
+/// marker inside the same part. A no-op when `org_context` is `None` — most turns.
+fn append_org_policy_part(req: &mut JsonRpcRequest, org_context: Option<&str>) {
+    let Some(org) = org_context else { return };
+    let Some(message) = req.params.as_mut().and_then(|p| p.get_mut("message")) else {
+        return;
+    };
+    // `org_context()` already returns a complete, self-headed block ("## Organization
+    // Policy\n\n..."), unlike L1A's raw facts — no extra heading to add here.
+    let _ = nasiko_agent_proxy::context_part::append_context_part(message, org);
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn agent_stream(
     state: &AppState,
@@ -1199,16 +1213,16 @@ async fn agent_stream(
     // and sent to the agent verbatim as far as L1A is concerned: that per-agent injection now
     // happens at the EE injection proxy instead, on every outbound forward `forwarding_endpoint()`
     // resolves — including this one. Org-wide policy (L0) is a separate seam the proxy does not
-    // touch, so it is still folded in ahead of the real forward, in `outbound_query` below.
+    // touch, so it is still folded in ahead of the real forward — appended as its own message
+    // part below (see `org_context`), never spliced into this text.
     query: &str,
-    // What's actually sent to the agent in the A2A request body — `query`, or `query` with
-    // org policy prepended. Never read for persistence/tracing.
-    outbound_query: &str,
-    // Whether org-wide context was part of `outbound_query`. Passed rather than derived from
-    // `outbound_query != query`, which is also true when only per-agent context was added — and
-    // the question worth answering from a trace is specifically "did the org policy reach this
-    // agent", the one that separates "the agent ignored it" from "it never arrived".
-    org_applied: bool,
+    // Organization policy (L0), if any is currently configured. Appended as a separate `parts[]`
+    // entry on the outbound request rather than prepended to `query`'s text: `query` may already
+    // be history-glued with `session_history.rs`'s `"Current message: "` marker, and any agent
+    // that follows the platform's own documented convention for extracting just the current turn
+    // (`oss/llm-router::latest_user_query`) silently discards whatever was prepended ahead of that
+    // marker inside the same part. See `nasiko_agent_proxy::context_part`'s module doc.
+    org_context: Option<&str>,
     task_id: &str,
     context_id: &str,
     user_id: Uuid,
@@ -1227,6 +1241,7 @@ async fn agent_stream(
     let target = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
         .await
         .map_err(A2aDispatchError::Internal)?;
+    let org_applied = org_context.is_some();
 
     // Real root span for the direct-agent exchange — same rationale as the
     // orchestrator path: the forwarded traceparent must name an exported span.
@@ -1305,15 +1320,12 @@ async fn agent_stream(
     // stream on its own (upstream bug). Agents that answer with plain JSON
     // (or reject `message/stream`) fall through to the non-streaming branch,
     // which retries with `message/send`.
-    let req_body = if file_parts.is_empty() {
-        nasiko_types::a2a::build_stream_request(outbound_query, Some(context_id))
+    let mut req_body = if file_parts.is_empty() {
+        nasiko_types::a2a::build_stream_request(query, Some(context_id))
     } else {
-        nasiko_types::a2a::build_stream_request_with_parts(
-            outbound_query,
-            Some(context_id),
-            file_parts,
-        )
+        nasiko_types::a2a::build_stream_request_with_parts(query, Some(context_id), file_parts)
     };
+    append_org_policy_part(&mut req_body, org_context);
 
     // No per-request MCP credential: the agent authenticates to /api/mcp with
     // its own deploy-time MCP_GATEWAY_TOKEN; the forwarded traceparent + the
@@ -1535,8 +1547,8 @@ async fn agent_stream(
         // The agent rejected `message/stream` (e.g. method not found) —
         // retry once with plain `message/send`.
         if resp_body.get("error").is_some() {
-            let retry_body =
-                nasiko_types::a2a::build_send_request(outbound_query, Some(&context_id));
+            let mut retry_body = nasiko_types::a2a::build_send_request(query, Some(&context_id));
+            append_org_policy_part(&mut retry_body, org_context);
             let retry = build_agent_req()
                 .json(&retry_body)
                 .send()
@@ -2414,6 +2426,79 @@ mod hitl_pause_tests {
         assert_eq!(
             pause_kind(AUTH_REQUIRED_PAYLOAD),
             nasiko_hitl::HitlKind::AuthRequired
+        );
+    }
+}
+
+/// `append_org_policy_part` is `agent_stream`'s half of the marker-splicing fix — the other half
+/// (L1A, at the EE injection proxy) is pinned by `ee/server/tests/injection_proxy.rs`. These
+/// don't need a live agent or the EE proxy: `append_org_policy_part` operates purely on an
+/// in-memory `JsonRpcRequest`, so they run hermetically.
+#[cfg(test)]
+mod org_policy_part_tests {
+    use super::*;
+
+    fn parts_of(req: &JsonRpcRequest) -> &Vec<serde_json::Value> {
+        req.params
+            .as_ref()
+            .unwrap()
+            .pointer("/message/parts")
+            .unwrap()
+            .as_array()
+            .unwrap()
+    }
+
+    #[test]
+    fn no_org_context_appends_nothing() {
+        let mut req = nasiko_types::a2a::build_stream_request("hello", Some("ctx-1"));
+        append_org_policy_part(&mut req, None);
+        let parts = parts_of(&req);
+        assert_eq!(
+            parts.len(),
+            1,
+            "a None org_context must be a complete no-op"
+        );
+        assert_eq!(parts[0]["text"], "hello");
+    }
+
+    #[test]
+    fn org_context_is_appended_as_its_own_part_after_the_query() {
+        let mut req = nasiko_types::a2a::build_stream_request("hello", Some("ctx-1"));
+        append_org_policy_part(&mut req, Some("## Organization Policy\n\n- rule: text"));
+
+        let parts = parts_of(&req);
+        assert_eq!(
+            parts.len(),
+            2,
+            "the query part plus exactly one appended policy part"
+        );
+        assert_eq!(
+            parts[0]["text"], "hello",
+            "the query part must be untouched"
+        );
+        assert_eq!(parts[1]["text"], "## Organization Policy\n\n- rule: text");
+        assert_eq!(parts[1]["kind"], "text");
+    }
+
+    #[test]
+    fn org_context_never_lands_ahead_of_the_history_glue_marker() {
+        // The exact bug this fix closes: a history-glued query ("{history}\n\nCurrent message:
+        // {q}") must keep its one marker in its one part — org policy must never appear ahead of
+        // it in the same field, or an agent extracting only the text after the marker
+        // (`oss/llm-router::latest_user_query`'s convention) silently discards it.
+        let glued = "earlier turn\n\nCurrent message: what time is it?";
+        let mut req = nasiko_types::a2a::build_stream_request(glued, Some("ctx-1"));
+        append_org_policy_part(&mut req, Some("## Organization Policy\n\nbinding"));
+
+        let parts = parts_of(&req);
+        assert_eq!(
+            parts[0]["text"], glued,
+            "the glued query, marker included, is untouched"
+        );
+        let org_text = parts[1]["text"].as_str().unwrap();
+        assert!(
+            !org_text.contains("Current message:"),
+            "the appended part must not carry the marker: {org_text:?}"
         );
     }
 }
