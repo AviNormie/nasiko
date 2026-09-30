@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod chat;
 pub mod coding_agent_otlp;
 pub mod coding_agent_telemetry;
+pub mod context_selection;
 pub mod flows;
 pub mod github;
 pub mod hitl;
@@ -169,11 +170,6 @@ where
             state.observability.clone(),
             llm_config,
             state.hitl_store.clone(),
-            // The worker outlives every request, so it gets the shared cell to ask rather than a
-            // value captured now — see `PromptContextOutbound`.
-            std::sync::Arc::new(crate::prompt_context::PromptContextOutbound::new(
-                state.prompt_context.clone(),
-            )),
         );
     } else {
         tracing::warn!(
@@ -275,6 +271,7 @@ where
         .merge(build_routes)
         .merge(degradable_routes)
         .merge(chat::router())
+        .merge(context_selection::router())
         .merge(coding_agent_telemetry::router())
         .merge(maf::router())
         .merge(secrets::router())
