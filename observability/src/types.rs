@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::pricing::CostBreakdown;
 
@@ -297,84 +297,6 @@ fn read_u64(attrs: &HashMap<String, serde_json::Value>, keys: &[&str]) -> Option
     })
 }
 
-/// Whether this span is the LLM router's own record of a call it served.
-///
-/// `gen_ai.agent.id` is set only there (`oss/llm-router/src/handlers/chat.rs`),
-/// which makes it an unambiguous marker. Such a span carries the **resolved**
-/// provider and model — the ones actually called — where the calling agent's
-/// span carries only what it asked for. The two disagree whenever an agent's
-/// LLM config re-routes it, and the router is the one telling the truth.
-pub fn is_router_llm_span(span: &Span) -> bool {
-    span.attributes.contains_key("gen_ai.agent.id")
-}
-
-/// How each LLM-router span relates to the agent span for the same call.
-pub struct RouterSpanLinks<'a> {
-    /// Router span id → service name of the agent whose call it served.
-    pub attributed: HashMap<&'a str, &'a str>,
-    /// Span ids to leave out of any usage aggregation, because another span in
-    /// the trace already accounts for the same call. Holds the agent's span
-    /// where the router's superseded it, and the router's own span where it
-    /// could not be attributed.
-    pub excluded: HashSet<&'a str>,
-}
-
-/// Pair up each router span with the agent span describing the same LLM call.
-///
-/// One call produces two spans: the agent's, labelled with the model it asked
-/// for, and the router's, labelled with the model that ran. Both carry the same
-/// token counts, so any sum over a trace counts the call twice — and pricing the
-/// agent's label charges a cheap model for an expensive call. Neither is
-/// detectable downstream, which is why this pairing has to happen before any
-/// aggregation rather than being patched afterwards.
-///
-/// The router's span sits under the HTTP span for the agent's request, whose
-/// parent is the agent's own LLM span, so the nearest ancestor from a different
-/// service is the calling agent, and that ancestor's usage is the duplicate.
-///
-/// A router span with no such ancestor is dropped instead. It reaches a trace at
-/// all only because some caller propagated span context, and in this platform
-/// that caller is an agent recording the same call on a span of its own — just a
-/// sibling rather than an ancestor, because it propagated the context it was
-/// called with instead of its own. Keeping it would double the tokens and book
-/// them against the control plane, which is not an agent; dropping it costs only
-/// the model correction, which is where things stood before any of this.
-pub fn link_router_spans(spans: &[Span]) -> RouterSpanLinks<'_> {
-    let by_id: HashMap<&str, &Span> = spans.iter().map(|s| (s.span_id.as_str(), s)).collect();
-    let mut attributed = HashMap::new();
-    let mut excluded = HashSet::new();
-    for span in spans {
-        if !is_router_llm_span(span) {
-            continue;
-        }
-        let mut parent = span.parent_span_id.as_deref();
-        let mut agent = None;
-        while let Some(id) = parent {
-            let Some(ancestor) = by_id.get(id) else { break };
-            if ancestor.service_name != span.service_name && !ancestor.service_name.is_empty() {
-                agent = Some(*ancestor);
-                break;
-            }
-            parent = ancestor.parent_span_id.as_deref();
-        }
-        match agent {
-            Some(agent) => {
-                attributed.insert(span.span_id.as_str(), agent.service_name.as_str());
-                if !extract_usage_attrs(&agent.attributes).is_empty() {
-                    excluded.insert(agent.span_id.as_str());
-                }
-            }
-            None => {
-                excluded.insert(span.span_id.as_str());
-            }
-        }
-    }
-    RouterSpanLinks {
-        attributed,
-        excluded,
-    }
-}
-
 impl TraceDetails {
     /// Aggregate token counts across all spans:
     /// `(input_tokens, output_tokens, first_model_seen)`.
@@ -387,13 +309,12 @@ impl TraceDetails {
     /// Cost is intentionally not computed here — resolve it through a
     /// [`nasiko_pricing::PricingEngine`] (see [`crate::pricing::compute_cost`]).
     pub fn token_totals(&self) -> (u64, u64, Option<String>) {
-        let excluded = link_router_spans(&self.spans).excluded;
         let mut seen = std::collections::HashSet::new();
         let mut input = 0u64;
         let mut output = 0u64;
         let mut model: Option<String> = None;
         for span in &self.spans {
-            if !seen.insert(&span.span_id) || excluded.contains(span.span_id.as_str()) {
+            if !seen.insert(&span.span_id) {
                 continue;
             }
             let u = extract_usage_attrs(&span.attributes);
@@ -414,12 +335,11 @@ impl TraceDetails {
     /// Aggregate cache token counts across all spans:
     /// `(cache_read_tokens, cache_creation_tokens)`.
     pub fn cache_token_totals(&self) -> (u64, u64) {
-        let excluded = link_router_spans(&self.spans).excluded;
         let mut seen = std::collections::HashSet::new();
         let mut read = 0u64;
         let mut creation = 0u64;
         for span in &self.spans {
-            if !seen.insert(&span.span_id) || excluded.contains(span.span_id.as_str()) {
+            if !seen.insert(&span.span_id) {
                 continue;
             }
             let u = extract_usage_attrs(&span.attributes);
@@ -450,11 +370,10 @@ impl TraceDetails {
 
     /// Per-model four-class token totals, for mixed-model trace reporting.
     pub fn token_totals_by_model(&self) -> Vec<(Option<String>, u64, u64, u64, u64)> {
-        let excluded = link_router_spans(&self.spans).excluded;
         let mut seen = std::collections::HashSet::new();
         let mut by_model: Vec<(Option<String>, u64, u64, u64, u64)> = Vec::new();
         for span in &self.spans {
-            if !seen.insert(&span.span_id) || excluded.contains(span.span_id.as_str()) {
+            if !seen.insert(&span.span_id) {
                 continue;
             }
             let u = extract_usage_attrs(&span.attributes);
@@ -564,48 +483,6 @@ pub struct TraceUsageRow {
     pub completion_cost_usd: f64,
     pub latency_ms: Option<i64>,
     pub started_at: DateTime<Utc>,
-    /// Unrecovered error spans this agent contributed to the trace
-    /// ([`unrecovered_error_spans`]). Per agent, never the trace total: the row
-    /// is keyed `(trace_id, agent_name)`, so a trace-wide figure here would be
-    /// multiplied by the agent count by anything that sums it.
-    pub error_count: u32,
-}
-
-/// Gap tolerance when deciding whether one span started after another ended.
-/// Matches the UI's `RETRY_GAP_TOLERANCE_MS` so both sides of the contract
-/// classify the same trace the same way.
-const RETRY_GAP_TOLERANCE_MS: i64 = 1;
-
-/// OTLP status code 2 is `ERROR` (0 unset, 1 ok).
-fn is_error(span: &Span) -> bool {
-    span.status_code == 2
-}
-
-/// Error spans that nothing recovered from: an ERROR span with no same-name
-/// sibling (same parent) that started after it *ended* and succeeded.
-///
-/// This is the SE-3 rule, and it is deliberately identical to the UI's
-/// `unrecoveredErrors` (`ui/common/src/features/observability/spans.ts`), which
-/// is what `/sessions` has always shown. A retry that eventually worked is not a
-/// failure; an overlapping parallel call with the same name is not a retry, so
-/// the comparison is against the failed span's *end*, not its start.
-pub fn unrecovered_error_spans(spans: &[&Span]) -> Vec<String> {
-    let ended_ms =
-        |s: &Span| -> i64 { s.started_at.timestamp_millis() + s.duration_ms.unwrap_or(0) as i64 };
-    spans
-        .iter()
-        .filter(|s| is_error(s))
-        .filter(|s| {
-            !spans.iter().any(|o| {
-                o.span_id != s.span_id
-                    && o.parent_span_id == s.parent_span_id
-                    && o.name == s.name
-                    && o.started_at.timestamp_millis() >= ended_ms(s) - RETRY_GAP_TOLERANCE_MS
-                    && !is_error(o)
-            })
-        })
-        .map(|s| s.span_id.clone())
-        .collect()
 }
 
 /// Sorted-percentile helper over millisecond durations.
@@ -621,124 +498,4 @@ pub fn latency_percentiles(mut durations: Vec<u64>) -> (Option<f64>, Option<f64>
     let p50 = nearest_rank(50);
     let p99 = nearest_rank(99);
     (p50, p99)
-}
-
-#[cfg(test)]
-mod unrecovered_error_tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    /// `started_at` in ms since the epoch, so the cases read as a timeline.
-    fn span(
-        id: &str,
-        parent: Option<&str>,
-        name: &str,
-        start_ms: i64,
-        dur: u64,
-        error: bool,
-    ) -> Span {
-        Span {
-            span_id: id.into(),
-            parent_span_id: parent.map(str::to_owned),
-            name: name.into(),
-            started_at: DateTime::from_timestamp_millis(start_ms).unwrap(),
-            ended_at: None,
-            duration_ms: Some(dur),
-            service_name: "agent".into(),
-            kind: 1,
-            status_code: if error { 2 } else { 1 },
-            status_message: String::new(),
-            attributes: HashMap::new(),
-            events: Vec::new(),
-        }
-    }
-
-    fn count(spans: &[Span]) -> usize {
-        let refs: Vec<&Span> = spans.iter().collect();
-        unrecovered_error_spans(&refs).len()
-    }
-
-    #[test]
-    fn a_lone_error_is_unrecovered() {
-        assert_eq!(count(&[span("a", Some("p"), "call", 0, 10, true)]), 1);
-    }
-
-    #[test]
-    fn a_retry_that_succeeded_recovers_the_error() {
-        // The successful attempt starts after the failed one ended: a retry.
-        assert_eq!(
-            count(&[
-                span("a", Some("p"), "call", 0, 10, true),
-                span("b", Some("p"), "call", 10, 10, false),
-            ]),
-            0
-        );
-    }
-
-    #[test]
-    fn an_overlapping_success_is_not_a_retry() {
-        // Starts while the failure is still running: parallel fan-out, not a
-        // retry, so the error stands. This is the case a naive "any sibling
-        // succeeded" rule gets wrong.
-        assert_eq!(
-            count(&[
-                span("a", Some("p"), "call", 0, 100, true),
-                span("b", Some("p"), "call", 5, 10, false),
-            ]),
-            1
-        );
-    }
-
-    #[test]
-    fn a_retry_that_also_failed_is_still_unrecovered() {
-        assert_eq!(
-            count(&[
-                span("a", Some("p"), "call", 0, 10, true),
-                span("b", Some("p"), "call", 10, 10, true),
-            ]),
-            2
-        );
-    }
-
-    #[test]
-    fn a_different_name_does_not_recover() {
-        assert_eq!(
-            count(&[
-                span("a", Some("p"), "call", 0, 10, true),
-                span("b", Some("p"), "other", 10, 10, false),
-            ]),
-            1
-        );
-    }
-
-    #[test]
-    fn a_different_parent_does_not_recover() {
-        assert_eq!(
-            count(&[
-                span("a", Some("p1"), "call", 0, 10, true),
-                span("b", Some("p2"), "call", 10, 10, false),
-            ]),
-            1
-        );
-    }
-
-    #[test]
-    fn the_gap_tolerance_allows_an_immediate_retry() {
-        // A retry recorded as starting 1ms before the failure's recorded end is
-        // still a retry: the timestamps come from different clocks.
-        assert_eq!(
-            count(&[
-                span("a", Some("p"), "call", 0, 10, true),
-                span("b", Some("p"), "call", 9, 10, false),
-            ]),
-            0
-        );
-    }
-
-    #[test]
-    fn unset_status_is_not_an_error() {
-        let mut s = span("a", Some("p"), "call", 0, 10, false);
-        s.status_code = 0;
-        assert_eq!(count(&[s]), 0);
-    }
 }

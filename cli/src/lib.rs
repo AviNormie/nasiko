@@ -8,7 +8,7 @@ pub mod util;
 pub mod version_prompt;
 
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::Subcommand;
 
 #[derive(Subcommand)]
 #[command(next_help_heading = "Create")]
@@ -358,29 +358,6 @@ pub enum AgentOpsCommands {
     },
 }
 
-/// Embedding-routing flags, shared by `llm-config create` and `llm-config update`.
-///
-/// Grouped rather than spelled out twice: both commands already carry a long parameter
-/// list, and these five only ever move together.
-#[derive(Args, Clone, Debug, Default)]
-pub struct EmbeddingArgs {
-    /// Provider for this config's embedding calls (set together with --embedding-model)
-    #[arg(long = "embedding-provider")]
-    pub embedding_provider: Option<String>,
-    /// Embedding model this config routes to (set together with --embedding-provider)
-    #[arg(long = "embedding-model")]
-    pub embedding_model: Option<String>,
-    /// Name of your user-secret holding the embedding provider's API key
-    #[arg(long = "embedding-secret-name")]
-    pub embedding_secret_name: Option<String>,
-    /// Plaintext embedding API key to store under --embedding-secret-name
-    #[arg(long = "embedding-secret-value")]
-    pub embedding_secret_value: Option<String>,
-    /// Let this config's embedding model outrank the model an agent asks for
-    #[arg(long = "embedding-model-override")]
-    pub embedding_model_override: bool,
-}
-
 #[derive(Subcommand)]
 pub enum LlmConfigCommands {
     /// Create a reusable LLM config in your library
@@ -413,8 +390,6 @@ pub enum LlmConfigCommands {
         /// Mark this as your default config
         #[arg(long)]
         default: bool,
-        #[command(flatten)]
-        embedding: EmbeddingArgs,
     },
     /// Update an existing config in your library (only the flags you pass change)
     Update {
@@ -455,15 +430,6 @@ pub enum LlmConfigCommands {
         /// Reset the pinned model to null (pin falls back to the config's model)
         #[arg(long = "clear-pinned-model")]
         clear_pinned_model: bool,
-        #[command(flatten)]
-        embedding: EmbeddingArgs,
-        /// Unset the embedding provider and model (embedding calls fall through to the
-        /// organization default, which is a different vector space — needs --yes)
-        #[arg(long = "clear-embedding-model")]
-        clear_embedding_model: bool,
-        /// Confirm an embedding provider/model change up front, for non-interactive use
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
     },
     /// Delete a config from your library (must be detached from all agents first)
     #[command(alias = "rm")]
@@ -546,27 +512,6 @@ pub enum MafCommands {
         #[command(subcommand)]
         command: MafExecutionCommands,
     },
-    /// Run one instruction end to end and report every stage
-    #[command(
-        after_help = "Does in one command what `workflow create --instruction`, \
-`workflow run --wait` and `execution get` do in three: sends the sentence to the decomposer, \
-shows how it was split and which agent each step was routed to, runs it while reporting each \
-step as it finishes, then prints the result with its token breakdown.\n\n\
-The workflow is kept by default so it can be re-run or inspected; pass --cleanup to delete it \
-once the run finishes."
-    )]
-    Trace {
-        /// The compound instruction to decompose into a workflow and run
-        instruction: String,
-        /// Run-time data folded into step 0's task before planning
-        #[arg(long)]
-        content: Option<String>,
-        /// Delete the workflow once the run finishes
-        #[arg(long)]
-        cleanup: bool,
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -577,14 +522,11 @@ pub enum MafWorkflowCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Create a workflow from one or more steps, or from one compound instruction
+    /// Create a workflow from one or more steps
     #[command(
         after_help = "Steps run in the order given. Pass --agent once per --step to pin \
 an agent (name or UUID) to that step, or \"-\" to auto-assign it; omit --agent entirely to \
-auto-assign every step via the routing engine.\n\n\
---instruction is mutually exclusive with --step/--agent: it sends the whole sentence to the \
-decomposer service (MODEL_API_URL), which splits it into atomic steps; each is then \
-auto-assigned an agent exactly like an auto-assigned --step."
+auto-assign every step via the routing engine."
     )]
     Create {
         #[arg(long)]
@@ -592,14 +534,11 @@ auto-assigned an agent exactly like an auto-assigned --step."
         #[arg(long)]
         description: Option<String>,
         /// A workflow step's task description. Repeat in order: --step "..." --step "..."
-        #[arg(long = "step", conflicts_with = "instruction")]
+        #[arg(long = "step")]
         steps: Vec<String>,
         /// Agent (name or UUID) for the step at the same position, or "-" to auto-assign
-        #[arg(long = "agent", conflicts_with = "instruction")]
+        #[arg(long = "agent")]
         agents: Vec<String>,
-        /// One compound instruction to split into atomic steps via the decomposer service
-        #[arg(long, conflicts_with_all = ["steps", "agents"])]
-        instruction: Option<String>,
     },
     /// Show a workflow's steps and metadata
     Get {
@@ -662,11 +601,6 @@ server-side patch API, so behind the scenes this still sends the full step list.
         /// Poll until the execution finishes and print its result
         #[arg(long)]
         wait: bool,
-        /// Run-time data for this execution only — folded into step 0's task
-        /// description before planning, so the same saved workflow can be
-        /// re-run against different content each time
-        #[arg(long)]
-        content: Option<String>,
     },
     /// List executions of one workflow
     Executions {
@@ -1323,7 +1257,6 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 pin,
                 pinned_model,
                 default,
-                embedding,
             } => commands::llm_config::create(
                 &name,
                 &provider,
@@ -1336,7 +1269,6 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 pin,
                 pinned_model,
                 default,
-                embedding,
             ),
             LlmConfigCommands::Update {
                 config,
@@ -1353,9 +1285,6 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
-                embedding,
-                clear_embedding_model,
-                yes,
             } => commands::llm_config::update(
                 &config,
                 name,
@@ -1371,11 +1300,6 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
-                commands::llm_config::EmbeddingUpdate {
-                    args: embedding,
-                    clear: clear_embedding_model,
-                    confirmed: yes,
-                },
             ),
             LlmConfigCommands::Delete { config, force } => {
                 commands::llm_config::delete(&config, force)
@@ -1407,13 +1331,11 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                     description,
                     steps,
                     agents,
-                    instruction,
                 } => commands::maf::workflow_create(
                     name.as_deref(),
                     description.as_deref(),
                     &steps,
                     &agents,
-                    instruction.as_deref(),
                 ),
                 MafWorkflowCommands::Get { workflow, json } => {
                     commands::maf::workflow_get(&workflow, json)
@@ -1446,11 +1368,9 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 MafWorkflowCommands::Delete { workflow, force } => {
                     commands::maf::workflow_delete(&workflow, force)
                 }
-                MafWorkflowCommands::Run {
-                    workflow,
-                    wait,
-                    content,
-                } => commands::maf::workflow_run(&workflow, wait, content.as_deref()),
+                MafWorkflowCommands::Run { workflow, wait } => {
+                    commands::maf::workflow_run(&workflow, wait)
+                }
                 MafWorkflowCommands::Executions { workflow, json } => {
                     commands::maf::workflow_executions(&workflow, json)
                 }
@@ -1464,12 +1384,6 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                     commands::maf::execution_result(&execution_id, json)
                 }
             },
-            MafCommands::Trace {
-                instruction,
-                content,
-                cleanup,
-                json,
-            } => commands::maf::trace(&instruction, content.as_deref(), cleanup, json),
         },
     }
 }

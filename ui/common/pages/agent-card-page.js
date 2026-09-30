@@ -1481,6 +1481,38 @@ class AgentCardPage extends HTMLElement {
 
   /* ── Settings tab ──────────────────────────────────────────────────────── */
 
+  // Whether to offer minimal-code mode at all — served by the agent detail response, not
+  // re-derived here. This used to be a local `/code/i` over the skills, mirroring a Postgres
+  // `ILIKE '%code%'` in the dispatch path; two copies of one rule, and both missed `coding`
+  // (which contains no "code") while matching `encode`. So the switch was hidden for exactly
+  // the agents that wanted it. The server now answers once — see
+  // `catalog::models::has_coding_skills`.
+  //
+  // Not `is_coding_agent`, which means something unrelated: an external CLI tool (Claude
+  // Code, Codex, Cursor) linked for LLM-router billing, never this container.
+  //
+  // `|| minimal_code_enabled` so an agent whose flag was set some other way (the API, or a
+  // card that has since been edited) can still be seen and switched off. A toggle that is on
+  // must never be invisible.
+  #offersMinimalCode(a) {
+    return a.has_coding_skills === true || a.minimal_code_enabled === true;
+  }
+
+  // Self-review is still a write-only secret (unlike minimal-code, it stays
+  // agent-side — see the dispatch-time injection note on the switch below),
+  // so it still has no read-back route; this remembers what was last set
+  // FROM THIS BROWSER instead. Its own default is ON
+  // (nasiko_coding_policy::self_review_enabled()), so "nothing set yet in
+  // this browser" must default to checked, not unchecked, to match.
+  #lastSetSelfReview(agentId) {
+    try {
+      const v = localStorage.getItem(`nasiko:self-review:${agentId}`);
+      return v === null ? true : v === '1';
+    } catch {
+      return true;
+    }
+  }
+
   #settingsPanelHtml(a) {
     return `
         <div class="acp-panel" data-tab="settings" data-label="Settings">
@@ -1512,6 +1544,38 @@ class AgentCardPage extends HTMLElement {
             </dl>
           </section>
           <section class="acp-section">
+            <h2 class="acp-section-title">Features</h2>
+            <p class="acp-section-sub">Agent-level feature flags. Changes take effect on next restart.</p>
+            <app-switch id="acp-feature-prompt-comments" layout="settings"
+              ${(a.metadata?.features?.prompt_comments === 'enabled') ? 'checked' : ''}
+              label="Prompt comments"
+              hint="Lets the agent record, prune, and maintain workspace instructions with rationale annotations. Workspaces can opt out with &lt;!-- @prompt-comments disabled --&gt;."></app-switch>
+          </section>
+          <section class="acp-section">
+            <h2 class="acp-section-title">Token optimization</h2>
+            <p class="acp-section-sub">One switch over the whole stack: shrinks large tool
+              results — JSON, logs and diffs — before they reach the model, trims the reply
+              instruction, and compresses what the orchestrator keeps between turns. Errors and
+              structure are kept, and a counted note is left wherever something was removed.
+              Turning it off stops every part of it.</p>
+            <app-switch id="acp-compress" layout="settings"
+              ${a.compress_enabled ? 'checked' : ''}
+              label="Token optimization"
+              hint="Off by default. Your own messages are never changed."></app-switch>
+          </section>
+          ${this.#offersMinimalCode(a) ? `
+          <section class="acp-section">
+            <h2 class="acp-section-title">Coding agent behavior</h2>
+            <app-switch id="acp-minimal-code" layout="settings"
+              label="Minimal-code mode"
+              hint="Checks for existing code, stdlib, or an installed dependency before writing new code. Applies immediately — no restart needed."
+              aria-label="Minimal-code mode"${a.minimal_code_enabled ? ' checked' : ''}></app-switch>
+            <app-switch id="acp-self-review" layout="settings"
+              label="Self-review"
+              hint="Adds a review turn that catches duplicated or unnecessary code (requires Minimal-code mode). Write-only — restart the agent to apply."
+              aria-label="Self-review"${this.#lastSetSelfReview(a.id) ? ' checked' : ''}${a.minimal_code_enabled ? '' : ' disabled'}></app-switch>
+          </section>` : ''}
+          <section class="acp-section">
             <secrets-manager id="acp-secrets" scope="agent" defer
               agent-id="${escAttr(a.id)}"
               heading="Secrets"
@@ -1528,6 +1592,159 @@ class AgentCardPage extends HTMLElement {
   #wireSettings() {
     const identityForm = this.querySelector('#acp-identity-form');
     identityForm?.addEventListener('submit', (e) => this.#saveIdentity(e));
+
+    const promptCommentsToggle = this.querySelector('#acp-feature-prompt-comments');
+    promptCommentsToggle?.addEventListener('change', (e) => this.#toggleFeature('prompt_comments', e.target));
+    
+    // Token optimization — STASHED
+    const compress = this.querySelector('#acp-compress');
+    compress?.addEventListener('change', () => this.#saveCompress(compress));
+
+    // Coding agent optimization — INCOMING
+    this.querySelector('#acp-minimal-code')?.addEventListener('change', (e) => {
+      this.#toggleMinimalCode(e);
+      // Self-review is a no-op without minimal-code on (nasiko-coding-policy's
+      // wants_self_review requires both) — grey it out rather than let the two
+      // switches show a combination that looks real but does nothing.
+      this.querySelector('#acp-self-review')?.toggleAttribute('disabled', !e.target.checked);
+    });
+
+    this.querySelector('#acp-self-review')?.addEventListener('change', (e) =>
+      this.#toggleAgentFlag(e, 'CODING_AGENT_SELF_REVIEW', 'self-review', 'Self-review'));
+  }
+
+  async #toggleFeature(key, input) {
+    const enabled = input.checked;
+    const metadata = {
+      ...(this.#agent.metadata || {}),
+      features: {
+        ...(this.#agent.metadata?.features || {}),
+        [key]: enabled ? 'enabled' : 'disabled',
+      },
+    };
+    input.disabled = true;
+    try {
+      await fetchApi(`/agents/${encodeURIComponent(this.#agent.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata }),
+      });
+    } catch (err) {
+      input.checked = !enabled;
+      showToast(`Failed to update feature: ${err.message}`);
+      return;
+    } finally {
+      input.disabled = false;
+    }
+    this.#agent.metadata = metadata;
+    showToast(`${key.replace(/_/g, ' ')} ${enabled ? 'enabled' : 'disabled'}. Restart the agent to apply.`);
+  }
+  
+  /** Minimal-code is a plain `agents.minimal_code_enabled` column (migration
+   *  0032), not a secret — unlike self-review, which stays a deploy-time env
+   *  var. A real column means a real read-back, so unlike #toggleAgentFlag
+   *  below there's no localStorage guess involved, and no restart needed:
+   *  the control plane reads this fresh on every chat message and injects
+   *  the ladder instructions into the outgoing request itself
+   *  (a2a_dispatch.rs) — the agent's own container never has to know this
+   *  setting changed. */
+  async #toggleMinimalCode(e) {
+    const toggle = e.target;
+    const checked = toggle.checked;
+    toggle.disabled = true;
+    try {
+      await fetchApi(`/agents/${encodeURIComponent(this.#agent.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minimal_code_enabled: checked }),
+      });
+      this.#agent.minimal_code_enabled = checked;
+      showToast(`Minimal-code mode ${checked ? 'enabled' : 'disabled'}.`);
+    } catch (err) {
+      toggle.checked = !checked;
+      showToast(`Could not update minimal-code mode: ${err.message}`);
+    } finally {
+      toggle.disabled = false;
+    }
+  }
+
+  // Saves on toggle rather than behind the identity form's Save button: this is one boolean,
+  // and burying it in a form that also holds name and description would make it unclear which
+  // button commits it.
+  async #saveCompress(control) {
+    const enabled = control.checked;
+    control.setAttribute('disabled', '');
+    try {
+      await fetchApi(`/agents/${encodeURIComponent(this.#agent.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compress_enabled: enabled,
+          activate_version: false,
+        }),
+      });
+    } catch (err) {
+      // Put the switch back where it was — leaving it showing a state the server rejected is
+      // worse than the failure itself.
+      control.checked = !enabled;
+      showToast(`Failed to save: ${err.message}`);
+      return;
+    } finally {
+      control.removeAttribute('disabled');
+    }
+
+    this.#agent.compress_enabled = enabled;
+    showToast(
+      enabled
+        ? 'Token optimization enabled'
+        : 'Token optimization disabled'
+    );
+  }
+
+  /** Flips a boolean env-var secret (`secretName`) via the same write-only
+   *  agent-secrets API the Secrets panel uses — no new backend route. There's
+   *  no read-value route for agent-scoped secrets (by design, see
+   *  secrets-manager.js), so the switch can't be initialized from a stored
+   *  value; `nasiko:{storageKey}:{agentId}` in localStorage remembers it
+   *  instead, so a Restart's full-page reload doesn't make the switch lie
+   *  about what was just set. Still used for self-review only now — see
+   *  #toggleMinimalCode above for why minimal-code moved off this path. */
+  async #toggleAgentFlag(e, secretName, storageKey, label) {
+    const toggle = e.target;
+    const checked = toggle.checked;
+    toggle.disabled = true;
+
+    try {
+      await apiFetch(`/agents/${this.#agent.id}/secrets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: secretName,
+          value: checked ? 'true' : 'false',
+        }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      });
+
+      try {
+        localStorage.setItem(
+          `nasiko:${storageKey}:${this.#agent.id}`,
+          checked ? '1' : '0'
+        );
+      } catch {
+        /* localStorage unavailable (private mode, quota) — the write above still
+         * succeeded; only the reload-survives-visually nicety is lost. */
+      }
+
+      showToast(
+        `${label} ${checked ? 'enabled' : 'disabled'} — restart the agent to apply.`
+      );
+    } catch (err) {
+      toggle.checked = !checked;
+      showToast(`Could not update ${label.toLowerCase()}: ${err.message}`);
+    } finally {
+      toggle.disabled = false;
+    }
   }
 
   async #saveIdentity(e) {
