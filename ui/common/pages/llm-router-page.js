@@ -442,6 +442,14 @@ class LlmRouterPage extends HTMLElement {
               hint="The catalog lists every model the provider serves, chat and embedding alike — pick an embedding one."
               options="${escAttr(JSON.stringify(this.#modelList(c?.embedding_provider || '')))}"
               value="${escAttr(c?.embedding_model || '')}"></app-select>
+          </div>
+          <div class="radio-group">
+            <app-radio id="embedding-secret-saved" name="embedding-secret-mode" value="saved"
+              label="Use the platform key or a saved secret" checked></app-radio>
+            <app-radio id="embedding-secret-new" name="embedding-secret-mode" value="new"
+              label="Add new secret"></app-radio>
+          </div>
+          <div id="embedding-saved-secret-field">
             <app-select id="cfg-embedding-secret" name="embedding_api_key_secret_name"
               label="Embedding secret (optional)"
               hint="Leave empty to use the platform key for that provider."
@@ -453,6 +461,14 @@ class LlmRouterPage extends HTMLElement {
                 }),
               ]))}"
               value="${escAttr(c?.embedding_api_key_secret_name || '')}"></app-select>
+          </div>
+          <div class="stacked-field" id="embedding-new-secret-field" hidden>
+            <app-input id="cfg-embedding-secret-name" name="new_embedding_secret_name"
+              label="Secret name" placeholder="e.g. ANTHROPIC_API_KEY"></app-input>
+            <app-input id="cfg-embedding-secret-value" name="embedding_secret_value"
+              type="password" reveal label="Secret value" placeholder="Paste the API key"
+              autocomplete="off"
+              hint="Stored encrypted; used only for this config's embedding calls."></app-input>
           </div>
           <app-checkbox id="cfg-embedding-override" name="embedding_model_override"
             label="Use this embedding model even when the agent asks for a different one"
@@ -583,6 +599,12 @@ class LlmRouterPage extends HTMLElement {
       const useNew = e.target.value === 'new';
       this.querySelector('#saved-secret-field').hidden = useNew;
       this.querySelector('#new-secret-field').hidden = !useNew;
+    } else if (e.target.name === 'embedding-secret-mode') {
+      // Its own radio name: app-radio clears its peers by name across the whole
+      // document, so sharing 'secret-mode' would unset the chat choice as well.
+      const useNew = e.target.value === 'new';
+      this.querySelector('#embedding-saved-secret-field').hidden = useNew;
+      this.querySelector('#embedding-new-secret-field').hidden = !useNew;
     } else if (e.target.name === 'embedding_provider') {
       // The embedding provider picks its own model list — it is a separate destination
       // from the chat provider, so it must not inherit that field's options.
@@ -636,6 +658,7 @@ class LlmRouterPage extends HTMLElement {
     const form = e.target;
     const isEdit = !!this.#editingConfig;
     const useNew = form.querySelector('#secret-new').checked;
+    const useNewEmbedding = form.querySelector('#embedding-secret-new').checked;
     const body = {
       name: form.querySelector('#cfg-name').value.trim(),
       provider: form.querySelector('#cfg-provider').value,
@@ -648,8 +671,12 @@ class LlmRouterPage extends HTMLElement {
       secret_value: useNew ? form.querySelector('#cfg-secret-value').value || null : null,
       embedding_provider: form.querySelector('#cfg-embedding-provider').value || null,
       embedding_model: form.querySelector('#cfg-embedding-model').value || null,
-      embedding_api_key_secret_name:
-        form.querySelector('#cfg-embedding-secret').value || null,
+      embedding_api_key_secret_name: useNewEmbedding
+        ? form.querySelector('#cfg-embedding-secret-name').value.trim() || null
+        : form.querySelector('#cfg-embedding-secret').value || null,
+      embedding_secret_value: useNewEmbedding
+        ? form.querySelector('#cfg-embedding-secret-value').value || null
+        : null,
       embedding_model_override: form.querySelector('#cfg-embedding-override').checked,
     };
     const wantDefault = form.querySelector('#cfg-default').checked;
@@ -681,6 +708,14 @@ class LlmRouterPage extends HTMLElement {
     // The pair is all-or-nothing: an embedding model with no provider cannot be routed.
     if (!!body.embedding_provider !== !!body.embedding_model) {
       errEl.textContent = 'Set the embedding provider and model together, or leave both empty.';
+      errEl.hidden = false;
+      return;
+    }
+    // A new embedding key needs both halves. The server stores the value under the name,
+    // so a value with no name is dropped and the config silently stays on the platform key.
+    if (useNewEmbedding
+        && !!body.embedding_api_key_secret_name !== !!body.embedding_secret_value) {
+      errEl.textContent = 'Give the new embedding secret both a name and a value.';
       errEl.hidden = false;
       return;
     }
