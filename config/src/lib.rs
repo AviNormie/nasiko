@@ -43,6 +43,13 @@ pub struct Config {
     /// `nasiko_oci::authz::Writer::BuildService`. Empty means not configured
     /// (fine for `AGENT_RUNTIME=local`, where no such build path exists).
     pub build_push_token: String,
+    /// Shared credential the EE injection proxy's internal route requires on every request —
+    /// mirrors `build_push_token`'s shape exactly (one cluster-wide secret, not a per-caller
+    /// identity): the route's only caller is the control plane's own outbound forward to an
+    /// agent, so there is no untrusted external identity to distinguish, just "is this genuinely
+    /// the control plane." Empty means not configured (fine on OSS and on EE with
+    /// `MEMORY_ENABLED=false`, where the route is never mounted at all).
+    pub injection_proxy_token: String,
     pub seed_agents: Option<String>,
     pub openai_api_key: Option<String>,
     pub openai_base_url: Option<String>,
@@ -96,13 +103,20 @@ pub struct Config {
     /// loop expires it. `oss/hitl`'s own store applies this at row-creation time — see
     /// `PgHitlStore::with_ttl_days`.
     pub hitl_request_ttl_days: i64,
-    /// `nasiko_hitl::dispatcher::DispatcherConfig`'s five tunables (the `mcp_tool`-origin resume
-    /// dispatcher, `oss/hitl/src/dispatcher.rs`) — every comparable tunable elsewhere in this
-    /// codebase goes through this single `Config` struct, and `hitl_request_ttl_days` right above
-    /// is the same feature's own TTL knob, so these were the odd ones out as compile-time
+    /// `nasiko_hitl::dispatcher::DispatcherConfig`'s remaining tunables (the `mcp_tool`-origin
+    /// resume dispatcher, `oss/hitl/src/dispatcher.rs`) — every comparable tunable elsewhere in
+    /// this codebase goes through this single `Config` struct, and `hitl_request_ttl_days` right
+    /// above is the same feature's own TTL knob, so these were the odd ones out as compile-time
     /// constants (found in review).
     pub hitl_resume_poll_interval_secs: u64,
     pub hitl_resume_recovery_interval_secs: u64,
+    /// Claim-lease floor shared by *both* resume dispatchers — `nasiko_hitl::dispatcher`'s
+    /// `mcp_tool` one (via `DispatcherConfig::effective_lease_minutes`, which holds one claim
+    /// across its own in-process retry loop) and `oss/server/src/hitl/mod.rs`'s `direct_chat`/
+    /// `agent_proxy`/`orchestrator`/`maf` one (via its `lease_secs` helper, which claims once per
+    /// delivery attempt). Each dispatcher floors its own effective lease at what its own delivery
+    /// shape needs, so raising or lowering this one knob can never reopen either's
+    /// double-delivery window.
     pub hitl_resume_lease_minutes: i64,
     pub hitl_resume_max_attempts: u32,
     pub hitl_resume_retry_delay_secs: u64,
@@ -362,6 +376,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty()),
             build_push_token: env_or("BUILD_PUSH_TOKEN", ""),
+            injection_proxy_token: env_or("INJECTION_PROXY_TOKEN", ""),
             seed_agents: std::env::var("SEED_AGENTS").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
             openai_base_url: std::env::var("OPENAI_BASE_URL").ok(),
