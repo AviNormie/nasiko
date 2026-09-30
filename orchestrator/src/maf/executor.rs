@@ -301,11 +301,6 @@ async fn execute_step(
     )
     .await;
 
-    // Org policy is appended as its own part inside `call_agent`, never composed back into
-    // `actual_prompt`: that value is persisted to `step_results[i].prompt` below and read back
-    // verbatim on resume, so folding the policy into it in place would put the policy in the
-    // record — and then re-append it to the already-appended copy on every resume. Same split as
-    // the chat path's `outbound_query` vs `query`.
     let call_result = call_agent(
         client,
         &step.agent_endpoint,
@@ -1242,10 +1237,6 @@ async fn call_agent(
     context_id: &str,
     user_id: &str,
     prompt: &str,
-    // Organization policy (L0), appended as its own part — never spliced into `prompt`, which is
-    // persisted verbatim to `step_results[i].prompt` and read back on resume (see this function's
-    // caller). Same representation `a2a_dispatch.rs`/`agent_proxy.rs`/`tool.rs` use for the exact
-    // same reason: a second, independently-addressable part rather than a merged string.
     outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
@@ -1888,9 +1879,12 @@ mod tests {
         );
     }
 
-    /// `call_agent` must append org policy as its OWN part, never compose it into `prompt`'s own
-    /// text — mirrors the direct-dispatch/agent-proxy/ReAct-sub-leg tests for the identical
-    /// property, on the one remaining call site that used to splice instead.
+    /// Organization policy, appended as its own `parts[]` entry — never composed into the prompt
+    /// text itself, which is what `step_results[i].prompt` persists and a resume reads back
+    /// verbatim (see `execute_step`'s call site: this must never leak the policy into that
+    /// record). Untagged (no `"kind"` field): `call_agent` always builds a proto-style
+    /// `"SendMessage"` request, and this platform's real `a2a-lf` agents reject an unexpected
+    /// `"kind"` outright.
     #[tokio::test]
     async fn call_agent_appends_org_policy_as_its_own_part() {
         let mut server = mockito::Server::new_async().await;

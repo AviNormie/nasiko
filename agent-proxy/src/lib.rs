@@ -2,7 +2,6 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 pub mod context_part;
-pub mod headers;
 
 /// A `host:port` snapshot parsed from `agents.url`.
 #[derive(Debug, Clone)]

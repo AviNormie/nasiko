@@ -217,18 +217,19 @@ impl Tool for A2aTool {
         tracing::info!(agent = %self.agent.name, message = %args.message, "invoking A2A agent");
 
         // Organization policy (L0), appended as its own message part — computed ONCE, here, rather
-        // than at each send site below, for the same reason the old prefix rebind was: a fix
-        // applied at only one of the two send sites is a bug the other path hides silently. Never
-        // spliced into `args.message`, which is the LLM's own fresh wording for this sub-task and
-        // is sent to the agent, persisted, and traced verbatim — same representation
-        // `a2a_dispatch.rs`/`agent_proxy.rs` use via `nasiko_agent_proxy::context_part`.
+        // than at each send site below, for the same reason a rebind of `args.message` would have
+        // needed to be: a fix applied at only one of the two send sites is a bug the other path
+        // hides silently. Never spliced into `args.message`, which is the LLM's own fresh wording
+        // for this sub-task and is sent to the agent, persisted, and traced verbatim — same
+        // representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
+        // `nasiko_agent_proxy::context_part`.
         //
         // Passed as `extra_text_parts`, a raw string, NOT pre-tagged into a `Value` the way
         // `file_parts` are: this call retries under BOTH A2A dialects if the agent rejects the
         // first one (`send_message_with_headers`/`call_streaming`'s own `-32601` fallback), and
         // this platform's real `a2a-lf` agents (proto dialect) reject an unexpected `"kind"`
-        // field outright — confirmed live against a real deployed agent. `build_message_body`
-        // re-tags this text per attempt, exactly like the primary message part already is.
+        // field outright. `build_message_body` re-tags this text per attempt, exactly like the
+        // primary message part already is.
         let extra_text_parts: Vec<String> = self.outbound_prefix.iter().cloned().collect();
 
         // No per-call user credential: the invoked agent authenticates to
@@ -236,25 +237,12 @@ impl Tool for A2aTool {
         // rides the client-wide `traceparent` + the flow_participants record
         // the platform's CallGuard writes before this call.
 
-        // Whatever `endpoint` requires as a header to actually accept the call — e.g. the EE
-        // injection proxy's own credential, when `endpoint` is the proxy's address rather than
-        // the agent's real one. Not a caller credential: this is consumed by the hop `endpoint`
-        // points at, same as `agent_proxy.rs`'s and `a2a_dispatch.rs`'s own outbound calls.
-        let per_call_headers: Vec<(String, String)> =
-            self.agent.auth_header.iter().cloned().collect();
-
         // Streaming first when a progress channel is attached; the match below
         // decides per error whether falling back to non-streaming is safe.
         let streamed = match self.progress {
             Some(ref orch_tx) => {
                 match self
-                    .call_streaming(
-                        &args,
-                        orch_tx.clone(),
-                        &per_call_headers,
-                        &self.file_parts,
-                        &extra_text_parts,
-                    )
+                    .call_streaming(&args, orch_tx.clone(), &[], &extra_text_parts)
                     .await
                 {
                     Ok(SendOutcome::Text(text)) => Some(text),
@@ -293,7 +281,7 @@ impl Tool for A2aTool {
                         &self.agent.endpoint,
                         &args.message,
                         args.context_id.as_deref(),
-                        &per_call_headers,
+                        &[],
                         &self.file_parts,
                         &extra_text_parts,
                     )
@@ -372,7 +360,6 @@ impl A2aTool {
         args: &A2aToolArgs,
         orch_tx: tokio::sync::mpsc::Sender<OrchestratorEvent>,
         per_call_headers: &[(String, String)],
-        extra_parts: &[serde_json::Value],
         extra_text_parts: &[String],
     ) -> Result<SendOutcome, A2aClientError> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentStreamEvent>(64);
@@ -417,7 +404,7 @@ impl A2aTool {
                 args.context_id.as_deref(),
                 Some(tx),
                 per_call_headers,
-                extra_parts,
+                &self.file_parts,
                 extra_text_parts,
             )
             .await;
@@ -440,7 +427,6 @@ mod tests {
             description: "for tests".to_string(),
             endpoint: endpoint.to_string(),
             skills: vec![],
-            auth_header: None,
         }
     }
 
@@ -484,13 +470,14 @@ mod tests {
     /// organization policy actually gets to a minted sub-leg's agent: the orchestrator resolves
     /// it once per turn and hands it to every tool, but if `call` failed to apply it the turn
     /// still succeeds and the policy is simply, silently absent.
+    ///
+    /// Appended as a SEPARATE part, never spliced into the model's own wording — same
+    /// representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
+    /// `nasiko_agent_proxy::context_part::append_context_part`. The exact array (not just a
+    /// partial match on part 0) is what actually pins that the query stays untouched AND the
+    /// policy lands as an additional part, not merged into it.
     #[tokio::test]
     async fn an_outbound_prefix_is_appended_as_its_own_message_part() {
-        // Appended as a SEPARATE part, never spliced into the model's own wording — same
-        // representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
-        // `nasiko_agent_proxy::context_part::append_context_part`. The exact array (not just a
-        // partial match on part 0) is what actually pins that the query stays untouched AND the
-        // policy lands as an additional part, not merged into it.
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/")
