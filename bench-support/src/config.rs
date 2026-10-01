@@ -54,8 +54,6 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
     Config {
         bind: "127.0.0.1:0".into(),
         domain: None,
-        delegation_audience: "nasiko-cp-test".to_string(),
-        delegation_enabled: true,
         database_url,
         redis_url: redis_url(),
         agent_runtime: "simulated".into(),
@@ -81,15 +79,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         mcp_tool_search_mode: "none".into(),
         mcp_tool_search_tool_limit: 15,
         mcp_tool_search_meta_limit: 10,
-        mcp_gateway_instructions: String::new(),
-        // This literal is built directly, not through `Config::from_env` — so
-        // it bypasses that function's JWT_SECRET-derived fallback (which
-        // domain-separates with an `mcp-identity::` prefix; see
-        // `Config::from_env`'s own derivation in `nasiko-config`). Set directly to
-        // `BENCH_JWT_SECRET`'s own value, unprefixed.
-        mcp_identity_signing_key: BENCH_JWT_SECRET.to_string(),
         mcp_upload_max_bytes: 50 * 1024 * 1024,
-        mcp_gateway_max_body_bytes: 8 * 1024 * 1024,
         mcp_upload_default_port: 8080,
         mcp_servers_network: "nasiko-mcp-servers-net".into(),
         mcp_upload_max_replicas: 1,
@@ -122,8 +112,6 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         openai_api_key: Some("bench-dummy-key".into()),
         openai_base_url: Some(mock_llm_base_url.to_string()),
         openai_model: "mock-model".into(),
-        decomposer_api_url: None,
-        decomposer_api_key: None,
         router_model: "mock-model".into(),
         capability_generator_model: "mock-model".into(),
         mcp_description_model: "mock-model".into(),
@@ -156,9 +144,6 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         router_shortlist_threshold: 15,
         router_shortlist_size: 10,
         pacms_history_pool_size: 150,
-        savings_factor_refresh_secs: 86_400,
-        savings_factor_min_samples: 1_600,
-        savings_factor_window_days: 30,
         react_compress_enabled: false,
         react_compress_min_bytes: 2048,
         history_compress_enabled: false,

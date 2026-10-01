@@ -1,55 +1,9 @@
 use nasiko_utils::{env_bool, env_or, env_parse, required_env};
 
-/// The audience a control plane falls back to when nothing identifies its
-/// public origin. Fine for a standalone deployment; never unique across a
-/// fleet, which is why the assertion exchange refuses it.
-pub const DEFAULT_DELEGATION_AUDIENCE: &str = "nasiko-cp";
-
-fn nonempty_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-/// `scheme://host[:port]` of a URL, or `None` when it has no scheme.
-fn origin_of(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let host = rest.split(['/', '?', '#']).next()?.trim();
-    if host.is_empty() {
-        return None;
-    }
-    Some(format!("{scheme}://{host}"))
-}
-
-/// See [`Config::delegation_audience`].
-fn delegation_audience_from_env() -> String {
-    if let Some(explicit) = nonempty_env("NASIKO_CP_AUDIENCE") {
-        return explicit.trim_end_matches('/').to_string();
-    }
-    if let Some(domain) = nonempty_env("CP_DOMAIN") {
-        return origin_of(&domain).unwrap_or_else(|| format!("https://{domain}"));
-    }
-    if let Some(origin) = nonempty_env("APP_BASE_URL").and_then(|u| origin_of(&u)) {
-        return origin;
-    }
-    DEFAULT_DELEGATION_AUDIENCE.to_string()
-}
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: String,
     pub domain: Option<String>,
-    /// Audience string this control plane stamps into, and requires on,
-    /// delegated tokens (react/docs/adr/0001a). It is this deployment's public
-    /// origin: `NASIKO_CP_AUDIENCE`, else `https://<CP_DOMAIN>`, else the origin
-    /// of `APP_BASE_URL`, else [`DEFAULT_DELEGATION_AUDIENCE`]. Two workspaces
-    /// must never share one, so the cross-workspace (BFF assertion) path refuses
-    /// to run on the shared default — see `oss/server/src/auth/assertion.rs`.
-    pub delegation_audience: String,
-    /// Kill switch for `POST /api/auth/delegate` (default on). Existing
-    /// delegated tokens die within `DELEGATION_MAX_TTL_SECS` anyway.
-    pub delegation_enabled: bool,
     pub database_url: String,
     pub redis_url: String,
     pub agent_runtime: String,
@@ -93,10 +47,6 @@ pub struct Config {
     pub openai_api_key: Option<String>,
     pub openai_base_url: Option<String>,
     pub openai_model: String,
-    /// MAF "decompose one instruction into atomic sub-queries" service.
-    /// `None` disables `/maf/workflow/from-instruction` (503).
-    pub decomposer_api_url: Option<String>,
-    pub decomposer_api_key: Option<String>,
     pub router_model: String,
     pub capability_generator_model: String,
     /// Model for the MCP-connector description LLM fallback — only called when
@@ -196,13 +146,6 @@ pub struct Config {
     /// (PRD §9 IP-3). Shrinks what the loop carries, which also defers the
     /// context-compaction cliff. On by default — gated by the agent's own
     /// switch, so this is a fleet kill switch rather than an enabler.
-    /// How often the brevity holdout is re-analysed into a measured effect factor.
-    pub savings_factor_refresh_secs: u64,
-    /// Minimum samples **per arm** before a measured factor replaces the seeded one. Below this
-    /// the arm means are noise, and a noisy `fixture` figure is worse than an honest seed.
-    pub savings_factor_min_samples: i64,
-    /// Trailing window the holdout comparison reads.
-    pub savings_factor_window_days: i64,
     pub react_compress_enabled: bool,
     /// Skip tool results below this size.
     pub react_compress_min_bytes: usize,
@@ -339,11 +282,6 @@ pub struct Config {
     /// default 50 MiB — deliberately smaller than agents' 100 MiB default,
     /// since MCP servers are typically much smaller than full agent codebases.
     pub mcp_upload_max_bytes: u64,
-    /// Max request body size for the agent-facing MCP gateway routes
-    /// (`POST /api/mcp`, `POST /api/mcp/s/{token}`). MCP_GATEWAY_MAX_BODY_BYTES,
-    /// default 8 MiB — axum's own default of 2 MiB would reject the inline
-    /// `save_file` payloads a later task introduces.
-    pub mcp_gateway_max_body_bytes: usize,
     /// Port an uploaded MCP server container is expected to bind via `$PORT`.
     /// MCP_UPLOAD_DEFAULT_PORT, default 8080.
     pub mcp_upload_default_port: u16,
@@ -407,69 +345,6 @@ pub struct Config {
     pub mcp_tool_search_tool_limit: usize,
     /// Max tools returned by the `nasiko_search_tools` meta-tool.
     pub mcp_tool_search_meta_limit: usize,
-    /// The gateway's own sentence advertised in `initialize.instructions`,
-    /// ahead of any per-connector instructions (`oss/mcp-gateway/src/protocol.rs`).
-    /// MCP_GATEWAY_INSTRUCTIONS. Blank (unset or whitespace-only) means "let the
-    /// gateway crate apply its own default sentence" — deliberately carried here
-    /// as a raw, possibly-blank string rather than pre-defaulted, since the
-    /// default text lives in `oss/mcp-gateway` (a crate that syncs to the public
-    /// repo) and this crate must not duplicate it.
-    pub mcp_gateway_instructions: String,
-    /// HMAC key the gateway signs the `x-nasiko-identity` header with when
-    /// forwarding a caller's `(agent_id, user_id, flow_id)` to a system backend
-    /// (`oss/mcp-gateway/src/identity.rs`) — the backend trusts that header
-    /// instead of re-deriving who is calling. MCP_IDENTITY_SIGNING_KEY; falls
-    /// back to a value *derived* from the already-required `JWT_SECRET` when
-    /// unset/empty (domain-separated with an `mcp-identity::` prefix, not a
-    /// bare reuse — see `from_env`), so a deployment doesn't need to mint a
-    /// second secret just for this, without literally handing the session-JWT
-    /// key to whichever out-of-process backend this key gets configured into.
-    /// Empty only when both are unset, which `McpConfig::from_config` rejects
-    /// at startup with a clear message.
-    pub mcp_identity_signing_key: String,
-}
-
-/// Domain-separation prefix for the `JWT_SECRET`-derived fallback identity
-/// key (see [`derive_identity_signing_key`]) — the single source both this
-/// crate and `oss/mcp-gateway/src/config.rs` read, so the two never drift
-/// onto different literals (the gateway strips this exact prefix before
-/// measuring the fallback key's actual entropy for its short-key warning).
-pub const IDENTITY_KEY_PREFIX: &str = "mcp-identity::";
-
-/// `MCP_IDENTITY_SIGNING_KEY`, trimmed; when unset/blank, derives one from a
-/// trimmed `JWT_SECRET` with an [`IDENTITY_KEY_PREFIX`] domain-separation
-/// prefix — never a bare reuse of the session-JWT key, mirroring
-/// `oauth_state_signing_key`'s own `mcp-oauth-state::` prefix in
-/// `oss/mcp-gateway/src/config.rs`. The point of domain separation here is
-/// specifically that this key may end up configured into an out-of-process
-/// backend (e.g. the workspace server, a later consumer of
-/// `identity_signing_key`) — an operator handing that backend the platform's
-/// "identity key" must never be handing over the same key that also signs
-/// every session JWT. Empty only when `JWT_SECRET` is empty too, which
-/// `McpConfig::from_config` (`oss/mcp-gateway/src/config.rs`) rejects at
-/// startup with a clear message — this function does not fail fast itself,
-/// since `nasiko-config` has no such policy for values it merely carries.
-fn mcp_identity_signing_key() -> String {
-    let dedicated = std::env::var("MCP_IDENTITY_SIGNING_KEY").ok();
-    let jwt_secret = env_or("JWT_SECRET", "");
-    derive_identity_signing_key(dedicated.as_deref(), &jwt_secret)
-}
-
-/// Pure derivation behind [`mcp_identity_signing_key`], split out so the four
-/// cases below are unit-testable without touching the environment: a
-/// non-blank `dedicated` key (trimmed) always wins; otherwise a non-blank
-/// `jwt_secret` (trimmed) is domain-separated with the [`IDENTITY_KEY_PREFIX`]
-/// prefix; if both are blank the result is empty, which `McpConfig::from_config`
-/// rejects at startup.
-fn derive_identity_signing_key(dedicated: Option<&str>, jwt_secret: &str) -> String {
-    if let Some(key) = dedicated.map(str::trim).filter(|s| !s.is_empty()) {
-        return key.to_string();
-    }
-    let jwt_secret = jwt_secret.trim();
-    if jwt_secret.is_empty() {
-        return String::new();
-    }
-    format!("{IDENTITY_KEY_PREFIX}{jwt_secret}")
 }
 
 impl Config {
@@ -477,10 +352,6 @@ impl Config {
         Ok(Self {
             bind: env_or("CP_BIND", "0.0.0.0:8080"),
             domain: std::env::var("CP_DOMAIN").ok(),
-            delegation_audience: delegation_audience_from_env(),
-            delegation_enabled: std::env::var("DELEGATION_ENABLED")
-                .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
-                .unwrap_or(true),
             database_url: required_env("DATABASE_URL")?,
             redis_url: required_env("REDIS_URL")?,
             agent_runtime: env_or("AGENT_RUNTIME", "local"),
@@ -514,8 +385,6 @@ impl Config {
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
             openai_base_url: std::env::var("OPENAI_BASE_URL").ok(),
             openai_model: env_or("OPENAI_MODEL", "gpt-4o-mini"),
-            decomposer_api_url: std::env::var("MODEL_API_URL").ok(),
-            decomposer_api_key: std::env::var("MODEL_APIKEY").ok(),
             router_model: env_or("ROUTER_MODEL", "gpt-4o-mini"),
             capability_generator_model: env_or("CAPABILITY_GENERATOR_MODEL", "gpt-4o-mini"),
             mcp_description_model: env_or("MCP_DESCRIPTION_MODEL", "gpt-4o-mini"),
@@ -591,9 +460,6 @@ impl Config {
             router_shortlist_threshold: env_parse("ROUTER_SHORTLIST_THRESHOLD", 15),
             router_shortlist_size: env_parse("ROUTER_SHORTLIST_SIZE", 10),
             pacms_history_pool_size: env_parse("PACMS_HISTORY_POOL_SIZE", 150),
-            savings_factor_refresh_secs: env_parse("SAVINGS_FACTOR_REFRESH_SECS", 86_400),
-            savings_factor_min_samples: env_parse("SAVINGS_FACTOR_MIN_SAMPLES", 1_600),
-            savings_factor_window_days: env_parse("SAVINGS_FACTOR_WINDOW_DAYS", 30),
             react_compress_enabled: env_parse("TOKEN_COMPRESS_TOOL_RESULTS", true),
             react_compress_min_bytes: env_parse("TOKEN_COMPRESS_TOOL_RESULTS_MIN_BYTES", 2048),
             history_compress_enabled: env_parse("TOKEN_COMPRESS_HISTORY", true),
@@ -691,7 +557,6 @@ impl Config {
             mcp_perm_cache_ttl_seconds: env_parse("MCP_PERM_CACHE_TTL_SECONDS", 30),
             mcp_manifest_ttl_seconds: env_parse("MCP_MANIFEST_TTL_SECONDS", 300),
             mcp_upload_max_bytes: env_parse("MCP_UPLOAD_MAX_BYTES", 50 * 1024 * 1024),
-            mcp_gateway_max_body_bytes: env_parse("MCP_GATEWAY_MAX_BODY_BYTES", 8 * 1024 * 1024),
             mcp_upload_default_port: env_parse("MCP_UPLOAD_DEFAULT_PORT", 8080),
             mcp_servers_network: env_or("MCP_SERVERS_NETWORK", "nasiko-mcp-servers-net"),
             mcp_upload_max_replicas: env_parse("MCP_UPLOAD_MAX_REPLICAS", 1),
@@ -710,8 +575,6 @@ impl Config {
             mcp_tool_search_mode: env_or("MCP_TOOL_SEARCH_MODE", "semantic"),
             mcp_tool_search_tool_limit: env_parse("MCP_TOOL_SEARCH_TOOL_LIMIT", 15),
             mcp_tool_search_meta_limit: env_parse("MCP_TOOL_SEARCH_META_LIMIT", 10),
-            mcp_gateway_instructions: env_or("MCP_GATEWAY_INSTRUCTIONS", ""),
-            mcp_identity_signing_key: mcp_identity_signing_key(),
         })
     }
 
@@ -759,16 +622,6 @@ fn validate_secrets_key_format(key: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn origin_of_keeps_scheme_and_host_only() {
-        assert_eq!(
-            super::origin_of("https://acme.nasiko.dev/app?x=1"),
-            Some("https://acme.nasiko.dev".to_string())
-        );
-        assert_eq!(super::origin_of("acme.nasiko.dev"), None);
-        assert_eq!(super::origin_of("https:///app"), None);
-    }
-
     use super::*;
 
     #[test]
@@ -833,36 +686,6 @@ mod tests {
             openai_base_url_without_v1("https://example.com/openai/v1/proxy"),
             "https://example.com/openai/v1/proxy"
         );
-    }
-
-    #[test]
-    fn dedicated_identity_key_wins_and_is_trimmed() {
-        assert_eq!(
-            derive_identity_signing_key(Some("  dedicated-key  "), "jwt-secret"),
-            "dedicated-key"
-        );
-    }
-
-    #[test]
-    fn no_dedicated_key_falls_back_to_prefixed_trimmed_jwt_secret() {
-        assert_eq!(
-            derive_identity_signing_key(None, "  jwt-secret  "),
-            format!("{IDENTITY_KEY_PREFIX}jwt-secret")
-        );
-    }
-
-    #[test]
-    fn blank_dedicated_key_falls_through_to_jwt_secret() {
-        assert_eq!(
-            derive_identity_signing_key(Some("   "), "jwt-secret"),
-            format!("{IDENTITY_KEY_PREFIX}jwt-secret")
-        );
-    }
-
-    #[test]
-    fn both_blank_yields_empty_string() {
-        assert_eq!(derive_identity_signing_key(Some("  "), "  "), "");
-        assert_eq!(derive_identity_signing_key(None, ""), "");
     }
 }
 

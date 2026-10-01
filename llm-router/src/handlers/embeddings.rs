@@ -87,6 +87,7 @@ async fn embeddings_core(
 
     usage::spawn_log(
         ctx.db.clone(),
+        ctx.pricing.clone(),
         UsageRecord {
             // Billed to the flow's caller (strict attribution guarantees a
             // flow); the JWT's owner is only the no-user safety net.
@@ -106,6 +107,10 @@ async fn embeddings_core(
             finish_reason: None,
             flow_id: Some(attribution.flow_id.clone()),
             attribution_source: Some(attribution.source),
+            // Never compressed: this surface does not go through `chat_core`.
+            compress_metadata: None,
+            // Embeddings are not chat completions; IP-2 never runs here.
+            brevity_metadata: None,
             platform_paid: resolved.platform_paid,
         },
     );
@@ -170,6 +175,7 @@ mod tests {
                 config: self.config.clone(),
                 agent_pinned_model: None,
                 is_coding_agent: false,
+                compress_enabled: false,
             }))
         }
         async fn fetch_user_secret(&self, _: Uuid, _: &str) -> Result<Option<String>, sqlx::Error> {
@@ -219,6 +225,9 @@ mod tests {
             tier_registry: Arc::new(crate::routing::registry::test_support::StubRegistry),
             cell_store: Arc::new(crate::routing::InMemoryCellStore::new()),
             salience_gate: Arc::new(crate::routing::AllowAllGate),
+            pricing: Arc::new(nasiko_pricing::PricingEngine::new(
+                PgPool::connect_lazy("postgres://u:p@127.0.0.1:5999/none").unwrap(),
+            )),
         }
     }
 
