@@ -83,15 +83,7 @@ pub(crate) fn log_inbound_headers(entry: &str, headers: &HeaderMap) {
         .iter()
         .map(|(name, value)| {
             let n = name.as_str();
-            // The gateway's signed `x-nasiko-identity` header (`oss/mcp-gateway/
-            // src/identity.rs`) is redacted alongside the other credential-bearing
-            // headers — this logger isn't currently wired to the workspace route
-            // that header is forwarded to, but a header carrying a caller's
-            // identity must never be logged in plain text if it ever is.
-            let v = if n.eq_ignore_ascii_case("authorization")
-                || n.eq_ignore_ascii_case("cookie")
-                || n.eq_ignore_ascii_case(nasiko_mcp_gateway::identity::IDENTITY_HEADER)
-            {
+            let v = if n.eq_ignore_ascii_case("authorization") || n.eq_ignore_ascii_case("cookie") {
                 "<redacted>"
             } else {
                 value.to_str().unwrap_or("<non-utf8>")
@@ -1902,8 +1894,8 @@ async fn ensure_orchestrator_chat_session(
     };
 
     let _ = sqlx::query(
-        "INSERT INTO chat_sessions (session_id, user_id, agent_id, agent_url, title, session_type) \
-         VALUES ($1, $2, NULL, '/api/orchestrator/a2a', $3, 'orchestrator') \
+        "INSERT INTO chat_sessions (session_id, user_id, agent_id, agent_url, title) \
+         VALUES ($1, $2, NULL, '/api/orchestrator/a2a', $3) \
          ON CONFLICT (session_id) DO NOTHING",
     )
     .bind(context_id)
