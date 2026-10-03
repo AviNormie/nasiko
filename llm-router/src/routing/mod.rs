@@ -37,7 +37,7 @@ pub use cache::{CachedDecision, DecisionCache, NoopCache, RedisCache};
 pub use cells::{CellStore, InMemoryCellStore, PgCellStore};
 pub use classifier::{
     Classification, ClassifyError, ClassifyInput, GuardedClassifier, RegexClassifier,
-    RequestClassifier, RequestType, Tier, classify, classify_request_type, signal,
+    RequestClassifier, RequestType, Tier, classify, signal,
 };
 pub use registry::{PgTierRegistry, TierRegistry};
 pub use salience::{AllowAllGate, ClassifierSalienceGate, SalienceGate};

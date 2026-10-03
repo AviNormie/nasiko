@@ -28,7 +28,6 @@ use tower_http::decompression::RequestDecompressionLayer;
 
 pub mod auth;
 mod brevity;
-mod compact_tools;
 mod compress;
 pub mod config;
 pub mod error;
