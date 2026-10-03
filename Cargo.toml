@@ -4,7 +4,6 @@ members = [
     # ─── OSS crates ─────────────────────────────────────────────────────────
     "auth",
     "compress",
-    "tool-compact",
     "config",
     "secrets",
     "observability",
