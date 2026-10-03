@@ -65,14 +65,6 @@ pub struct GatewayConfig {
 
     /// Provider base URLs (overridable for tests / self-hosted gateways).
     pub openai_api_base: String,
-    /// Most function tools OpenAI's `/v1/chat/completions` accepts in one request; it
-    /// rejects a longer array outright (`array_above_max_length`), so an agent whose
-    /// tool set has grown past this — a coding client with several MCP servers
-    /// attached, say — fails every turn rather than degrading. Over the cap the
-    /// OpenAI spoke keeps the caller's own tools and fills the remainder with the MCP
-    /// tools most relevant to the turn. `0` disables the cap, for an
-    /// OpenAI-compatible endpoint that has none.
-    pub openai_max_tools: usize,
     pub anthropic_api_base: String,
     pub gemini_api_base: String,
     pub openrouter_api_base: String,
@@ -170,15 +162,6 @@ pub struct GatewayConfig {
     /// byte-identical to a build without it.
     pub brevity_holdout_pct: u8,
 
-    /// Replace native tool definitions with compact signatures and decode the model's compact
-    /// calls back into `tool_calls` (`nasiko-tool-compact`; non-streaming requests only).
-    ///
-    /// Defaults **off**, unlike the layers above: it changes what the model is asked to write, so
-    /// an operator opts in, and this flag alone turns it on (the per-agent `compress_enabled`
-    /// switch is not consulted). Off, requests and responses are byte-identical to a build
-    /// without it.
-    pub compact_tools_enabled: bool,
-
     /// Persist pre-compression originals so an agent can recover what was elided (IP-5).
     /// Defaults **on**; only ever writes a row when compression actually elided something, which
     /// requires the agent's switch, so an opted-out fleet stores nothing.
@@ -209,7 +192,6 @@ impl Default for GatewayConfig {
             model_catalog_sync_interval_secs: 86_400,
             pricing_sync_interval_secs: 86_400,
             openai_api_base: "https://api.openai.com/v1".into(),
-            openai_max_tools: 128,
             anthropic_api_base: "https://api.anthropic.com/v1".into(),
             gemini_api_base: "https://generativelanguage.googleapis.com/v1beta".into(),
             openrouter_api_base: "https://openrouter.ai/api/v1".into(),
@@ -235,7 +217,6 @@ impl Default for GatewayConfig {
             brevity_enabled: true,
             brevity_min_bytes: 0,
             brevity_holdout_pct: 5,
-            compact_tools_enabled: false,
             compress_recovery_enabled: true,
             compress_recovery_min_bytes: 8192,
             compress_recovery_ttl_secs: 86_400,
@@ -298,7 +279,6 @@ impl GatewayConfig {
                 d.pricing_sync_interval_secs,
             ),
             openai_api_base: env_or("OPENAI_API_BASE", &d.openai_api_base),
-            openai_max_tools: env_parse_first(&["OPENAI_MAX_TOOLS"], d.openai_max_tools),
             anthropic_api_base: env_or("ANTHROPIC_API_BASE", &d.anthropic_api_base),
             gemini_api_base: env_or("GEMINI_API_BASE", &d.gemini_api_base),
             openrouter_api_base: env_or("OPENROUTER_API_BASE", &d.openrouter_api_base),
@@ -353,7 +333,6 @@ impl GatewayConfig {
                 d.brevity_holdout_pct as usize,
             )
             .min(100) as u8,
-            compact_tools_enabled: env_flag("TOKEN_COMPACT_TOOLS", d.compact_tools_enabled),
             compress_recovery_enabled: env_flag(
                 "TOKEN_COMPRESS_RECOVERY",
                 d.compress_recovery_enabled,
