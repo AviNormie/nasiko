@@ -20,6 +20,23 @@
 //! native-tools request and add `native_calls`, for comparison), `LIVE_TIMEOUT_SECS` (default 60).
 //!
 //! A token summary (o200k_base, full request bodies) is printed to stderr.
+//!
+//! # Reference date: live mode only, on both sides
+//!
+//! The brief fixes "today" for live runs (`2026-10-02`, `Asia/Kolkata`) so relative dates resolve
+//! the same for everyone. That line belongs to the *eval*, not to compaction, so it is added only
+//! when a model is actually called, and then to the compact **and** the native request alike:
+//!
+//! * Offline (the token measurement), `compact_request` is the case's messages plus the compact
+//!   definitions and nothing else, so it compares like-for-like with the native baseline the
+//!   scorer builds from `tools` + `messages`. Adding the date there would charge the compact side
+//!   ~16 tokens per case that the baseline never pays (public sample: 35.0% instead of 42.7%).
+//! * Live, the same [`REFERENCE_TIME`] line leads the system message of every request sent,
+//!   compact and native, and the reported `compact_request` is exactly the body that was sent.
+//!
+//! Note on the public sample: `ct-002` expects "tomorrow 10am" as `2026-10-04T10:00:00+05:30`,
+//! one day after the brief's reference date. Every model we ran answers `2026-10-03`, natively and
+//! compactly alike. Nothing here special-cases it.
 
 use std::io::Write;
 use std::time::Duration;
@@ -52,7 +69,8 @@ fn main() {
     for case in data["cases"].as_array().into_iter().flatten() {
         let native_tools = select_tools(&catalog, &case["tools"]);
         let messages = case["messages"].as_array().cloned().unwrap_or_default();
-        let mut line = eval_case(case, &native_tools, &messages, &model);
+        let reference = live.as_ref().map(|_| REFERENCE_TIME);
+        let mut line = eval_case(case, &native_tools, &messages, &model, reference);
         tokens.add(
             &native_request(&model, &messages, &native_tools),
             &line["compact_request"],
@@ -85,8 +103,14 @@ fn main() {
     tokens.report();
 }
 
-/// One `cases[]` line.
-fn eval_case(case: &Value, native_tools: &[Value], messages: &[Value], model: &str) -> Value {
+/// One `cases[]` line. `reference` is the date line, set only in live mode (see module docs).
+fn eval_case(
+    case: &Value,
+    native_tools: &[Value],
+    messages: &[Value],
+    model: &str,
+    reference: Option<&str>,
+) -> Value {
     let tools = to_tool_defs(native_tools);
     let compact = if native_tools.iter().all(is_function_tool) {
         encode_tools(&tools)
@@ -100,7 +124,10 @@ fn eval_case(case: &Value, native_tools: &[Value], messages: &[Value], model: &s
     line.insert("id".into(), case["id"].clone());
     match compact {
         Ok(compact) => {
-            let system = format!("{REFERENCE_TIME}\n{}", compact.system_prompt());
+            let system = match reference {
+                Some(date) => format!("{date}\n{}", compact.system_prompt()),
+                None => compact.system_prompt(),
+            };
             let rendered = render_calls(&expected_calls(case));
             line.insert("compacted".into(), json!(true));
             line.insert(
@@ -123,7 +150,9 @@ fn eval_case(case: &Value, native_tools: &[Value], messages: &[Value], model: &s
         Err(e) => {
             // Bypass: send native tools unchanged (scored as 0% savings).
             let mut request = native_request(model, messages, native_tools);
-            request["messages"] = Value::Array(with_system(REFERENCE_TIME.into(), messages));
+            if let Some(date) = reference {
+                request["messages"] = Value::Array(with_system(date.into(), messages));
+            }
             line.insert("compacted".into(), json!(false));
             line.insert("bypass_reason".into(), json!(e.to_string()));
             line.insert("compact_request".into(), request);
