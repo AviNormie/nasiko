@@ -418,27 +418,23 @@ describe('status row: checking', () => {
 })
 
 describe('footer', () => {
-  it('has the account and no Theme row; Settings is the Organization group’s item', async () => {
+  it('has the account and no Settings or Theme row (Settings opens from the account menu)', async () => {
     renderApp('/agents')
-    const main = await screen.findByRole('navigation', { name: 'Main' })
-    expect(within(main).getByRole('link', { name: 'Settings' })).toHaveAttribute(
-      'href',
-      '/settings',
-    )
+    await screen.findByRole('navigation', { name: 'Main' })
+    expect(within(sidebar()).queryByRole('link', { name: 'Settings' })).toBeNull()
     expect(within(sidebar()).queryByRole('button', { name: 'Theme' })).toBeNull()
   })
 
-  it('the account menu has Theme, Account settings and Sign out', async () => {
+  it('the account menu has Theme, Settings and Sign out', async () => {
     const { router } = renderApp('/agents')
     await openAccountMenu()
     expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent?.trim())).toEqual([
       'Theme',
-      'Account settings',
+      'Settings',
       'Sign out',
     ])
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Account settings' }))
-    // The account's own settings; the workspace's are the Organization group's Settings.
-    await waitFor(() => expect(router.state.location.pathname).toBe('/account/appearance'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Settings' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'))
   })
 
   it('the account menu’s Theme submenu sets mode and colour theme, and stays open between picks', async () => {
@@ -458,8 +454,8 @@ describe('footer', () => {
     setTheme('system')
   })
 
-  it('Account settings → Appearance: its Mode and Theme radio groups set the theme', async () => {
-    renderApp('/account/appearance')
+  it('Settings → Appearance: its Mode and Theme radio groups set the theme', async () => {
+    renderApp('/settings/appearance')
     const mode = await screen.findByRole('radiogroup', { name: 'Mode' })
     const theme = screen.getByRole('radiogroup', { name: 'Theme' })
     expect(
@@ -521,19 +517,16 @@ describe('drill-in panel (one sidebar on Chat and Settings)', () => {
     )
   })
 
-  it('shows no Settings sections beside the page under Main menu; the Settings nav item brings them back', async () => {
+  it('shows no Settings sections beside the page under Main menu; the account menu’s Settings brings them back', async () => {
     wide()
     renderApp('/settings')
     await userEvent.click(await screen.findByRole('button', { name: 'Back to main menu' }))
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Settings sections' })).toBeNull()
     expect(screen.getByRole('heading', { level: 1, name: 'General' })).toBeInTheDocument()
-    // The current nav item brings the sections back, as it does for Chat.
-    await userEvent.click(
-      within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', {
-        name: 'Settings',
-      }),
-    )
+    // The account menu's Settings brings the sections back, as the current nav item does for Chat.
+    await openAccountMenu()
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Settings' }))
     const sections = await screen.findByRole('navigation', { name: 'Settings sections' })
     expect(sidebar()).toContainElement(sections)
     await waitFor(() =>

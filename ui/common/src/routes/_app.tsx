@@ -1,7 +1,5 @@
-import { skipToken, useQuery } from '@tanstack/react-query'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
-import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
 import { BuildToasts } from '@/features/deploy/components/BuildToasts'
 import { copy as deployCopy } from '@/features/deploy/copy'
@@ -40,20 +38,14 @@ export const Route = createFileRoute('/_app')({
   component: AppLayout,
 })
 
-const NONE: readonly string[] = []
-
 /** The shell plus the feature pieces it shows on every page (the shell itself never imports a feature). */
 function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
-  const guideHidden = useGuideHiddenNav()
-  // A layer's own hidden items (EE: Access control for members).
-  const navHidden = useSlots().navHidden
-  const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
-  const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
+  const hidden = useGuideHiddenNav()
   return (
     <AppShell
       end={<BuildToasts />}
-      hidden={[...guideHidden, ...layerHidden]}
+      hidden={hidden}
       badges={
         building
           ? { '/agents': { count: building, label: deployCopy.toast.agentsBadge(building) } }

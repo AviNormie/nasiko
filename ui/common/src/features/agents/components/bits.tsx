@@ -188,7 +188,7 @@ export function Section({
   children,
   className,
 }: {
-  title: ReactNode
+  title: string
   subtitle?: ReactNode
   action?: ReactNode
   children: ReactNode

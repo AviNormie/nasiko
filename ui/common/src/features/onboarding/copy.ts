@@ -120,21 +120,19 @@ export const copy = {
       'Agents re-send a lot of text they do not need: raw tool output, the whole conversation so far, long answers. Each switch below removes one of those before the call reaches the model. Your own messages are never changed.',
     items: [
       {
-        // Programs carry their internal names in brackets (plans/feat-optimization-page.md B12).
-        title: 'Smaller prompts (Caveman)',
-        line: 'Trims bulky tool output — logs, JSON, diffs — down to what the model actually needs.',
-        where: 'Agent → Settings → Token optimization (Caveman)',
+        title: 'Smaller prompts',
+        line: 'Trims bulky tool output like logs, JSON and diffs to what the model actually needs.',
+        where: 'Agent → Settings → Token optimization',
       },
       {
         title: 'Shorter chat history',
         line: 'Carries a relevant slice of the conversation on each message instead of all of it.',
-        // Chat context moved to the Optimization page (integration 2026-10-05, ledger B11).
-        where: 'Optimization → Your settings (PACMS, Top-K or Last-K)',
+        where: 'Settings → Chat context',
       },
       {
-        title: 'Less code written (Ponytail)',
+        title: 'Less code written',
         line: 'For coding agents: check for an existing solution before writing new code.',
-        where: 'Agent → Settings → Coding agent behavior → Minimal-code mode (Ponytail)',
+        where: 'Agent → Settings → Coding agent behavior',
       },
     ],
     beta: 'All of these are new and still being tuned. Turn one on for a single agent first — every switch is reversible and takes effect on the next message.',

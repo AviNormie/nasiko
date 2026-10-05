@@ -16,7 +16,6 @@ import { ADMIN_ID } from '@/mocks/seed-harness'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { recordRequestBodies, recordRequests, server } from '@/test/setup'
-import { copy as mcpCopy, STANCE } from '@/features/mcp/copy'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -301,7 +300,7 @@ describe('settings', () => {
     const rec = recordRequestBodies()
     renderApp(url(2, 'settings'))
     const section = await screen.findByRole('region', { name: 'Coding agent behavior' })
-    const ladder = within(section).getByRole('switch', { name: 'Minimal-code mode (Ponytail)' })
+    const ladder = within(section).getByRole('switch', { name: 'Minimal-code mode' })
     const review = within(section).getByRole('switch', { name: 'Self-review' })
     expect(review).toBeDisabled()
 
@@ -322,7 +321,7 @@ describe('settings', () => {
     // three sections cannot drift into three different degrees of caution.
     renderApp(url(1, 'settings'))
     const features = await screen.findByRole('region', { name: 'Features' })
-    const tokens = screen.getByRole('region', { name: 'Token optimization (Caveman)' })
+    const tokens = screen.getByRole('region', { name: 'Token optimization' })
     for (const section of [features, tokens]) {
       const badge = within(section).getByLabelText(/^Beta\./)
       expect(badge).toHaveTextContent('Beta')
@@ -334,7 +333,7 @@ describe('settings', () => {
     const rec = recordRequestBodies()
     renderApp(url(1, 'settings'))
     const features = await screen.findByRole('region', { name: 'Features' })
-    expect(screen.getByRole('region', { name: 'Token optimization (Caveman)' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Token optimization' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Coding agent behavior' })).toBeNull()
     const prompt = within(features).getByRole('switch', { name: 'Prompt comments' })
     expect(prompt).not.toBeChecked()
@@ -350,7 +349,7 @@ describe('settings', () => {
   it('self-review is a child of minimal-code mode: off and locked until its parent is on', async () => {
     renderApp(url(2, 'settings'))
     const section = await screen.findByRole('region', { name: 'Coding agent behavior' })
-    const minimal = within(section).getByRole('switch', { name: 'Minimal-code mode (Ponytail)' })
+    const minimal = within(section).getByRole('switch', { name: 'Minimal-code mode' })
     const review = within(section).getByRole('switch', { name: 'Self-review' })
     expect(minimal).not.toBeChecked()
     expect(review).not.toBeChecked()
@@ -679,7 +678,7 @@ describe('Try it (chat plan §9)', () => {
 })
 
 describe('more states (plan §10)', () => {
-  it('a coding harness shows Overview and MCP and points at Harnesses', async () => {
+  it('a coding harness shows Overview only and points at Harnesses', async () => {
     const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
       id: string
       tags?: string[]
@@ -687,58 +686,12 @@ describe('more states (plan §10)', () => {
     const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
     renderApp(`/agents/${harness.id}`)
     await title()
-    expect(tabNames()).toEqual(['Overview', 'MCP'])
+    expect(tabNames()).toEqual(['Overview'])
     expect(screen.getByRole('link', { name: /See usage on Harnesses/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/harnesses'),
     )
     expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
-  })
-
-  it('a coding harness Overview carries the Token optimization switch for its owner (eng D10)', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
-    renderApp(`/agents/${harness.id}`)
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    expect(sw).toHaveAccessibleDescription(
-      `${copy.tokenOptimizationHint} ${copy.tokenOptimizationHarness}`,
-    )
-    expect(tabNames()).toEqual(['Overview', 'MCP'])
-  })
-
-  it('a coding harness’s MCP tab lists servers for its owner, like any agent', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
-    renderApp(`/agents/${harness.id}?tab=mcp`)
-    expect(await screen.findByText(mcpCopy.agentMcpSubHarness)).toBeInTheDocument()
-    // No Ask: a harness call has no flow, so the gateway stores no approval to answer (PR #631 reverted f5cb65e7).
-    await userEvent.click(await screen.findByRole('button', { name: mcpCopy.expand('GitHub') }))
-    const groups = await screen.findAllByRole('radiogroup')
-    for (const g of groups) {
-      expect(within(g).getByRole('radio', { name: STANCE.allow.label })).toBeInTheDocument()
-      expect(within(g).queryByRole('radio', { name: STANCE.ask.label })).toBeNull()
-    }
-  })
-
-  it('a harness its viewer can’t manage shows no Token optimization switch', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      owner_id: string
-      tags?: string[]
-    }[]
-    // A harness someone else owns, opened by a plain member (the non-manager test's persona).
-    configureMocks({ seed, now, loggedIn: true, persona: 'sam' })
-    const me = (await (await fetch('/api/me')).json()) as { sub: string }
-    const harness = rows.find((a) => a.tags?.includes('coding-agent') && a.owner_id !== me.sub)!
-    renderApp(`/agents/${harness.id}`)
-    await title()
-    expect(screen.queryByRole('switch', { name: copy.tokenOptimizationSwitch })).toBeNull()
   })
 
   it('View raw shows the unnormalized detail as text', async () => {
@@ -756,37 +709,6 @@ describe('more states (plan §10)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByText('Saved')).toBeInTheDocument()
     expect(await title()).toHaveTextContent('Renamed Bot')
-  })
-
-  it('Token optimization saves on flip with PUT {compress_enabled} (plans/feat-context-optimization.md E1)', async () => {
-    const rec = recordRequestBodies()
-    renderApp(url(1, 'settings'))
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    // Seed agent 1 has compression off (agents mock: i % 3 === 1).
-    expect(sw).not.toBeChecked()
-    expect(sw).toHaveAccessibleDescription(copy.tokenOptimizationHint)
-    await userEvent.click(sw)
-    expect(sw).toBeChecked()
-    await waitFor(() => expect(rec.requests.some((r) => r.method === 'PUT')).toBe(true))
-    await rec.flush()
-    // Only the switch: the update is COALESCE per field, so anything else sent would overwrite it.
-    expect(
-      rec.requests.filter((r) => r.method === 'PUT').map((r) => [r.url.pathname, r.body]),
-    ).toEqual([[`/api/agents/${agent(1).id}`, { compress_enabled: true }]])
-    const detail = (await (await fetch(`/api/agents/${agent(1).id}`)).json()) as {
-      data?: { compress_enabled?: boolean }
-      compress_enabled?: boolean
-    }
-    expect(detail.data?.compress_enabled ?? detail.compress_enabled).toBe(true)
-  })
-
-  it('Token optimization rolls back with a toast when the save fails', async () => {
-    server.use(http.put('/api/agents/:id', () => HttpResponse.text('forbidden', { status: 403 })))
-    renderApp(url(1, 'settings'))
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    await userEvent.click(sw)
-    expect(await screen.findByText(copy.tokenOptimizationFailed('forbidden'))).toBeInTheDocument()
-    await waitFor(() => expect(sw).not.toBeChecked())
   })
 
   it('the Public toggle waits for the server', async () => {

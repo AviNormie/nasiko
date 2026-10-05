@@ -151,15 +151,11 @@ describe('first-run guide', () => {
     const step = await screen.findByRole('heading', { name: 'Cut what your agents spend' })
     expect(step).toBeInTheDocument()
     // Each switch is named for what it trims, with the path to find it.
-    for (const name of [
-      'Smaller prompts (Caveman)',
-      'Shorter chat history',
-      'Less code written (Ponytail)',
-    ]) {
+    for (const name of ['Smaller prompts', 'Shorter chat history', 'Less code written']) {
       expect(screen.getByText(name)).toBeInTheDocument()
     }
     expect(screen.getByText(/Agent → Settings → Token optimization/)).toBeInTheDocument()
-    expect(screen.getByText(/Optimization → Your settings/)).toBeInTheDocument()
+    expect(screen.getByText(/Settings → Chat context/)).toBeInTheDocument()
     expect(screen.getByText(/still being tuned/)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Open agent settings' }))
