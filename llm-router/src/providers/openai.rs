@@ -17,7 +17,7 @@ use super::dialect::ProviderDialect;
 use super::sse::sse_data_stream;
 use super::{ProviderClient, ProviderError};
 use crate::ir::{ChatChunk, ChatRequest, ChatResponse, EmbeddingsRequest, EmbeddingsResponse};
-use crate::resolver::{ResolvedConfig, ResolvedEmbeddingConfig};
+use crate::resolver::ResolvedConfig;
 
 pub struct OpenAiProvider {
     http: reqwest::Client,
@@ -206,7 +206,7 @@ impl ProviderClient for OpenAiProvider {
     async fn embeddings(
         &self,
         req: &EmbeddingsRequest,
-        cfg: &ResolvedEmbeddingConfig,
+        cfg: &ResolvedConfig,
     ) -> Result<EmbeddingsResponse, ProviderError> {
         let mut out = req.clone();
         out.model = Some(cfg.model.clone());
@@ -616,10 +616,7 @@ mod tests {
         let req: crate::ir::EmbeddingsRequest =
             serde_json::from_value(json!({ "model": "whatever", "input": "hi" })).unwrap();
         let resp = provider
-            .embeddings(
-                &req,
-                &ResolvedEmbeddingConfig::for_test("openai", "text-embedding-3-small", "sk-test"),
-            )
+            .embeddings(&req, &resolved("text-embedding-3-small", None))
             .await
             .unwrap();
         assert_eq!(resp.model, "text-embedding-3-small"); // bare resolved

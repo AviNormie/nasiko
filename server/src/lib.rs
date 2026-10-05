@@ -18,7 +18,6 @@ pub mod chat;
 pub mod coding_agent_otlp;
 pub mod coding_agent_telemetry;
 pub mod context_selection;
-pub mod embedding_change;
 pub mod flows;
 pub mod github;
 pub mod hitl;
