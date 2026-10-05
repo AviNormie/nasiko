@@ -254,13 +254,27 @@ pub async fn a2a_dispatch_handler(
         if !crate::acl::can_access_agent(&state, &claims, agent.id).await {
             return Err(A2aDispatchError::AgentNotFound(target.to_string()));
         }
-        // Supplemental per-agent context (L1A) is no longer injected here: it now rides the EE
-        // injection proxy, which sits on every outbound forward `forwarding_endpoint()` resolves
-        // to — including this one — so injecting it a second time in-process here would double
-        // it up. Organization policy (L0) is unrelated to that seam — the proxy never reads
-        // `org_context()` — so it still has to be folded in here, appended as its own message
-        // part inside `agent_stream` (never spliced into `query`'s text — see
-        // `append_org_policy_part`): `agent_stream` persists/traces `query` verbatim
+        // Supplemental context for this one, already-chosen agent, ranked against the real
+        // query text (in addition to any pinned content) — a no-op on OSS. Kept in a separate
+        // `outbound_query` local, distinct from `query`: `agent_stream` persists/traces `query`
+        // verbatim (`flows.title`, `gen_ai.input.messages`) and must never record injected
+        // context as if the user had typed it — see `crate::prompt_context` module docs.
+        // Same "## Known facts" framing the routed path uses (below) so the agent can tell
+        // injected admin knowledge apart from the user's own message by structure, not just by
+        // reading closely — consistent provenance cues on both injection paths.
+        let with_facts = match state
+            .prompt_context
+            .context_for_agent(agent.id, &query)
+            .await
+        {
+            Some(context) => format!("## Known facts about this agent\n{context}\n\n{query}"),
+            None => query.clone(),
+        };
+        // Organization policy goes ahead of the agent's own knowledge, which goes ahead of the
+        // conversation: the ordering IS the precedence, since nothing downstream re-ranks these
+        // against each other — whatever the agent reads last is qualified by what it read first.
+        // Appended as its own message part inside `agent_stream` (never spliced into `with_facts`'
+        // text — see `append_org_policy_part`): `agent_stream` persists/traces `query` verbatim
         // (`flows.title`, `gen_ai.input.messages`) and must never record injected context as if
         // the user had typed it — see `crate::prompt_context` module docs.
         let org_context = state.prompt_context.org_context().await;
@@ -268,6 +282,7 @@ pub async fn a2a_dispatch_handler(
             &state,
             agent,
             &query,
+            &with_facts,
             org_context.as_deref(),
             &task_id,
             &context_id,
@@ -405,31 +420,6 @@ pub(crate) struct OrchestratorTurn<'a> {
     pub(crate) kind: TurnKind,
 }
 
-/// Assembles the routed path's preamble in strict precedence order — L0 (org policy) outranks
-/// L1A (per-agent facts) outranks L2 (per-user recall) — by construction: each layer is placed
-/// ahead of the ones that follow it in the text, so nothing downstream has to re-rank them.
-/// `None` at every layer (the common case: OSS, or an EE deployment with nothing configured or
-/// recalled yet) must return `None`, not an empty string, so `OrchestratorConfig.preamble` stays
-/// exactly what it was before any of these three seams existed.
-fn build_preamble(
-    org_context: Option<&str>,
-    agent_facts: Option<&str>,
-    user_context: Option<&str>,
-) -> Option<String> {
-    let user_section = user_context.map(|user| format!("## What you know about this user\n{user}"));
-    let agent_and_user = match (agent_facts, user_section.as_deref()) {
-        (None, None) => None,
-        (Some(facts), None) => Some(facts.to_string()),
-        (None, Some(user)) => Some(user.to_string()),
-        (Some(facts), Some(user)) => Some(crate::prompt_context::prefixed(Some(facts), user)),
-    };
-    match (org_context, agent_and_user) {
-        (None, facts) => facts,
-        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
-        (Some(org), None) => Some(org.to_string()),
-    }
-}
-
 pub(crate) async fn orchestrator_stream(
     state: &AppState,
     turn: OrchestratorTurn<'_>,
@@ -500,20 +490,15 @@ pub(crate) async fn orchestrator_stream(
 
     let mut agents: Vec<AgentInfo> = Vec::new();
     for summary in &agent_summaries {
-        let target = match resolve_endpoint(state, &summary.id.to_string(), &summary.name).await {
-            Ok(target) => target,
+        let endpoint = match resolve_endpoint(state, &summary.id.to_string(), &summary.name).await {
+            Ok(url) => url,
             Err(_) => continue,
         };
         agents.push(AgentInfo {
             id: summary.id.to_string(),
             name: summary.name.clone(),
             description: summary.description.clone(),
-            endpoint: target.url,
-            // A minted ReAct sub-leg's own outbound call (`A2aTool::call`, a lower-level crate
-            // with no path back to this function) must present the same credential this listing
-            // resolved for `endpoint` — carried on `AgentInfo` itself since that call happens in a
-            // different crate entirely, long after this listing is built.
-            auth_header: target.headers.into_iter().next(),
+            endpoint,
             skills: summary
                 .skills
                 .iter()
@@ -544,14 +529,14 @@ pub(crate) async fn orchestrator_stream(
     // directly, or route with that context already in hand. A no-op on OSS
     // (`NoopPromptContextProvider`); see `crate::prompt_context`.
     //
-    // This reaches only the *planner's own* preamble, and that's now permanent rather than a v1
-    // gap: a minted sub-leg's actual outbound request (built in `nasiko-react-agent`'s
-    // `A2aTool::call()`, a lower-level OSS crate with no path to this EE-installed context)
-    // carries its own L1A separately, injected by the EE injection proxy that
-    // `forwarding_endpoint()` routes every outbound forward through — see
-    // `ee/server/src/injection_proxy.rs`. The planner preamble can't move to that proxy because
-    // it isn't an outbound forward at all; it's text folded into the LLM's own prompt before any
-    // agent is chosen.
+    // Known scope limit (v1, deliberate): this only reaches the *planner's own* preamble — a
+    // minted sub-leg's actual outbound request to the chosen agent (built in
+    // `nasiko-react-agent`'s `AgentTool::call()`, a lower-level OSS crate with no path to this
+    // EE-installed context) does NOT itself carry the target agent's L1A. The planner may relay
+    // some of what it saw into the sub-task text it writes, but that's LLM-mediated, not
+    // guaranteed. Closing this needs either threading the injection seam down into
+    // `nasiko-react-agent`, or a proxy that injects on the minted sub-leg directly — real,
+    // separate scope, not something this call site can add on its own.
     // From `agents` (the post-endpoint-resolution roster actually rendered below), not
     // `agent_summaries` — looking up context for a candidate that gets dropped for having no
     // endpoint would waste a domain lookup (and possibly an embedding call) on an id the
@@ -578,13 +563,6 @@ pub(crate) async fn orchestrator_stream(
         Some(text)
     };
 
-    // User-scoped recall — unlike `agent_facts` above, not tied to any candidate agent, so it is
-    // the one channel that reaches a **zero-leg** answer (the planner responds directly, without
-    // delegating): a minted sub-leg's own outbound call carries no path back to this trait, and a
-    // zero-leg turn never reaches one at all. `None` on OSS and on an EE deployment with nothing
-    // user-scoped to add yet — see `PromptContextProvider::context_for_user`.
-    let user_context = state.prompt_context.context_for_user(user_id, query).await;
-
     // Organization-wide context, resolved once for the whole turn. It reaches the routed path
     // TWICE, and both are needed: the planner's own preamble, because a zero-leg turn is answered
     // by the planner and never reaches an agent at all; and `outbound_prefix`, because a minted
@@ -592,13 +570,16 @@ pub(crate) async fn orchestrator_stream(
     // resolution, two deliveries — a fan-out must not pay for this per leg.
     let org_context = state.prompt_context.org_context().await;
     // Captured before `org_context` is moved into the config below, so the span can report
-    // whether policy was in force on this turn.
+    // whether policy was in force on this turn, and how large it was: `org_applied` alone is a
+    // boolean, so a block that grew toward `MAX_POLICY_CHARS` would otherwise be invisible in
+    // observability.
     let org_applied = org_context.is_some();
-    let preamble = build_preamble(
-        org_context.as_deref(),
-        agent_facts.as_deref(),
-        user_context.as_deref(),
-    );
+    let org_policy_chars = org_context.as_deref().map(str::len).unwrap_or(0);
+    let preamble = match (org_context.as_deref(), agent_facts) {
+        (None, facts) => facts,
+        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
+        (Some(org), None) => Some(org.to_string()),
+    };
     // One read per turn, shared by IP-3 below. See `compression_opt_in` for why this is
     // aggregated over the caller's agents rather than read off a single one.
     let compression_opted_in = nasiko_orchestrator::compression_opt_in(&state.db, user_id).await;
@@ -645,6 +626,7 @@ pub(crate) async fn orchestrator_stream(
         gen_ai.agent.name = "orchestrator",
         session.id = %context_id,
         nasiko.prompt_context.org_applied = org_applied,
+        nasiko.prompt_context.org_policy_chars = org_policy_chars,
         gen_ai.input.messages = tracing::field::Empty,
         gen_ai.output.messages = tracing::field::Empty,
     );
@@ -1227,19 +1209,22 @@ fn append_org_policy_part(req: &mut JsonRpcRequest, org_context: Option<&str>) {
 async fn agent_stream(
     state: &AppState,
     agent: AgentRow,
-    // The user's actual message — persisted (`flows.title`), traced (`gen_ai.input.messages`),
-    // and sent to the agent verbatim as far as L1A is concerned: that per-agent injection now
-    // happens at the EE injection proxy instead, on every outbound forward `forwarding_endpoint()`
-    // resolves — including this one. Org-wide policy (L0) is a separate seam the proxy does not
-    // touch, so it is still folded in ahead of the real forward — appended as its own message
-    // part below (see `org_context`), never spliced into this text.
+    // The user's actual message — persisted (`flows.title`) and traced (`gen_ai.input.messages`)
+    // verbatim. Deliberately separate from `outbound_query`: anything server-injected (e.g.
+    // enterprise-only supplemental context, see `prompt_context` module docs) must reach the
+    // agent without also being recorded as "what the user said" in the flow UI or an
+    // observability/audit trail.
     query: &str,
+    // What's actually sent to the agent in the A2A request body's text part — `query`, or `query`
+    // with per-agent (L1A) context prepended. Never read for persistence/tracing.
+    outbound_query: &str,
     // Organization policy (L0), if any is currently configured. Appended as a separate `parts[]`
-    // entry on the outbound request rather than prepended to `query`'s text: `query` may already
-    // be history-glued with `session_history.rs`'s `"Current message: "` marker, and any agent
-    // that follows the platform's own documented convention for extracting just the current turn
-    // (`oss/llm-router::latest_user_query`) silently discards whatever was prepended ahead of that
-    // marker inside the same part. See `nasiko_agent_proxy::context_part`'s module doc.
+    // entry on the outbound request rather than prepended to `outbound_query`'s text: that text
+    // may already be history-glued with `session_history.rs`'s `"Current message: "` marker, and
+    // any agent that follows the platform's own documented convention for extracting just the
+    // current turn (`oss/llm-router::latest_user_query`) silently discards whatever was prepended
+    // ahead of that marker inside the same part. See `nasiko_agent_proxy::context_part`'s module
+    // doc.
     org_context: Option<&str>,
     task_id: &str,
     context_id: &str,
@@ -1263,10 +1248,13 @@ async fn agent_stream(
     // nasiko-coding-policy's minimal_code_addendum() doc comment.
     prior_turn_count: usize,
 ) -> Result<Response, A2aDispatchError> {
-    let target = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
+    let endpoint = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
         .await
         .map_err(A2aDispatchError::Internal)?;
     let org_applied = org_context.is_some();
+    // `org_applied` alone is a boolean — a block that grew toward `MAX_POLICY_CHARS` would
+    // otherwise be invisible in observability.
+    let org_policy_chars = org_context.map(str::len).unwrap_or(0);
 
     // Real root span for the direct-agent exchange — same rationale as the
     // orchestrator path: the forwarded traceparent must name an exported span.
@@ -1277,6 +1265,7 @@ async fn agent_stream(
         gen_ai.agent.name = %agent.name,
         session.id = %context_id,
         nasiko.prompt_context.org_applied = org_applied,
+        nasiko.prompt_context.org_policy_chars = org_policy_chars,
         gen_ai.input.messages = tracing::field::Empty,
         gen_ai.output.messages = tracing::field::Empty,
     );
@@ -1352,6 +1341,10 @@ async fn agent_stream(
     // 2026-09-22) to cost more per turn than not having the ladder on at all,
     // on exactly this kind of from-scratch task. See nasiko-coding-policy's
     // minimal_code_addendum() doc comment for the three-tier reasoning.
+    // Built from `outbound_query`, never from `query`: `outbound_query` is `query` plus any
+    // server-injected context (enterprise supplemental knowledge), and it is what the agent is
+    // meant to receive. Building from `query` here silently dropped that injection — the
+    // context was resolved on every dispatch and then thrown away.
     let effective_query =
         if agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills) {
             let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
@@ -1361,9 +1354,9 @@ async fn agent_stream(
                 prior_turn_count,
                 "a2a_dispatch: injecting minimal-code ladder"
             );
-            format!("{query}\n{addendum}")
+            format!("{outbound_query}\n{addendum}")
         } else {
-            query.to_string()
+            outbound_query.to_string()
         };
 
     // Streaming first (`message/stream`): agents that stream (all the Rust
@@ -1388,27 +1381,18 @@ async fn agent_stream(
     // its own deploy-time MCP_GATEWAY_TOKEN; the forwarded traceparent + the
     // flow_participants record written above carry the user binding.
     let build_agent_req = || {
-        let mut req = state
+        state
             .http_client
-            .post(&target.url)
+            .post(&endpoint)
             .header("A2A-Version", nasiko_types::a2a::A2A_VERSION_HEADER_VALUE)
-            .header(
-                nasiko_agent_proxy::headers::HEADER_TRACEPARENT,
-                crate::telemetry::traceparent_for(&flow_ctx),
-            )
+            .header("traceparent", crate::telemetry::traceparent_for(&flow_ctx))
             // Agent turns can legitimately run past the shared client's short
             // default (long tool calls, multi-step orchestration); override
             // per-request instead of raising the global default for every caller
             // of `state.http_client`.
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
-            ));
-        // Whatever `forwarding_endpoint()` asked to have attached (the injection proxy's own
-        // `Authorization` credential when memory is enabled; empty otherwise).
-        for (name, value) in &target.headers {
-            req = req.header(name, value);
-        }
-        req
+            ))
     };
 
     let response = build_agent_req()
@@ -2012,7 +1996,7 @@ pub(crate) async fn resolve_endpoint(
     state: &AppState,
     agent_id: &str,
     agent_name: &str,
-) -> Result<nasiko_runtime::ForwardTarget, String> {
+) -> Result<String, String> {
     // Containers are UUID-keyed (see `build_agent_spec`), so the runtime lookup
     // below needs `agent_id`, not `agent_name` — a name-keyed lookup always
     // misses. `agent_name` is kept only for the DB fallback query and error
@@ -2043,18 +2027,11 @@ pub(crate) async fn resolve_endpoint(
     };
 
     // Prefer live runtime endpoint (Docker port mapping can change on restart).
-    // `forwarding_endpoint()`, not `endpoint()`: this resolves the address an actual outbound
-    // A2A call goes to (a no-op alias for `endpoint()` on OSS/no-memory EE; the EE injection
-    // proxy's address when memory is enabled) — never the deploy-time persisted snapshot, which
-    // `resolve_agent_url` computes separately via plain `endpoint()`.
     let container_id = nasiko_runtime::ContainerId::from_uuid(agent_id);
-    match state.runtime.forwarding_endpoint(&container_id).await {
-        Ok(target) => {
-            let base = target.url.trim_end_matches('/');
-            return Ok(nasiko_runtime::ForwardTarget {
-                url: format!("{base}{path}"),
-                headers: target.headers,
-            });
+    match state.runtime.endpoint(&container_id).await {
+        Ok(endpoint) => {
+            let base = endpoint.trim_end_matches('/');
+            return Ok(format!("{base}{path}"));
         }
         Err(_) => {
             // Container not reachable via runtime — check if it's actually stopped.
@@ -2073,20 +2050,12 @@ pub(crate) async fn resolve_endpoint(
         }
     }
 
-    // Fall back to stored URL (e.g. external agents, K8s with stable DNS). Bypasses whatever
-    // `forwarding_endpoint()` would otherwise route through (the injection proxy, when memory is
-    // enabled), so this forward gets no L1A — worth a line in the logs, since a silent skip here
-    // looks identical to "L1A had nothing to say."
+    // Fall back to stored URL (e.g. external agents, K8s with stable DNS).
     if let Some(ref url) = stored_url
         && !url.is_empty()
     {
-        tracing::warn!(
-            %agent_id, %agent_name,
-            "resolve_endpoint: live runtime lookup failed, falling back to stored agents.url \
-             (bypasses the injection proxy — this forward gets no L1A)"
-        );
         let u = url.trim_end_matches('/');
-        return Ok(nasiko_runtime::ForwardTarget::from(format!("{u}{path}")));
+        return Ok(format!("{u}{path}"));
     }
 
     Err(format!("no endpoint found for agent '{agent_name}'"))
@@ -2505,69 +2474,10 @@ mod hitl_pause_tests {
     }
 }
 
-/// `build_preamble`'s only job is precedence ordering — L0 > L1A > L2 — over three independently
-/// optional inputs. Pure and DB-free, so every combination is cheap to pin hermetically without
-/// standing up `orchestrator_stream`'s full DB/state dependencies.
-#[cfg(test)]
-mod build_preamble_tests {
-    use super::*;
-
-    #[test]
-    fn nothing_configured_or_recalled_is_none_not_an_empty_string() {
-        // The common case (OSS, or an EE deployment with nothing to add yet) must leave
-        // `OrchestratorConfig.preamble` exactly `None`, not `Some(String::new())` — a caller that
-        // only checks `.is_some()` would otherwise start behaving as if something was injected.
-        assert_eq!(build_preamble(None, None, None), None);
-    }
-
-    #[test]
-    fn each_layer_alone_surfaces_on_its_own() {
-        assert_eq!(
-            build_preamble(Some("ORG"), None, None),
-            Some("ORG".to_string())
-        );
-        assert_eq!(
-            build_preamble(None, Some("FACTS"), None),
-            Some("FACTS".to_string())
-        );
-        assert_eq!(
-            build_preamble(None, None, Some("RECALL")),
-            Some("## What you know about this user\nRECALL".to_string())
-        );
-    }
-
-    #[test]
-    fn all_three_land_in_precedence_order_l0_then_l1a_then_l2() {
-        let preamble = build_preamble(Some("ORG"), Some("FACTS"), Some("RECALL")).unwrap();
-        let org_at = preamble.find("ORG").expect("org policy present");
-        let facts_at = preamble.find("FACTS").expect("agent facts present");
-        let user_at = preamble
-            .find("## What you know about this user")
-            .expect("user recall present");
-        assert!(
-            org_at < facts_at && facts_at < user_at,
-            "L0 must precede L1A must precede L2, got: {preamble:?}"
-        );
-    }
-
-    #[test]
-    fn user_recall_is_headed_but_agent_facts_are_not_double_headed() {
-        // `agent_facts` already carries its own "## Known facts..." heading from its own call
-        // site — `build_preamble` must not add a second one on top of it.
-        let preamble =
-            build_preamble(None, Some("## Known facts about specific agents\nX"), None).unwrap();
-        assert_eq!(
-            preamble.matches("##").count(),
-            1,
-            "agent_facts must not be re-headed: {preamble:?}"
-        );
-    }
-}
-
 /// `append_org_policy_part` is `agent_stream`'s half of the marker-splicing fix — the other half
-/// (L1A, at the EE injection proxy) is pinned by `ee/server/tests/injection_proxy.rs`. These
-/// don't need a live agent or the EE proxy: `append_org_policy_part` operates purely on an
-/// in-memory `JsonRpcRequest`, so they run hermetically.
+/// (`agent_proxy.rs`'s own delivery point) is pinned by its own tests. These don't need a live
+/// agent: `append_org_policy_part` operates purely on an in-memory `JsonRpcRequest`, so they run
+/// hermetically.
 #[cfg(test)]
 mod org_policy_part_tests {
     use super::*;
