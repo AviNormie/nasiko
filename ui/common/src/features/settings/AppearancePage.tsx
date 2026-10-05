@@ -5,6 +5,7 @@
  * name. The radio stays in the tile for keyboard and screen readers (visually hidden); the chosen tile has a ring and
  * a check mark, so the choice never relies on colour alone.
  */
+import { Check } from 'lucide-react'
 import { useId, type CSSProperties, type ReactNode } from 'react'
 import {
   ACCENTS,
@@ -19,10 +20,14 @@ import { PageHeader } from '@/components/shared/page-header'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
-import { Chosen } from './components/Chosen'
 import { SettingRow, SettingRows } from './components/SettingRow'
-import { PICTURE, TILE } from './components/tileStyles'
 import { copy } from './copy'
+
+/** The tile: the whole box is the label (the click target); its picture takes the ring when checked or focused. */
+// items-stretch: the Label primitive centres its children, which would shrink each picture to its content.
+const TILE = 'group flex cursor-pointer flex-col items-stretch gap-2 text-sm font-normal'
+const PICTURE =
+  'relative overflow-hidden rounded-lg border border-border transition-[border-color,box-shadow] group-hover:border-muted-foreground/50 group-has-[[data-state=checked]]:border-primary group-has-[[data-state=checked]]:ring-1 group-has-[[data-state=checked]]:ring-primary group-has-focus-visible:ring-2 group-has-focus-visible:ring-ring group-has-focus-visible:ring-offset-2 group-has-focus-visible:ring-offset-card motion-reduce:transition-none'
 
 export function AppearancePage() {
   const prefs = useThemePrefs()
@@ -38,7 +43,6 @@ export function AppearancePage() {
           stacked
         >
           <RadioGroup
-            data-tour="appearance-mode"
             aria-label={copy.appearance.mode}
             aria-describedby={`${id}-mode`}
             value={prefs.theme}
@@ -76,7 +80,6 @@ export function AppearancePage() {
           stacked
         >
           <RadioGroup
-            data-tour="appearance-theme"
             aria-label={copy.appearance.theme}
             aria-describedby={`${id}-theme`}
             value={prefs.accent}
@@ -119,6 +122,18 @@ function Caption({ children }: { children: ReactNode }) {
   return (
     <span className="px-0.5 text-muted-foreground group-has-[[data-state=checked]]:font-medium group-has-[[data-state=checked]]:text-foreground">
       {children}
+    </span>
+  )
+}
+
+/** The check in the chosen tile's corner (shape, not just the ring's colour). */
+function Chosen() {
+  return (
+    <span
+      aria-hidden
+      className="absolute top-1.5 right-1.5 hidden size-4.5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm group-has-[[data-state=checked]]:flex"
+    >
+      <Check className="size-3" strokeWidth={3} />
     </span>
   )
 }

@@ -3,7 +3,7 @@
  * happened, why, and one thing to do about it (X4).
  */
 export const copy = {
-  title: 'Coding harnesses',
+  title: 'Harnesses',
   subtitle: 'Coding harnesses connected to OpenRuntime',
   loading: 'Loading harness usage',
   registered: 'Registered',

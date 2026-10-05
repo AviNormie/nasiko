@@ -33,10 +33,9 @@ function filterParams(f: Filters) {
 }
 
 const tokenopsKeys = {
-  dashboard: (w: string, f: Filters, view: string, compare = false) =>
-    ['tokenops', 'dashboard', w, f, view, compare] as const,
-  timeseries: (w: string, f: Filters, shape = '') =>
-    ['tokenops', 'timeseries', w, f, shape] as const,
+  dashboard: (w: string, f: Filters, view: string) =>
+    ['tokenops', 'dashboard', w, f, view] as const,
+  timeseries: (w: string, f: Filters) => ['tokenops', 'timeseries', w, f] as const,
   calendar: (month: string, f: Filters) => ['tokenops', 'calendar', month, f] as const,
   day: (date: string, f: Filters) => ['tokenops', 'day', date, f] as const,
   topTraces: (w: string, f: Filters) => ['tokenops', 'top-traces', w, f] as const,
@@ -45,13 +44,8 @@ const tokenopsKeys = {
   providers: ['providers'] as const,
 }
 
-function dashboardPath(params: ApiWindowParams, f: Filters, view: string, compare: boolean) {
-  return withQuery(`${FINOPS}/dashboard`, {
-    ...params,
-    ...filterParams(f),
-    view,
-    ...(compare ? { compare: 'previous' } : {}),
-  })
+function dashboardPath(params: ApiWindowParams, f: Filters, view: string) {
+  return withQuery(`${FINOPS}/dashboard`, { ...params, ...filterParams(f), view })
 }
 
 export function dashboardQuery(
@@ -59,22 +53,15 @@ export function dashboardQuery(
   f: Filters,
   view: 'agent' | 'workflow',
   which: 'current' | 'previous',
-  /**
-   * Ask the server for each agent's preceding-window totals in the same
-   * response (`compare=previous`), instead of issuing a second whole dashboard
-   * request for the earlier window. Only meaningful with `which: 'current'` —
-   * the server compares against the window it was given.
-   */
-  compare = false,
 ) {
   const params = which === 'current' ? win.params : win.prevParams
   const windowKey =
     which === 'current'
       ? win.key
       : `prev|${win.prevStart.toISOString()}|${win.prevEnd.toISOString()}`
-  const path = dashboardPath(params, f, view, compare)
+  const path = dashboardPath(params, f, view)
   return queryOptions({
-    queryKey: tokenopsKeys.dashboard(windowKey, f, view, compare),
+    queryKey: tokenopsKeys.dashboard(windowKey, f, view),
     queryFn: ({ signal }) =>
       apiData<FinopsDashboardData>(path, { signal, schema: finopsDashboardSchema }),
     meta: { path },
@@ -87,53 +74,25 @@ export function useDashboard(
   view: 'agent' | 'workflow',
   which: 'current' | 'previous',
   enabled: boolean,
-  compare = false,
 ) {
   return useQuery({
-    ...dashboardQuery(win, f, view, which, compare),
+    ...dashboardQuery(win, f, view, which),
     placeholderData: keepPreviousData,
     enabled,
   })
 }
 
-/** Extra shapes the server can fold into one spend-timeseries response. */
-export interface TimeseriesShape {
-  /** Per-agent series for the top `top` spenders plus an `other` aggregate. */
-  groupByAgent?: boolean
-  top?: number
-  /** The preceding window of the same length, in the same response. */
-  compare?: boolean
-}
-
-export function timeseriesQuery(win: ResolvedWindow, f: Filters, shape: TimeseriesShape = {}) {
-  const path = withQuery(`${FINOPS}/spend-timeseries`, {
-    ...win.params,
-    ...filterParams(f),
-    ...(shape.groupByAgent ? { group_by: 'agent' } : {}),
-    ...(shape.groupByAgent && shape.top ? { top: String(shape.top) } : {}),
-    ...(shape.compare ? { compare: 'previous' } : {}),
-  })
+export function timeseriesQuery(win: ResolvedWindow, f: Filters) {
+  const path = withQuery(`${FINOPS}/spend-timeseries`, { ...win.params, ...filterParams(f) })
   return queryOptions({
-    // The shape changes the payload, so it has to be part of the key — two
-    // callers on the same window must not share a cache entry that is missing
-    // the series one of them needs.
-    queryKey: tokenopsKeys.timeseries(
-      win.key,
-      f,
-      `${shape.groupByAgent ? `agent:${shape.top ?? ''}` : ''}${shape.compare ? '+prev' : ''}`,
-    ),
+    queryKey: tokenopsKeys.timeseries(win.key, f),
     queryFn: ({ signal }) => apiData<FinopsSpendTimeseries>(path, { signal }),
     meta: { path },
   })
 }
 
-export function useTimeseries(
-  win: ResolvedWindow,
-  f: Filters,
-  enabled: boolean,
-  shape: TimeseriesShape = {},
-) {
-  return useQuery({ ...timeseriesQuery(win, f, shape), placeholderData: keepPreviousData, enabled })
+export function useTimeseries(win: ResolvedWindow, f: Filters, enabled: boolean) {
+  return useQuery({ ...timeseriesQuery(win, f), placeholderData: keepPreviousData, enabled })
 }
 
 export function calendarQuery(month: string, f: Filters) {
@@ -150,17 +109,14 @@ export function useCalendar(month: string, f: Filters, enabled: boolean) {
   return useQuery({ ...calendarQuery(month, f), placeholderData: keepPreviousData, enabled })
 }
 
-export function dayQuery(date: string | undefined, f: Filters) {
+export function useDay(date: string | undefined, f: Filters, enabled: boolean) {
   const path = withQuery(`${FINOPS}/spend-calendar/day`, { date, ...filterParams(f) })
-  return queryOptions({
+  return useQuery({
     queryKey: tokenopsKeys.day(date ?? '', f),
     queryFn: ({ signal }) => apiData<FinopsDayDrilldown>(path, { signal, schema: finopsDaySchema }),
+    enabled: enabled && !!date,
     meta: { path },
   })
-}
-
-export function useDay(date: string | undefined, f: Filters, enabled: boolean) {
-  return useQuery({ ...dayQuery(date, f), enabled: enabled && !!date })
 }
 
 /** PROPOSED endpoint — live servers return 404 until it exists (handled by the drawer). */
@@ -198,33 +154,19 @@ export function useProviders(enabled: boolean) {
  * Token-optimisation savings for the window. `scope` picks the rollup; every scope returns the
  * total and the category breakdown, so the panel needs one request rather than three.
  */
-export function savingsQuery(
-  win: ResolvedWindow,
-  f: Filters,
-  scope: 'total' | 'agent' | 'session',
-  /** Rows per breakdown (the server's default is 25, its maximum 200); part of the key, so reads never mix. */
-  limit?: number,
-) {
-  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope, limit })
-  return queryOptions({
-    queryKey: [...tokenopsKeys.savings(win.key, f, scope), limit ?? null],
-    queryFn: ({ signal }) => apiData<SavingsData>(path, { signal }),
-    meta: { path },
-  })
-}
-
 export function useSavings(
   win: ResolvedWindow,
   f: Filters,
   scope: 'total' | 'agent' | 'session',
   enabled: boolean,
-  /** Rows per breakdown (the server's default is 25, its maximum 200); part of the key, so reads never mix. */
-  limit?: number,
 ) {
+  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope })
   return useQuery({
-    ...savingsQuery(win, f, scope, limit),
+    queryKey: tokenopsKeys.savings(win.key, f, scope),
+    queryFn: ({ signal }) => apiData<SavingsData>(path, { signal }),
     placeholderData: keepPreviousData,
     enabled,
+    meta: { path },
   })
 }
 

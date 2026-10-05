@@ -1,3 +1,5 @@
+'use client'
+
 import { localPoint } from '@visx/event'
 import { ParentSize } from '@visx/responsive'
 import { scaleBand, scaleLinear } from '@visx/scale'

@@ -14,10 +14,8 @@ import { fmtMoney } from '@/lib/format'
 import { configureMocks } from '@/mocks/handlers'
 import { ADMIN_ID } from '@/mocks/seed-harness'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
-import { agentWhere } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequestBodies, recordRequests, server } from '@/test/setup'
-import { copy as mcpCopy, STANCE } from '@/features/mcp/copy'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -76,7 +74,7 @@ describe('resolving the URL', () => {
 })
 
 describe('tabs', () => {
-  it('a manager sees all eight tabs', async () => {
+  it('a manager sees all seven tabs', async () => {
     renderApp(url(0))
     await title()
     // Builds (plans/feat-deploy.md §6, design review 1) and MCP (plans/feat-mcp.md §5.2) joined the manage-only tabs.
@@ -88,8 +86,6 @@ describe('tabs', () => {
       'MCP',
       'Access',
       'Settings',
-      // Today's Overview facts, since the agent hub took the Overview (plans/feat-agent-centric.md PR1c).
-      'Details',
     ])
   })
 
@@ -100,11 +96,11 @@ describe('tabs', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({}))
   })
 
-  it('a non-manager sees four tabs and, on Details, who owns the agent', async () => {
+  it('a non-manager sees three tabs and who owns the agent', async () => {
     configureMocks({ seed, now, loggedIn: true, persona: 'sam' })
-    renderApp(url(0, 'details'))
+    renderApp(url(0, 'settings'))
     await title()
-    expect(tabNames()).toEqual(['Overview', 'Activity', 'Versions', 'Details'])
+    expect(tabNames()).toEqual(['Overview', 'Activity', 'Versions'])
     expect(
       await screen.findByText(/^Owned by .+ Only the owner or a superuser/),
     ).toBeInTheDocument()
@@ -126,8 +122,8 @@ describe('overview', () => {
     expect(await within(card).findByText(/worker exited with code 137/)).toBeInTheDocument()
   })
 
-  it('Details shows the active version and the call command', async () => {
-    renderApp(url(0, 'details'))
+  it('shows the active version and the call command', async () => {
+    renderApp(url(0))
     const section = await screen.findByRole('region', { name: 'Active version' })
     expect(await within(section).findByText(/registry\.local\//)).toBeInTheDocument()
     expect(screen.getByText(`nasiko chat --agent ${running.id} "hello"`)).toBeInTheDocument()
@@ -148,7 +144,7 @@ describe('overview', () => {
     const reqs = recordRequests()
     try {
       const hits = () => reqs.urls.filter((u) => u.pathname.endsWith('agent-card.json'))
-      renderApp(url(0, 'details'))
+      renderApp(url(0))
       await title()
       expect(hits()).toHaveLength(0)
       await userEvent.click(screen.getByText('Live agent card'))
@@ -319,7 +315,7 @@ describe('settings', () => {
     expect(put?.body).toMatchObject({ name: 'CODING_AGENT_SELF_REVIEW', value: 'false' })
   })
 
-  it('marks every optimization switch as beta, with the same caveat in each place', async () => {
+  it('marks every optimisation switch as beta, with the same caveat in each place', async () => {
     // These change what a model receives and what we claim they saved. Someone deciding whether to
     // flip one deserves to know the behaviour is young — and that it is reversible. Worded once so
     // three sections cannot drift into three different degrees of caution.
@@ -333,7 +329,7 @@ describe('settings', () => {
     }
   })
 
-  it('feature switches save at once; coding behavior shows only for a code-work card', async () => {
+  it('feature switches save at once; coding behaviour shows only for a code-work card', async () => {
     const rec = recordRequestBodies()
     renderApp(url(1, 'settings'))
     const features = await screen.findByRole('region', { name: 'Features' })
@@ -628,7 +624,7 @@ describe('owner-controlled text', () => {
 
   it('renders as text and never links or loads a javascript: URL', async () => {
     server.use(http.get(`/api/agents/${evil.id}`, () => HttpResponse.json({ data: evil })))
-    renderApp(`/agents/${evil.id}?tab=details`)
+    renderApp(`/agents/${evil.id}`)
     expect(await title()).toHaveTextContent('<img src=x onerror=alert(1)>')
     expect(screen.getByText('<script>alert(2)</script>')).toBeInTheDocument()
     expect(
@@ -639,16 +635,20 @@ describe('owner-controlled text', () => {
 })
 
 describe('Try it (chat plan §9)', () => {
-  it('a running agent links to Chat from the header, once', async () => {
-    renderApp(url(0, 'details'))
+  it('a running agent links to Chat from the header and from Call this agent', async () => {
+    renderApp(url(0))
     await title()
     const links = await screen.findAllByRole('link', { name: 'Try it' })
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveAttribute('href', `/chat?agent=${running.id}`)
+    expect(links).toHaveLength(2)
+    for (const l of links) expect(l).toHaveAttribute('href', `/chat?agent=${running.id}`)
   })
 
   it('a harness has no Try it', async () => {
-    renderApp(`/agents/${(await agentWhere((a) => !!a.tags?.includes('coding-agent'))).id}`)
+    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
+      id: string
+      tags?: string[]
+    }[]
+    renderApp(`/agents/${rows.find((a) => a.tags?.includes('coding-agent'))!.id}`)
     await title()
     expect(screen.queryByRole('link', { name: 'Try it' })).toBeNull()
   })
@@ -678,55 +678,24 @@ describe('Try it (chat plan §9)', () => {
 })
 
 describe('more states (plan §10)', () => {
-  it('a coding harness shows Overview and MCP and points at Coding harnesses', async () => {
-    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
+  it('a coding harness shows Overview only and points at Harnesses', async () => {
+    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
+      id: string
+      tags?: string[]
+    }[]
+    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
     renderApp(`/agents/${harness.id}`)
     await title()
-    expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
-    expect(screen.getByRole('link', { name: /See usage on Coding harnesses/ })).toHaveAttribute(
+    expect(tabNames()).toEqual(['Overview'])
+    expect(screen.getByRole('link', { name: /See usage on Harnesses/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/harnesses'),
     )
     expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
   })
 
-  it('a coding harness Overview carries the Token optimization switch for its owner, on the Optimization card (eng D10)', async () => {
-    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
-    renderApp(`/agents/${harness.id}`)
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    expect(sw).toHaveAccessibleDescription(
-      `${copy.tokenOptimizationHint} ${copy.tokenOptimizationHarness}`,
-    )
-    expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
-  })
-
-  it('a coding harness’s MCP tab lists servers for its owner, like any agent', async () => {
-    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
-    renderApp(`/agents/${harness.id}?tab=mcp`)
-    expect(await screen.findByText(mcpCopy.agentMcpSubHarness)).toBeInTheDocument()
-    // No Ask: a harness call has no flow, so the gateway stores no approval to answer (PR #631 reverted f5cb65e7).
-    await userEvent.click(await screen.findByRole('button', { name: mcpCopy.expand('GitHub') }))
-    const groups = await screen.findAllByRole('radiogroup')
-    for (const g of groups) {
-      expect(within(g).getByRole('radio', { name: STANCE.allow.label })).toBeInTheDocument()
-      expect(within(g).queryByRole('radio', { name: STANCE.ask.label })).toBeNull()
-    }
-  })
-
-  it('a harness its viewer can’t manage shows no Token optimization switch', async () => {
-    // A harness someone else owns, opened by a plain member (the non-manager test's persona).
-    configureMocks({ seed, now, loggedIn: true, persona: 'sam' })
-    const me = (await (await fetch('/api/me')).json()) as { sub: string }
-    const harness = await agentWhere(
-      (a) => !!a.tags?.includes('coding-agent') && a.owner_id !== me.sub,
-    )
-    renderApp(`/agents/${harness.id}`)
-    await title()
-    expect(screen.queryByRole('switch', { name: copy.tokenOptimizationSwitch })).toBeNull()
-  })
-
   it('View raw shows the unnormalized detail as text', async () => {
-    renderApp(url(0, 'details'))
+    renderApp(url(0))
     await title()
     await userEvent.click(screen.getByText('View raw'))
     expect(await screen.findByText(new RegExp(`"id": "${running.id}"`))).toBeInTheDocument()
@@ -740,37 +709,6 @@ describe('more states (plan §10)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(await screen.findByText('Saved')).toBeInTheDocument()
     expect(await title()).toHaveTextContent('Renamed Bot')
-  })
-
-  it('Token optimization saves on flip with PUT {compress_enabled} (plans/feat-context-optimization.md E1)', async () => {
-    const rec = recordRequestBodies()
-    renderApp(url(1, 'settings'))
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    // Seed agent 1 has compression off (agents mock: i % 3 === 1).
-    expect(sw).not.toBeChecked()
-    expect(sw).toHaveAccessibleDescription(copy.tokenOptimizationHint)
-    await userEvent.click(sw)
-    expect(sw).toBeChecked()
-    await waitFor(() => expect(rec.requests.some((r) => r.method === 'PUT')).toBe(true))
-    await rec.flush()
-    // Only the switch: the update is COALESCE per field, so anything else sent would overwrite it.
-    expect(
-      rec.requests.filter((r) => r.method === 'PUT').map((r) => [r.url.pathname, r.body]),
-    ).toEqual([[`/api/agents/${agent(1).id}`, { compress_enabled: true }]])
-    const detail = (await (await fetch(`/api/agents/${agent(1).id}`)).json()) as {
-      data?: { compress_enabled?: boolean }
-      compress_enabled?: boolean
-    }
-    expect(detail.data?.compress_enabled ?? detail.compress_enabled).toBe(true)
-  })
-
-  it('Token optimization rolls back with a toast when the save fails', async () => {
-    server.use(http.put('/api/agents/:id', () => HttpResponse.text('forbidden', { status: 403 })))
-    renderApp(url(1, 'settings'))
-    const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
-    await userEvent.click(sw)
-    expect(await screen.findByText(copy.tokenOptimizationFailed('forbidden'))).toBeInTheDocument()
-    await waitFor(() => expect(sw).not.toBeChecked())
   })
 
   it('the Public toggle waits for the server', async () => {
@@ -798,7 +736,7 @@ describe('more states (plan §10)', () => {
     server.use(
       http.get('/api/agents/:id/deployment', () => HttpResponse.json({ available: false })),
     )
-    renderApp(url(0, 'details'))
+    renderApp(url(0))
     expect(
       await screen.findByText("Deployment details aren't available for your role."),
     ).toBeInTheDocument()

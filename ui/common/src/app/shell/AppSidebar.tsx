@@ -1,7 +1,7 @@
 /**
  * The app's left sidebar (plans/feat-app-shell.md §3–§4): the header (OpenRuntime home link, collapse), the nav groups
  * from `nav.ts` or a page's drill-in panel (`SidebarPanel`: Chat's history, Settings' sections), and the footer
- * (status in local builds, account; account settings open from the account menu). Built on shadcn's sidebar primitive.
+ * (status in local builds, account; Settings opens from the account menu). Built on shadcn's sidebar primitive.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
@@ -58,7 +58,6 @@ import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { SIDEBAR_HEALTH_INTERVAL_MS, useHealth } from '@/lib/api/health'
 import { env } from '@/lib/env'
-import { IS_MAC } from '@/lib/keys'
 import { cn } from '@/lib/utils'
 import { pickShared, withoutWindow } from './context'
 import { copy } from './copy'
@@ -144,7 +143,7 @@ export function AppSidebar({
             <>
               <SidebarMenuItem className="min-w-0 flex-1">
                 <SidebarMenuButton asChild tooltip={copy.brandTooltip} className={cn(ROW, 'h-10')}>
-                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Home item
+                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Overview item
                       (§3 rule 4: one current item). */}
                   <a
                     href="/"
@@ -214,9 +213,9 @@ export function AppSidebar({
 /** Over a page's panel: the way back to the app nav (the panel itself is the slot below it). */
 const TRAIL_LENGTH = 20
 
-/** The page's name for "Back to …": its nav item, or Account settings / Status (account menu, footer row); null when it has none. */
+/** The page's name for "Back to …": its nav item, or Settings / Status (account menu, footer row); null when it has none. */
 function labelFor(path: string, items: readonly AnyNavItem[]): string | null {
-  if (moduleOf(path) === 'account') return copy.account.settings
+  if (moduleOf(path) === 'settings') return copy.nav.settings
   if (path === '/status') return copy.statusPage
   return activeItem(path, items)?.label ?? null
 }
@@ -323,12 +322,11 @@ function NavGroups({
                 : undefined,
         )}
       >
-        {/* A group with no items (Lab, in a production build) has no header either, and the first group drawn has none:
-            while the onboarding guide hides Home, Fleet opens the nav without a header or a leading hairline. */}
-        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g, i) => (
-          <SidebarGroup key={g.id} data-tour={`nav-${g.id}`} className={cn(GROUP, 'py-0')}>
+        {/* A group with no items (Lab, in a production build) has no header either. */}
+        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g) => (
+          <SidebarGroup key={g.id} className={cn(GROUP, 'py-0')}>
             {/* In the rail a header becomes a short hairline: the icons stay one even column, the groups still apart. */}
-            {g.label && i > 0 ? (
+            {g.label ? (
               <>
                 <SidebarGroupLabel className="mt-5 mb-1 h-4 px-2 text-2xs font-medium tracking-[0.04em] text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
                   {g.label}
@@ -361,7 +359,7 @@ function NavGroups({
                                   : pickShared(prev)
                             : undefined
                         }
-                        // `/` is a prefix of every path: Home is active only on `/` itself.
+                        // `/` is a prefix of every path: Overview is active only on `/` itself.
                         activeOptions={{ includeSearch: false, exact: n.to === '/' }}
                         // The Link only knows its own path; Agents is current on Deploy and Builds too (`also`).
                         aria-current={active?.to === n.to ? 'page' : undefined}
@@ -572,13 +570,13 @@ function AccountMenu({ onPick }: { onPick(): void }) {
               <RotateCw aria-hidden /> {copy.account.retry}
             </DropdownMenuItem>
           ) : null}
-          {/* The quick switch; Account settings → Appearance has the same choices with previews. */}
+          {/* The quick switch; Settings → Account → Appearance has the same choices with previews. */}
           <ThemeSubmenu />
           <DropdownMenuSeparator />
-          {/* Appearance and Change password live in account settings (/account). */}
+          {/* Change password lives in Settings → Account. */}
           <DropdownMenuItem asChild>
             <Link
-              to="/account/appearance"
+              to="/settings"
               onClick={() => {
                 navigated.current = true
                 setOpenMobile(false)
@@ -651,6 +649,8 @@ function ThemeSubmenu() {
     </DropdownMenuSub>
   )
 }
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 /** Top right of the header; in the rail, under the mark. Phones open the sheet from the top bar instead. */
 /** Top right of the open sidebar's header. Phones open the sheet from the top bar instead. */

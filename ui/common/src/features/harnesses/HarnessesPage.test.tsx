@@ -32,14 +32,14 @@ describe('landing', () => {
     as('admin')
     renderApp('/harnesses')
     // One page loader under the header until the landing answers, then the level.
-    await screen.findByRole('heading', { level: 1, name: 'Coding harnesses' })
+    await screen.findByRole('heading', { level: 1, name: 'Harnesses' })
     expect(screen.getByTestId('page-loader')).toBeInTheDocument()
     expect(await summary()).toHaveTextContent(/you used/i)
     expect(screen.queryByTestId('page-loader')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Recent sessions' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Daily activity' })).toBeInTheDocument()
     expect(screen.queryByRole('table')).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Levels' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull()
     expect(statusLines()).toHaveLength(0)
     expect(document.body).not.toHaveTextContent(/Enterprise|org and team/i)
     // Mock data is a preview; the persona switcher is the EE layer's.
@@ -107,12 +107,9 @@ describe('controls', () => {
     as('admin')
     const { router } = renderApp('/harnesses')
     await summary()
-    const panel = within(screen.getByRole('region', { name: 'Coding harnesses' })).getAllByRole(
-      'button',
-      {
-        pressed: false,
-      },
-    )[0]!
+    const panel = within(screen.getByRole('region', { name: 'Harnesses' })).getAllByRole('button', {
+      pressed: false,
+    })[0]!
     await user.click(panel)
     await waitFor(() =>
       expect(router.state.location.search).toMatchObject({ harness: expect.any(String) }),
@@ -128,7 +125,7 @@ describe('controls', () => {
     as('admin')
     renderApp('/harnesses')
     await summary()
-    const region = screen.getByRole('region', { name: 'Coding harnesses' })
+    const region = screen.getByRole('region', { name: 'Harnesses' })
     expect(within(region).getByRole('button', { name: 'Filter by Claude Code' })).toHaveAttribute(
       'aria-pressed',
       'false',
@@ -142,7 +139,7 @@ describe('controls', () => {
     as('admin')
     const { router } = renderApp('/harnesses')
     await summary()
-    const region = within(screen.getByRole('region', { name: 'Coding harnesses' }))
+    const region = within(screen.getByRole('region', { name: 'Harnesses' }))
     expect(screen.getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(region.getAllByText(/^turns/).length).toBeGreaterThan(0))
     await user.click(screen.getByRole('button', { name: 'Compare' }))
@@ -150,7 +147,7 @@ describe('controls', () => {
     expect(screen.getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'false')
     await waitFor(() =>
       expect(
-        within(screen.getByRole('region', { name: 'Coding harnesses' })).queryAllByText(/^turns/),
+        within(screen.getByRole('region', { name: 'Harnesses' })).queryAllByText(/^turns/),
       ).toHaveLength(0),
     )
   })

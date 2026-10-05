@@ -88,8 +88,6 @@ export function Trend({
       title={mode === 'active' ? 'Active developers per harness' : 'Estimated cost per harness'}
       subtitle={partialHidden ? 'Daily (UTC), through yesterday' : 'Daily (UTC)'}
       labelledBy="trend-title"
-      // Fills its grid cell: beside a taller list the chart grows, so the two cards end on one line.
-      className="h-full"
       actions={
         <ToggleGroup
           type="single"
@@ -124,7 +122,7 @@ export function Trend({
           <p className="sr-only">
             {harnesses.map((h) => `${harnessStyle(h).name}: ${last(h)}`).join('. ')}.
           </p>
-          <div className="min-h-60 w-full flex-1" aria-hidden>
+          <div className="h-60 w-full" aria-hidden>
             <ChartDateFormat value={utcDay}>
               <LineChart
                 data={data}

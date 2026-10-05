@@ -29,7 +29,7 @@ function agentRows(s: SavingsData) {
 }
 
 /**
- * Category rows — "smaller prompts saved this much, less code written saved this much".
+ * Category rows — "Caveman saved this much, Ponytail saved this much".
  *
  * Programs with no eligible traffic are kept rather than filtered out: a zero that explains itself
  * is actionable ("nobody turned it on"), while an absent row reads as a feature that does nothing.
@@ -86,10 +86,7 @@ export function summarizeOptimisation(s: SavingsData) {
     sessions: sessionRows(s),
     categories: categoryRows(s),
     tokensBefore: s.total.baseline_tokens,
-    tokensActual: s.total.actual_tokens,
     tokensSaved: s.total.saved_tokens,
-    costBefore: s.total.baseline_cost_usd,
-    costActual: s.total.actual_cost_usd,
     /** Server-computed. Null when nothing was billed in the window. */
     savedPct: s.total.token_reduction_pct,
     costSaved: s.total.saved_cost_usd,
@@ -108,9 +105,8 @@ export function summarizeOptimisation(s: SavingsData) {
     topUnoptimised: c.top_unoptimized ?? null,
     /** Per-layer adoption: which switch is under-used, not just how many agents have something on. */
     adoption: [
-      // Named as the switches they count (agents copy `tokenOptimization`, `minimalCode`; user, 2026-10-05).
-      { label: 'Token optimization', on: c.agents_with_compress_enabled },
-      { label: 'Minimal-code mode', on: c.agents_with_minimal_code_enabled },
+      { label: 'Compression', on: c.agents_with_compress_enabled },
+      { label: 'Minimal code', on: c.agents_with_minimal_code_enabled },
       { label: 'Prompt comments', on: c.agents_with_prompt_comments },
     ],
     /** The biggest contributor, for the one-line headline. */

@@ -27,14 +27,8 @@ import { Card, CardError, CardSkeleton, TOUCH } from './Card'
 const MARK: Partial<Record<Status, { Icon: typeof CircleCheck; tone: string; label: string }>> = {
   failed: { Icon: CircleAlert, tone: 'text-destructive', label: copy.sessions.failed },
   ok: { Icon: CircleCheck, tone: 'text-success', label: copy.sessions.ok },
-  running: { Icon: CircleDashed, tone: 'text-muted-foreground', label: copy.sessions.running },
 }
 const TRACE_STORE = new Set([500, 502, 503])
-
-/** `session/list.status` narrowed to what the UI draws. */
-const SERVER_STATUS = new Set<Status>(['failed', 'ok', 'running'])
-const serverStatus = (raw: string | null | undefined): Status =>
-  raw && SERVER_STATUS.has(raw as Status) ? (raw as Status) : 'unchecked'
 
 export function RecentSessions({
   sessions,
@@ -48,11 +42,12 @@ export function RecentSessions({
   className?: string
 }) {
   const titleRef = useRef<HTMLHeadingElement>(null)
-  const list = sessions.recent
-  // The server already returns the page and its status, newest first. This used
-  // to re-sort a 25-row sample so client-checked failures floated up; it no
-  // longer has to, because the failures have their own exact row in Needs you.
-  const rows = list.rows.slice(0, RECENT_SESSION_ROWS)
+  const { list, newest, status } = sessions
+  const failedFirst = [...newest].sort(
+    (a, b) =>
+      Number(status.get(b.session_id) === 'failed') - Number(status.get(a.session_id) === 'failed'),
+  )
+  const rows = failedFirst.slice(0, RECENT_SESSION_ROWS)
   // A bare 502 is the proxy with the server down (StateCard's rule), not the trace store (/ship review).
   const serverDown =
     list.error instanceof ApiError && list.error.status === 502 && !list.error.serverMessage
@@ -106,10 +101,7 @@ export function RecentSessions({
           </TableHeader>
           <TableBody>
             {rows.map((s) => {
-              // The server's own status. `null` means it has no recorded request
-              // to judge by — "unchecked", never "ok" — and an unrecognised
-              // value is treated the same rather than rendered raw.
-              const st = serverStatus(s.status)
+              const st = status.get(s.session_id) ?? 'unchecked'
               const mark = MARK[st] ?? {
                 Icon: CircleDashed,
                 tone: 'text-muted-foreground',
@@ -118,7 +110,7 @@ export function RecentSessions({
               const cost = sessionCost(s)
               return (
                 <TableRow key={s.session_id} data-testid="recent-session">
-                  <TableCell className="h-11 px-0">
+                  <TableCell className="h-8 px-0 pointer-coarse:h-11">
                     <mark.Icon
                       className={`size-4 ${mark.tone}`}
                       role="img"

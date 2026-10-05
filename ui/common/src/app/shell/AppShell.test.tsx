@@ -55,7 +55,6 @@ describe('sidebar items', () => {
   it('lists every page with a name, even as the collapsed rail', async () => {
     renderApp('/tokenops')
     await screen.findByRole('navigation', { name: 'Main' })
-    // Every core item is static: the one probe-gated item (Budgets) is Enterprise only, so the EE suite covers it.
     // jsdom is 1024 px wide: no cookie means the first-visit rail (design review 9A).
     expect(sidebarState()).toBe('collapsed')
     for (const n of NAV_ITEMS)
@@ -63,15 +62,15 @@ describe('sidebar items', () => {
   })
 
   it.each([
-    ['/tokenops', 'Monitor'],
+    ['/tokenops', 'TokenOps'],
     ['/sessions', 'Sessions'],
-    ['/harnesses', 'Coding harnesses'],
+    ['/harnesses', 'Harnesses'],
     ['/agents', 'Agents'],
     ['/agents/mine', 'Agents'],
     ['/deploy', 'Agents'],
     ['/builds', 'Agents'],
     ['/chat', 'Chat'],
-    ['/', 'Home'],
+    ['/', 'Overview'],
   ])('marks %s as %s with aria-current', async (url, label) => {
     renderApp(url)
     await waitFor(() => expect(navLink(label)).toHaveAttribute('aria-current', 'page'))
@@ -89,15 +88,12 @@ describe('sidebar items', () => {
     renderApp('/tokenops?preset=24h&compare=0')
     await screen.findByRole('navigation', { name: 'Main' })
     await waitFor(() =>
-      expect(navLink('Coding harnesses')).toHaveAttribute(
-        'href',
-        expect.stringContaining('preset=24h'),
-      ),
+      expect(navLink('Harnesses')).toHaveAttribute('href', expect.stringContaining('preset=24h')),
     )
     // The other shared keys still cross into Sessions and TokenOps; the window doesn't.
     expect(navLink('Sessions').getAttribute('href')).toContain('compare=false')
     expect(navLink('Sessions').getAttribute('href')).not.toContain('preset')
-    expect(navLink('Monitor').getAttribute('href')).not.toContain('preset')
+    expect(navLink('TokenOps').getAttribute('href')).not.toContain('preset')
     expect(navLink('Chat').getAttribute('href')).toBe('/chat')
     expect(navLink('Agents').getAttribute('href')).toBe('/agents')
   })
@@ -105,12 +101,12 @@ describe('sidebar items', () => {
   it('keeps the shared keys and drops page-only ones when following the links', async () => {
     const { router } = renderApp('/sessions?preset=7d&day=2026-03-18')
     await screen.findByRole('navigation', { name: 'Main' })
-    await userEvent.click(navLink('Monitor'))
+    await userEvent.click(navLink('TokenOps'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     // TokenOps opens on its own 30 days, not Sessions' window.
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
     expect(router.state.location.search).not.toHaveProperty('day')
-    await userEvent.click(navLink('Coding harnesses'))
+    await userEvent.click(navLink('Harnesses'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/harnesses'))
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
   })
@@ -118,7 +114,7 @@ describe('sidebar items', () => {
   it('shows a way back into the app on an unknown URL', async () => {
     renderApp('/no-such-page')
     await screen.findByRole('heading', { name: 'Page not found' })
-    expect(screen.getByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Back to Overview' })).toHaveAttribute('href', '/')
     expect(screen.getByRole('link', { name: 'Go to Chat' })).toHaveAttribute('href', '/chat')
   })
 
@@ -162,7 +158,7 @@ describe('sidebar items', () => {
 })
 
 describe('header brand link', () => {
-  it('goes Home through the router without marking itself current', async () => {
+  it('goes to the Overview through the router without marking itself current', async () => {
     wide()
     const { router } = renderApp('/agents')
     await screen.findByRole('navigation', { name: 'Main' })
@@ -171,7 +167,7 @@ describe('header brand link', () => {
     await userEvent.click(brand)
     await waitFor(() => expect(router.state.location.pathname).toBe('/'))
     expect(brand).not.toHaveAttribute('aria-current')
-    expect(navLink('Home')).toHaveAttribute('aria-current', 'page')
+    expect(navLink('Overview')).toHaveAttribute('aria-current', 'page')
   })
 
   it('leaves a modified click (new tab) to the browser', async () => {
@@ -212,8 +208,7 @@ describe('layout', () => {
     await router.navigate({ to: '/agents' })
     await waitFor(() => expect(wrapper()).toHaveClass('min-h-screen'))
     expect(wrapper()).not.toHaveClass('h-dvh')
-    // The page column keeps the max width; the top bar spans the whole page area.
-    expect(document.querySelector('#main .max-w-page')).toBeInTheDocument()
+    expect(document.getElementById('main')).toHaveClass('max-w-page')
   })
 
   it.each(['/login', '/no-such-page'])(
@@ -423,30 +418,26 @@ describe('status row: checking', () => {
 })
 
 describe('footer', () => {
-  it('has the account and no Theme row; Settings is the Organization group’s item', async () => {
+  it('has the account and no Settings or Theme row (Settings opens from the account menu)', async () => {
     renderApp('/agents')
-    const main = await screen.findByRole('navigation', { name: 'Main' })
-    expect(within(main).getByRole('link', { name: 'Settings' })).toHaveAttribute(
-      'href',
-      '/settings',
-    )
+    await screen.findByRole('navigation', { name: 'Main' })
+    expect(within(sidebar()).queryByRole('link', { name: 'Settings' })).toBeNull()
     expect(within(sidebar()).queryByRole('button', { name: 'Theme' })).toBeNull()
   })
 
-  it('the account menu has Theme, Account settings and Sign out', async () => {
+  it('the account menu has Theme, Settings and Sign out', async () => {
     const { router } = renderApp('/agents')
     await openAccountMenu()
     expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent?.trim())).toEqual([
       'Theme',
-      'Account settings',
+      'Settings',
       'Sign out',
     ])
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Account settings' }))
-    // The account's own settings; the workspace's are the Organization group's Settings.
-    await waitFor(() => expect(router.state.location.pathname).toBe('/account/appearance'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Settings' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'))
   })
 
-  it('the account menu’s Theme submenu sets mode and color theme, and stays open between picks', async () => {
+  it('the account menu’s Theme submenu sets mode and colour theme, and stays open between picks', async () => {
     renderApp('/agents')
     await openAccountMenu()
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Theme' }))
@@ -463,8 +454,8 @@ describe('footer', () => {
     setTheme('system')
   })
 
-  it('Account settings → Appearance: its Mode and Theme radio groups set the theme', async () => {
-    renderApp('/account/appearance')
+  it('Settings → Appearance: its Mode and Theme radio groups set the theme', async () => {
+    renderApp('/settings/appearance')
     const mode = await screen.findByRole('radiogroup', { name: 'Mode' })
     const theme = screen.getByRole('radiogroup', { name: 'Theme' })
     expect(
@@ -526,19 +517,16 @@ describe('drill-in panel (one sidebar on Chat and Settings)', () => {
     )
   })
 
-  it('shows no Settings sections beside the page under Main menu; the Settings nav item brings them back', async () => {
+  it('shows no Settings sections beside the page under Main menu; the account menu’s Settings brings them back', async () => {
     wide()
     renderApp('/settings')
     await userEvent.click(await screen.findByRole('button', { name: 'Back to main menu' }))
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: 'Settings sections' })).toBeNull()
     expect(screen.getByRole('heading', { level: 1, name: 'General' })).toBeInTheDocument()
-    // The current nav item brings the sections back, as it does for Chat.
-    await userEvent.click(
-      within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', {
-        name: 'Settings',
-      }),
-    )
+    // The account menu's Settings brings the sections back, as the current nav item does for Chat.
+    await openAccountMenu()
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Settings' }))
     const sections = await screen.findByRole('navigation', { name: 'Settings sections' })
     expect(sidebar()).toContainElement(sections)
     await waitFor(() =>
@@ -562,10 +550,10 @@ describe('drill-in panel (one sidebar on Chat and Settings)', () => {
     expect(back).toHaveAttribute('title', 'Back to Chat')
     await userEvent.click(back)
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat'))
-    await userEvent.click(await screen.findByRole('button', { name: 'Back to Monitor' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Back to TokenOps' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     expect(router.state.location.search).toMatchObject({ preset: '7d' })
-    await waitFor(() => expect(document.activeElement).toBe(navLink('Monitor')))
+    await waitFor(() => expect(document.activeElement).toBe(navLink('TokenOps')))
   })
 
   it('leaves the panel for the app nav on a page without one', async () => {

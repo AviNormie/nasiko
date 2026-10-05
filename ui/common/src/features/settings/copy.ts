@@ -4,11 +4,10 @@
  * copy was wrong about the server (marked).
  */
 import type { SecretNameProblem } from './logic'
+import type { BudgetLevel, ContextStrategy } from './types'
 
 export const copy = {
-  title: 'Organization settings',
-  // The account menu's Settings (/account): Appearance and Password.
-  accountTitle: 'Account settings',
+  title: 'Settings',
   nav: {
     label: 'Settings sections',
     workspace: 'Workspace',
@@ -25,83 +24,17 @@ export const copy = {
   required: 'Enter a value.',
   positiveInt: 'Enter a whole number of 1 or more.',
 
-  // Account settings → Appearance (/account/appearance): every user, stored in this browser only (theme.ts).
+  // Settings → Account → Appearance (/settings/appearance): every user, stored in this browser only (theme.ts).
   appearance: {
     label: 'Appearance',
     sub: 'How Nasiko looks in this browser.',
     mode: 'Mode',
     modeHint: 'System follows your device’s light or dark setting.',
     theme: 'Theme',
-    themeHint: 'The color of buttons, links and the current page. Sign in always uses Carbon.',
+    themeHint: 'The colour of buttons, links and the current page. Sign in always uses Carbon.',
   },
 
-  // Settings → Workspace → Optimization tiers (/settings/optimization-tiers): its words are in features/optimization.
-  optimizationTiers: { label: 'Optimization tiers' },
-  // Account settings → Keyboard shortcuts (/account/shortcuts): every key the app answers, by where it works. `Mod` is
-  // ⌘ on a Mac, Ctrl elsewhere. Keep in step with the handlers (lib/keys.ts, TourHost, Composer, Waterfall, Swimlane…).
-  shortcuts: {
-    label: 'Keyboard shortcuts',
-    sub: 'Keys Nasiko answers. Letter keys do nothing while you type in a field.',
-    groups: [
-      {
-        title: 'Everywhere',
-        rows: [
-          { action: 'Take this page’s tour', keys: [['?']] },
-          { action: 'Collapse or expand the sidebar', keys: [['Mod', 'B']] },
-        ],
-      },
-      {
-        title: 'Detail pages',
-        hint: 'Where the page shows “3 of 18” with ↑ ↓ arrows: agents, chats, sessions, flows and workflows.',
-        rows: [
-          { action: 'Next item', keys: [['J']] },
-          { action: 'Previous item', keys: [['K']] },
-        ],
-      },
-      {
-        title: 'Search and chat',
-        rows: [
-          { action: 'Focus search', where: 'Agent and MCP catalogs', keys: [['/']] },
-          { action: 'Focus the message box', where: 'Chat', keys: [['/']] },
-          { action: 'Send the message', where: 'Chat', keys: [['Enter']] },
-          { action: 'New line', where: 'Chat', keys: [['Shift', 'Enter']] },
-          { action: 'Close the chat filter', where: 'Chat history, when empty', keys: [['Esc']] },
-        ],
-      },
-      {
-        title: 'Traces and flows',
-        rows: [
-          { action: 'Move between spans', where: 'Trace waterfall', keys: [['↑'], ['↓']] },
-          { action: 'Expand or collapse', where: 'Trace waterfall', keys: [['→'], ['←']] },
-          { action: 'Open a span', where: 'Trace waterfall', keys: [['Enter'], ['Space']] },
-          {
-            action: 'Move between calls',
-            where: 'Flow swimlane',
-            keys: [['←'], ['→'], ['↑'], ['↓']],
-          },
-          { action: 'First or last', where: 'Waterfall and swimlane', keys: [['Home'], ['End']] },
-          { action: 'Clear the selection', where: 'Flow swimlane', keys: [['Esc']] },
-        ],
-      },
-      {
-        title: 'Other',
-        rows: [
-          { action: 'Next or previous tour step', where: 'Tours', keys: [['→'], ['←']] },
-          {
-            action: 'Move a step up or down',
-            where: 'Workflow editor, on a step’s handle',
-            keys: [['↑'], ['↓']],
-          },
-        ],
-      },
-    ] as {
-      title: string
-      hint?: string
-      rows: { action: string; where?: string; keys: string[][] }[]
-    }[],
-  },
-
-  // Account settings → Password (/account/password), worded as nasiko-cloud-rs `43833316`
+  // Settings → Account → Password (/settings/password), worded as nasiko-cloud-rs `43833316`
   // ui/common/features/change-password-modal.js.
   password: {
     label: 'Password',
@@ -135,8 +68,30 @@ export const copy = {
     unreachable: 'Could not reach the server. Try again.',
   },
 
+  // Settings → Security → Chat context (/settings/chat-context): the caller's own, worded as nasiko-cloud-rs `35c749af`
+  // ui/common/pages/chat-context-page.js.
+  chatContext: {
+    label: 'Chat context',
+    sub: 'How much of your conversation history is carried into each request, and which algorithm picks it. Applies to every chat you send, across all agents.',
+    strategy: 'Context strategy',
+    strategyHint: 'Which algorithm selects prior messages to carry into a new request.',
+    strategies: {
+      pacms: 'PACMS (budget-aware, recommended)',
+      topk: 'Top-K (relevance ranked)',
+      lastk: 'Last-K (most recent)',
+    } satisfies Record<ContextStrategy, string>,
+    budget: 'History budget',
+    budgetHint:
+      'How much history the strategy may keep: a token budget under PACMS, an item count under Top-K and Last-K.',
+    levels: { low: 'Low', medium: 'Medium', high: 'High' } satisfies Record<BudgetLevel, string>,
+    saved: 'Chat context settings saved',
+    loadWhat: 'your chat context settings',
+    loading: 'Loading chat context settings',
+    newerServer: 'Chat context needs a newer OpenRuntime server',
+  },
+
   sections: {
-    general: { label: 'General', sub: 'Routing defaults and platform behavior.' },
+    general: { label: 'General', sub: 'Routing defaults and platform behaviour.' },
     limits: { label: 'Flow limits', sub: 'Cascade guards applied to every inter-agent call.' },
     registry: { label: 'Registry', sub: 'External OCI registry used for agent images.' },
   },

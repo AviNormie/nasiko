@@ -6,8 +6,8 @@
  * exactly the visible rows in the current sort, with formula-safe cells.
  * On narrow screens the table becomes a card list.
  */
-import { Crosshair, Download, ListTree } from 'lucide-react'
-import { createContext, use, useEffect, useMemo, useRef, useState } from 'react'
+import { Download, ListTree } from 'lucide-react'
+import { createContext, use, useEffect, useMemo, useRef } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -19,8 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { AgentLink } from '@/features/agents/components/AgentLink'
-import { Toggle } from '@/components/ui/toggle'
-import { pageCount, pageOf } from '@/lib/paging'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { prefersReducedMotion } from '@/lib/useMediaQuery'
 import { cn } from '@/lib/utils'
 import { searchRows, sortRows, type AttributionRow } from '../attribution'
@@ -38,15 +37,8 @@ import {
 import type { SortKey } from '../search'
 import { Panel, PanelEmpty, PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { Delta } from '@/components/shared/delta'
-import { Pager } from '@/components/shared/pager'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { SearchInput } from '@/components/shared/search-input'
-import { Segmented } from './Segmented'
-
-const VIEWS = [
-  { value: 'agent', label: 'Agents' },
-  { value: 'workflow', label: 'Workflows' },
-] as const
 
 const SORT_LABELS: Record<SortKey, string> = {
   cost: 'Highest spend',
@@ -56,9 +48,6 @@ const SORT_LABELS: Record<SortKey, string> = {
   hours: 'Most container hours',
   name: 'Name',
 }
-
-/** Rows shown before Show all. */
-const ROW_CAP = 10
 
 const HIGHLIGHT = 'bg-primary/10 ring-1 ring-primary/40'
 
@@ -77,10 +66,8 @@ export function AttributionTable({
   onSort,
   onSearch,
   onViewTraces,
-  onSelect,
   onLast30,
   unpriced,
-  pageSize,
 }: {
   rows: AttributionRow[] | undefined
   view: 'agent' | 'workflow'
@@ -96,37 +83,11 @@ export function AttributionTable({
   onSort: (s: SortKey) => void
   onSearch: (q: string) => void
   onViewTraces: (agentId: string) => void
-  onSelect?: (agentId: string) => void
   /** Offered in the empty-window state; undefined when already on 30d (A2). */
   onLast30?: () => void
   unpriced: boolean
-  pageSize?: number
 }) {
   const visible = useMemo(() => sortRows(searchRows(rows ?? [], q), sort), [rows, q, sort])
-  // The top rows answer "who"; the long tail waits behind Show all, so the section stays one screen. A search or a
-  // highlight from the scatter below the fold shows everything (CSV always exports every visible row).
-  const [expanded, setExpanded] = useState(false)
-  const highlightBelow =
-    !!highlightId && visible.slice(0, ROW_CAP).every((r) => r.id !== highlightId)
-  const all = expanded || !!q || highlightBelow || visible.length <= ROW_CAP + 2
-  const firstPage = () => {
-    const at = highlightId ? visible.findIndex((r) => r.id === highlightId) : -1
-    return pageSize && at >= 0 ? Math.floor(at / pageSize) : 0
-  }
-  const [page, setPage] = useState(firstPage)
-  const [pagedFor, setPagedFor] = useState({ visible, highlightId })
-  if (pagedFor.visible !== visible || pagedFor.highlightId !== highlightId) {
-    setPagedFor({ visible, highlightId })
-    setPage(firstPage())
-  }
-  const pages = pageSize ? pageCount(visible.length, pageSize) : 1
-  const current = Math.min(page, pages - 1)
-  // A page size (Weave's views) pages the rows; without one, the top rows and Show all.
-  const shown = pageSize
-    ? pageOf(visible, current, pageSize)
-    : all
-      ? visible
-      : visible.slice(0, ROW_CAP)
   const noun = view === 'agent' ? 'Agent' : 'Workflow'
   const sortOptions = (Object.keys(SORT_LABELS) as SortKey[]).filter(
     (s) => view === 'agent' || s !== 'hours',
@@ -160,7 +121,21 @@ export function AttributionTable({
       labelledBy="attribution-title"
       actions={
         <>
-          <Segmented label="Group by" value={view} options={VIEWS} onChange={onView} />
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={view}
+            onValueChange={(v) => v && onView(v as 'agent' | 'workflow')}
+            aria-label="Group by"
+          >
+            <ToggleGroupItem value="agent" className="px-2.5 text-xs">
+              Agents
+            </ToggleGroupItem>
+            <ToggleGroupItem value="workflow" className="px-2.5 text-xs">
+              Workflows
+            </ToggleGroupItem>
+          </ToggleGroup>
           <Select value={sort} onValueChange={(v) => onSort(v as SortKey)}>
             <SelectTrigger size="sm" className="w-44" aria-label="Sort by">
               <SelectValue />
@@ -215,34 +190,20 @@ export function AttributionTable({
       ) : (
         <>
           <DesktopTable
-            rows={shown}
+            rows={visible}
             view={view}
             sort={sort}
             prevUnavailable={prevUnavailable}
             highlightId={highlightId}
             onViewTraces={onViewTraces}
-            onSelect={onSelect}
           />
           <MobileCards
-            rows={shown}
+            rows={visible}
             view={view}
             prevUnavailable={prevUnavailable}
             highlightId={highlightId}
             onViewTraces={onViewTraces}
-            onSelect={onSelect}
           />
-          {!pageSize && visible.length > ROW_CAP + 2 && !q && !highlightBelow ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-fit text-xs"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((v) => !v)}
-            >
-              {expanded ? `Show top ${ROW_CAP}` : `Show all ${visible.length}`}
-            </Button>
-          ) : null}
-          <Pager page={current} pages={pages} onPage={setPage} />
         </>
       )}
     </Panel>
@@ -257,36 +218,13 @@ const NUM = { numeric: true, headerClassName: 'px-1.5 2xl:px-2', cellClassName: 
  * defs must keep their identity across renders or every cell remounts (and a focused Traces button
  * is lost when the drawer closes): the defs live at module level and read these through context.
  */
-const CellCtx = createContext<{
-  prevUnavailable: boolean
-  onViewTraces: (id: string) => void
-  onSelect?: (id: string) => void
-  highlightId?: string
-}>({
+const CellCtx = createContext<{ prevUnavailable: boolean; onViewTraces: (id: string) => void }>({
   prevUnavailable: true,
   onViewTraces: () => {},
 })
 
 function DeltaCell({ row }: { row: AttributionRow }) {
   return <RowDelta row={row} prevUnavailable={use(CellCtx).prevUnavailable} />
-}
-
-function FocusToggle({ row: r }: { row: AttributionRow }) {
-  const { onSelect, highlightId } = use(CellCtx)
-  if (!onSelect) return null
-  const on = r.id === highlightId
-  return (
-    <Toggle
-      size="sm"
-      pressed={on}
-      onPressedChange={() => onSelect(on ? '' : r.id)}
-      className="h-7 px-2 data-[state=on]:bg-primary/10 data-[state=on]:text-primary-text"
-      aria-label={on ? `Stop focusing on ${r.name}` : `Focus on ${r.name}`}
-      title={on ? 'In focus' : 'Focus'}
-    >
-      <Crosshair className="size-3.5" aria-hidden />
-    </Toggle>
-  )
 }
 
 function TracesCell({ row: r }: { row: AttributionRow }) {
@@ -401,12 +339,7 @@ function columnsFor(view: 'agent' | 'workflow'): Col[] {
             id: 'traces',
             header: '',
             meta: NUM,
-            cell: ({ row }) => (
-              <div className="flex items-center justify-end">
-                <FocusToggle row={row.original} />
-                <TracesCell row={row.original} />
-              </div>
-            ),
+            cell: ({ row }) => <TracesCell row={row.original} />,
           },
         ] satisfies Col[])
       : []),
@@ -423,7 +356,6 @@ function DesktopTable({
   prevUnavailable,
   highlightId,
   onViewTraces,
-  onSelect,
 }: {
   rows: AttributionRow[]
   view: 'agent' | 'workflow'
@@ -431,11 +363,10 @@ function DesktopTable({
   prevUnavailable: boolean
   highlightId?: string
   onViewTraces: (id: string) => void
-  onSelect?: (id: string) => void
 }) {
   const highlightRef = useScrollToHighlight<HTMLTableRowElement>(highlightId)
   return (
-    <CellCtx value={{ prevUnavailable, onViewTraces, onSelect, highlightId }}>
+    <CellCtx value={{ prevUnavailable, onViewTraces }}>
       <DataTable
         className="hidden md:block"
         label="Who is driving cost"
@@ -468,14 +399,12 @@ function MobileCards({
   prevUnavailable,
   highlightId,
   onViewTraces,
-  onSelect,
 }: {
   rows: AttributionRow[]
   view: 'agent' | 'workflow'
   prevUnavailable: boolean
   highlightId?: string
   onViewTraces: (id: string) => void
-  onSelect?: (id: string) => void
 }) {
   const highlightRef = useScrollToHighlight<HTMLLIElement>(highlightId)
   return (
@@ -496,27 +425,14 @@ function MobileCards({
               <RowDelta row={r} prevUnavailable={prevUnavailable} />
             </div>
             {view === 'agent' ? (
-              <div className="mt-1 flex gap-4">
-                <Button
-                  variant="link"
-                  size="sm"
-                  className="h-auto min-h-11 w-fit p-0 text-xs"
-                  onClick={() => onViewTraces(r.id)}
-                >
-                  View traces
-                </Button>
-                {onSelect ? (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto min-h-11 w-fit p-0 text-xs"
-                    aria-pressed={r.id === highlightId}
-                    onClick={() => onSelect(r.id === highlightId ? '' : r.id)}
-                  >
-                    {r.id === highlightId ? 'In focus' : 'Focus'}
-                  </Button>
-                ) : null}
-              </div>
+              <Button
+                variant="link"
+                size="sm"
+                className="mt-1 h-auto min-h-11 w-fit p-0 text-xs"
+                onClick={() => onViewTraces(r.id)}
+              >
+                View traces
+              </Button>
             ) : null}
           </li>
         </Card>

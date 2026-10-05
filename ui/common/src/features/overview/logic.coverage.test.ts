@@ -1,6 +1,7 @@
 // @vitest-environment node
 /** Overview pure logic: the edges logic.test.ts leaves out (ship coverage audit, plans/feat-overview.md §5, §6, §10). */
 import { describe, expect, it } from 'vitest'
+import { overviewNarrative } from '@/features/narrative/overview'
 import { rateAgent, spikeDrivers, type AgentHealthInput } from './health'
 import { mergeNeeds } from './needs'
 
@@ -72,13 +73,59 @@ describe('spikeDrivers edges', () => {
   })
 })
 
+describe('overviewNarrative edges', () => {
+  const month = { mtd: 500, low: 1000, high: 1200, show: false, vsLastMonthPct: -12.4 }
+
+  it('says "down" for a lower month and leaves out the pace until the forecast shows', () => {
+    expect(
+      overviewNarrative({
+        month,
+        actionCount: null,
+        waitingCount: null,
+        otherCount: 0,
+        empty: false,
+      }).money,
+    ).toBe('The fleet has spent $500.00 this month (down 12% vs the same days last month).')
+    expect(
+      overviewNarrative({
+        month: { ...month, vsLastMonthPct: null },
+        actionCount: null,
+        waitingCount: null,
+        otherCount: 0,
+        empty: false,
+      }).money,
+    ).toBe('The fleet has spent $500.00 this month.')
+  })
+
+  it('joins three clauses with commas and "and", and capitalizes a lone waiting clause', () => {
+    expect(
+      overviewNarrative({
+        month: null,
+        actionCount: 1,
+        waitingCount: 2,
+        otherCount: 1,
+        empty: false,
+      }).attention,
+    ).toBe('1 agent needs action, 2 requests are waiting for you and 1 other item needs a look.')
+    expect(
+      overviewNarrative({
+        month: null,
+        actionCount: 0,
+        waitingCount: 1,
+        otherCount: 0,
+        empty: false,
+      }).attention,
+    ).toBe('1 request is waiting for you.')
+  })
+})
+
 describe('mergeNeeds edges', () => {
   it('adds no row for zero outside requests or zero failed sessions, and counts absent sources as neither loading nor failed', () => {
     const n = mergeNeeds({
       requests: { state: 'ok', value: { chats: [], outside: 0 } },
       agents: { state: 'loading' },
       budgets: { state: 'absent' },
-      sessions: { state: 'ok', value: { failed: 0, agents: [] } },
+      sessions: { state: 'ok', value: { failed: 0, checked: 25, agents: [] } },
     })
     expect(n).toMatchObject({
       rows: [],

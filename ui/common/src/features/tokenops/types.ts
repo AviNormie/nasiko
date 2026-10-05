@@ -79,19 +79,6 @@ export interface AgentFinopsRow {
   tool_call_count: number
   version: string | null
   container_hours: number
-  /**
-   * The preceding window of the same length, present only with
-   * `compare=previous`. A subset — enough for a delta, not a second row.
-   */
-  previous?: AgentFinopsPrevious | null
-}
-
-export interface AgentFinopsPrevious {
-  total_cost: number
-  operations: number
-  total_tokens: number
-  tool_call_count: number
-  avg_latency_ms: number | null
 }
 
 export interface WorkflowFinopsRow {
@@ -146,29 +133,6 @@ export interface SpendTimeseriesPoint {
 export interface FinopsSpendTimeseries {
   bucket: 'hour' | 'day'
   points: SpendTimeseriesPoint[]
-  /**
-   * Per-agent series, only with `group_by=agent`: the top spenders plus one
-   * `other` aggregate, which together sum to `points`.
-   */
-  series?: SpendAgentSeries[] | null
-  /** The preceding window, only with `compare=previous`. Same bucketing. */
-  previous?: SpendTimeseriesPoint[] | null
-}
-
-export interface SpendAgentSeries {
-  /** Raw trace agent name; `null` on the aggregate `other` series. */
-  agent_name: string | null
-  /** Set only when exactly one live agent carries that name. */
-  agent_id: string | null
-  is_other: boolean
-  total_spend_usd: number
-  points: SpendAgentPoint[]
-}
-
-export interface SpendAgentPoint {
-  bucket_start: string
-  spend_usd: number
-  operations: number
 }
 
 export interface SpendCalendarDay {
@@ -273,13 +237,6 @@ const workflowRow = z.looseObject({
 export const finopsDashboardSchema = z.looseObject({
   summary: z.looseObject({ total_cost: num, total_agents: num, unpriced_calls: num }),
   agents: z.array(agentRow),
-  token_usage: z.looseObject({
-    prompt_tokens: num,
-    completion_tokens: num,
-    cache_read_tokens: num,
-    cache_creation_tokens: num,
-    avg_tokens_per_operation: num,
-  }),
   kpis: z.looseObject({
     total_spend: kpi,
     total_tokens: kpi,
@@ -343,7 +300,7 @@ export const providerCatalogSchema = z.looseObject({
  * optimisation section shows `SAMPLE_OPTIMISATION` (optimisation.ts) until one does. Lists only
  * agents with optimisation on; savings are input tokens the optimiser removed before the call.
  */
-interface OptimisationAgentRow {
+export interface OptimisationAgentRow {
   agent_id: string
   agent_name: string
   calls: number
@@ -353,7 +310,6 @@ interface OptimisationAgentRow {
   est_cost_saved_usd: number
 }
 
-/** @public Synced from nasiko-cloud-rs (PR #28) with the savings types. */
 export interface OptimisationSummary {
   agents: OptimisationAgentRow[]
   total_agents: number
@@ -396,7 +352,7 @@ export interface Savings {
  */
 export type SavingsBasis = 'measured' | 'fixture' | 'seed_default' | 'mixed'
 
-interface SavingsFactor {
+export interface SavingsFactor {
   input_token_delta_pct: number
   output_token_delta_pct: number
   basis: string
@@ -410,7 +366,7 @@ interface SavingsFactor {
   eligible_output_tokens: number
 }
 
-interface LayerSavings extends Savings {
+export interface LayerSavings extends Savings {
   layer: string
   factor?: SavingsFactor
 }
@@ -425,7 +381,7 @@ export interface ProgramSavings extends Savings {
   note?: string
 }
 
-interface AgentSavingsRow extends Savings {
+export interface AgentSavingsRow extends Savings {
   agent_id: string
   agent_name: string
   calls: number
@@ -433,14 +389,14 @@ interface AgentSavingsRow extends Savings {
   input_tokens_after: number
 }
 
-interface SessionSavingsRow extends Savings {
+export interface SessionSavingsRow extends Savings {
   session_id: string
   started_at: string
   turn_count: number
   agent_names: string[]
 }
 
-interface SavingsCoverage {
+export interface SavingsCoverage {
   calls_in_window: number
   calls_with_any_layer_enabled: number
   agents_total: number

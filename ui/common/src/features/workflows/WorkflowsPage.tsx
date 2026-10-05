@@ -3,11 +3,10 @@
  * carry no metrics (W-3), so the metric chips, health, last-run line and sort are hidden, and Drafts is absent (W-1).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, type HistoryState } from '@tanstack/react-router'
-import { EllipsisVertical, RotateCw, SearchX, Workflow } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { EllipsisVertical, Plus, RotateCw, SearchX, Workflow } from 'lucide-react'
 import { memo, useDeferredValue, useState } from 'react'
 import { toast } from 'sonner'
-import { TopBar } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { SearchInput } from '@/components/shared/search-input'
@@ -29,7 +28,6 @@ import {
 } from '@/components/ui/select'
 import { relTime } from '@/features/agents/format'
 import { fmtLongDay, fmtPct, fmtTokens } from '@/lib/format'
-import { useSiblingState } from '@/lib/siblings'
 import { cn } from '@/lib/utils'
 import { dropFromLists, workflowListQuery } from './api'
 import { HEALTH_LABEL, SORT_LABEL, copy, reason, type ListMode } from './copy'
@@ -51,7 +49,7 @@ import {
   type WorkflowSort,
 } from './search'
 import type { WorkflowRow } from './types'
-import { Chip, CreateWorkflowLink, SectionNav, ToneBadge } from './components/bits'
+import { Chip, SectionNav, ToneBadge } from './components/bits'
 import { DeleteWorkflowDialog } from './components/DeleteWorkflowDialog'
 
 /** The last-run line's dot; the words beside it carry the meaning. */
@@ -97,13 +95,18 @@ export function WorkflowsPage({
   const shown = q
     ? rows.filter((wf) => `${wf.name} ${descriptionOf(wf)}`.toLowerCase().includes(q))
     : rows
-  const linkState = useSiblingState(shown.map((wf) => wf.id))
   const empty = list.isSuccess && rows.length === 0
   const absent = mode === 'drafts' && list.isError && isDraftsAbsent(list.error)
   const sorts: readonly string[] = mode === 'deployed' ? WORKFLOW_SORTS : DRAFT_SORTS
   const sortLabel = SORT_LABEL[mode] as Record<string, string>
 
-  const create = <CreateWorkflowLink />
+  const create = (
+    <Button asChild size="sm" className="pointer-coarse:min-h-11">
+      <Link to="/workflows/new">
+        <Plus aria-hidden /> {copy.create}
+      </Link>
+    </Button>
+  )
 
   let body
   if (absent)
@@ -163,18 +166,13 @@ export function WorkflowsPage({
     )
   else
     body = (
-      <ul
-        data-tour="workflows-list"
-        aria-label={text.title}
-        className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
-      >
+      <ul aria-label={text.title} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {shown.map((wf) => (
           <li key={wf.id} className="flex min-w-0 [&>*]:min-w-0 [&>*]:flex-1">
             <WorkflowCard
               wf={wf}
               mode={mode}
               metrics={metrics}
-              linkState={linkState}
               onRun={() => startRun(wf.id)}
               onDelete={() => setDeleting(wf)}
             />
@@ -185,20 +183,17 @@ export function WorkflowsPage({
 
   return (
     <div className="space-y-4">
-      {/* Create is the module's action: the top bar's right, the same on every section. */}
-      <TopBar actions={absent ? null : create} />
-      <PageHeader title={copy.title} description={copy.sub} />
+      <PageHeader title={text.title} actions={absent ? null : create} />
       <SectionNav current={mode === 'deployed' ? '/workflows' : '/workflows/drafts'} />
       {absent ? null : (
-        // One row the width of the grid: search on the left, the sort on the right.
-        <div data-tour="workflows-toolbar" className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <SearchInput
             aria-label={text.search}
             placeholder={copy.searchPlaceholder}
             value={term}
             onChange={(e) => setSearch({ q: e.target.value || undefined })}
             disabled={empty}
-            className="w-full max-w-none sm:w-72"
+            className="w-full max-w-none sm:w-80"
           />
           {/* `main` ignores `sort` (W-3): a menu that changes nothing is hidden. */}
           {metrics ? (
@@ -207,8 +202,8 @@ export function WorkflowsPage({
               onValueChange={(v) => setSearch({ sort: v === sorts[0] ? undefined : v })}
               disabled={empty}
             >
-              <SelectTrigger size="sm" aria-label={copy.sortLabel} className="text-xs sm:ml-auto">
-                <span className="text-muted-foreground">{copy.sortPrefix}:</span> <SelectValue />
+              <SelectTrigger size="sm" aria-label={copy.sortLabel}>
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {sorts.map((v) => (
@@ -239,14 +234,12 @@ const WorkflowCard = memo(function WorkflowCard({
   wf,
   mode,
   metrics,
-  linkState,
   onRun,
   onDelete,
 }: {
   wf: WorkflowRow
   mode: ListMode
   metrics: boolean
-  linkState: () => HistoryState
   onRun: () => void
   onDelete: () => void
 }) {
@@ -257,12 +250,7 @@ const WorkflowCard = memo(function WorkflowCard({
   const health = wf.health && wf.health !== 'unknown' ? wf.health : null
   const description = descriptionOf(wf)
   const open = () =>
-    void navigate({
-      to: '/workflows/$workflowId',
-      params: { workflowId: wf.id },
-      search: {},
-      state: linkState,
-    })
+    void navigate({ to: '/workflows/$workflowId', params: { workflowId: wf.id }, search: {} })
   const chips = [
     copy.steps(steps),
     copy.runs(wf.execution_count ?? 0),
@@ -286,7 +274,6 @@ const WorkflowCard = memo(function WorkflowCard({
             to="/workflows/$workflowId"
             params={{ workflowId: wf.id }}
             search={{}}
-            state={linkState}
             className="underline-offset-4 after:absolute after:inset-0 after:rounded-xl hover:underline focus-visible:outline-none"
           >
             {wf.name}

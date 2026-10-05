@@ -44,11 +44,10 @@ export const workflowSchema = z.looseObject({
 export type Workflow = z.infer<typeof workflowSchema>
 
 /** NAS-697 `Health`: bucketed from the all-time success rate (≥ 90 healthy, ≥ 50 degraded); `unknown` = never run. */
-/** @public The server's health buckets, documented with the wire types. */
 export type Health = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 
 /** A list row: `MafResponse` on `main`; NAS-697 `WorkflowListResponse` adds the metrics. */
-const workflowRowSchema = workflowSchema.extend({
+export const workflowRowSchema = workflowSchema.extend({
   /** Percent to 1 dp; null = never run (not 0). */
   success_rate: z.number().nullable().optional(),
   health: z.enum(['healthy', 'degraded', 'unhealthy', 'unknown']).optional(),
@@ -75,8 +74,6 @@ const stepResultSchema = z.looseObject({
   extracted_info: nullableString,
   tokens_used: z.number().optional(),
   latency_ms: z.number().optional(),
-  /** The step's trace, which is its flow's id (`maf/types.rs` `StepResult.trace_id`; plans/feat-flows.md O2). */
-  trace_id: nullableString,
 })
 export type StepResult = z.infer<typeof stepResultSchema>
 
@@ -105,7 +102,7 @@ export const executionSchema = z.looseObject({
 export type Execution = z.infer<typeof executionSchema>
 
 /** `ExecWithWorkflowResponse`: the workflow LEFT JOINed, so its name and status survive a delete (null once gone). */
-const executionRowSchema = executionSchema.extend({
+export const executionRowSchema = executionSchema.extend({
   workflow_name: nullableString,
   workflow_status: nullableString,
 })

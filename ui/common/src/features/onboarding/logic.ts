@@ -1,8 +1,8 @@
-/** Pure onboarding rules (plan Task 1): the step model, where each persona lands, and the home's Setup guide ticks. */
+/** Pure onboarding rules (plan Task 1): the step model, where each persona lands, and the Overview's ticks. */
 import { DRAFT_PREFIX } from '@/lib/draftKeys'
 import type { Onboarding, Persona } from './types'
 
-export const STEPS = ['welcome', 'role', 'model', 'agent', 'optimize', 'ready'] as const
+export const STEPS = ['welcome', 'role', 'model', 'agent', 'optimise', 'ready'] as const
 export type StepId = (typeof STEPS)[number]
 
 /** The page a persona opens first (spec §3). Data analysts get TokenOps: Weave is EE and dev only. */
@@ -84,18 +84,3 @@ export function guideProviders(
     models: by.get(id) ?? [],
   }))
 }
-
-/**
- * The home's default scope for a persona (plans/feat-agent-centric.md PR2): people who mostly build or use their own
- * agents start on Yours, people who run or pay for the fleet on Fleet. No persona (unset, skipped or no onboarding read):
- * Yours for members, Fleet for superusers.
- */
-const FLEET_PERSONAS: readonly Persona[] = [
-  'platform_engineer',
-  'sre',
-  'engineering_manager',
-  'leadership',
-  'finance',
-]
-export const homeScopeFor = (persona: Persona | null, isSuperuser: boolean): 'yours' | 'fleet' =>
-  persona ? (FLEET_PERSONAS.includes(persona) ? 'fleet' : 'yours') : isSuperuser ? 'fleet' : 'yours'

@@ -1,3 +1,5 @@
+'use client'
+
 import { localPoint } from '@visx/event'
 import type { scaleLinear, scaleTime } from '@visx/scale'
 import { useCallback, useEffect, useRef, useState } from 'react'

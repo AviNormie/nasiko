@@ -1,6 +1,6 @@
 /** Every Overview tuning number (plans/feat-overview.md §5.2): thresholds are relative to each agent's own history. */
 
-const HOUR = 3_600_000
+export const HOUR = 3_600_000
 export const DAY = 24 * HOUR
 
 /** Cost: 7-day spend up more than this vs the previous 7 days is Watch. */
@@ -29,23 +29,14 @@ export const MIN_SPIKE_DAYS = 3
 /** Top cost drivers in the Spend card: one per chart colour, the rest fold into Other. */
 export const TOP_DRIVERS = 5
 
-/**
- * Failed sessions fetched for Needs you. The count it reports is the server's
- * `matching_count` — every match in the window — so this only bounds how many
- * agent names the row can name, never the number it states.
- */
-export const FAILED_SESSION_ROWS = 25
-
 /** Needs you shows this many rows before its list scrolls (design review 2A). */
 export const NEEDS_VISIBLE_ROWS = 5
 /** Fleet health lists at most this many rated agents, Watch first. */
 export const HEALTH_LIST_ROWS = 5
-/** Recent sessions shows this many rows — and asks the server for exactly that. */
+/** The Budgets card lists at most this many agent budgets, most used first. */
+export const BUDGET_AGENT_ROWS = 3
+/** Recent sessions shows this many rows. */
 export const RECENT_SESSION_ROWS = 5
-/** Saved tokens by agent: named bars before Other; 7 fill the card beside 5 Recent sessions rows. */
-export const SAVED_BARS = 7
-/** Savings rows asked for: the server's maximum (its default of 25 would leave most agents out of the ranking). */
-export const SAVINGS_ROWS = 200
 /** How often Needs you's "Checked …" label re-ages on an open tab. */
 export const CHECKED_TICK_MS = 30_000
 /** Returning to the page after this long refetches the inbox (design review 8A, the TokenOps rule). */

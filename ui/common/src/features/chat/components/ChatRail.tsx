@@ -27,7 +27,6 @@ import { StateCard } from '@/features/observability/StateCard'
 import { cn } from '@/lib/utils'
 import { sessionRows, useChatSessions } from '../api'
 import { announce } from '../announce'
-import { setRailOrder } from '../railOrder'
 import { chatSignals, useSignals } from '../registry'
 import type { ChatCarry } from '../search'
 import { rowOf, type SignalsSnapshot } from '../signals'
@@ -140,10 +139,6 @@ export function ChatRail({
     shown.map((x) => ({ ...x, updated_at: x.row.updated_at, created_at: x.row.created_at })),
     now,
   )
-  // The header's Previous/Next follows this order. Waiting has its own order, so it steps nowhere (v1).
-  const orderKey =
-    view === 'waiting' ? '' : groups.flatMap((g) => g.rows.map((x) => x.row.session_id)).join(' ')
-  useEffect(() => setRailOrder(orderKey ? orderKey.split(' ') : []), [orderKey])
   // Dev aids survive navigation between chats (DX-A2).
   const carry = { mock: search.mock, debug: search.debug }
 
@@ -154,7 +149,7 @@ export function ChatRail({
   }
 
   return (
-    <nav data-tour="chat-rail" aria-label={copy.chats} className="flex h-full min-h-0 flex-col">
+    <nav aria-label={copy.chats} className="flex h-full min-h-0 flex-col">
       <div className="flex h-12 shrink-0 items-center gap-1 pr-2 pl-4">
         <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{copy.chats}</h2>
         <Button
@@ -282,12 +277,7 @@ export function ChatRail({
                           to="/chat/$sessionId"
                           params={{ sessionId: r.session_id }}
                           search={carry}
-                          onClick={(e) => {
-                            // A mouse click lets go of the row, so the opened chat focuses its composer;
-                            // Enter (detail 0) keeps keyboard users in the rail.
-                            if (e.detail > 0) e.currentTarget.blur()
-                            onNavigate?.()
-                          }}
+                          onClick={onNavigate}
                           title={rowTooltip(r)}
                           aria-current={active ? 'page' : undefined}
                           data-testid="rail-row"

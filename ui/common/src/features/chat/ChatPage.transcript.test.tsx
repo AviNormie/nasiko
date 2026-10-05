@@ -97,7 +97,7 @@ afterEach(() => {
 })
 
 describe('read-only chats', () => {
-  it('a recorded harness chat says so, links to Coding harnesses and has no composer', async () => {
+  it('a recorded harness chat says so, links to Harnesses and has no composer', async () => {
     fakeChat([sessionRow({ is_coding_agent: true, agent_id: 'harness-1' })], () => ({
       data: [message('u1', 'user', 'refactor', 3)],
       has_more: false,
@@ -105,7 +105,7 @@ describe('read-only chats', () => {
     }))
     renderApp(`/chat/${FAKE}`)
     expect(await screen.findByText('Recorded from a coding harness.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'View in Coding harnesses →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'View in Harnesses →' })).toHaveAttribute(
       'href',
       '/harnesses',
     )

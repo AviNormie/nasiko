@@ -84,8 +84,6 @@ let counter = 0
 let createDelayMs: number | null = null
 /** `GET /api/flows/{trace_id}` steps, per routed turn (flows.rs). */
 let flows = new Map<string, FlowStep[]>()
-/** When each routed turn's flow started and its chat, for the server's `{flow, steps}` shape (flows.rs `Flow`). */
-let flowMeta = new Map<string, { at: number; sessionId: string; title: string | null }>()
 let continuations = new Map<string, Continuation>()
 /** Every reconnect a test made, by hitl id. */
 let reconnects: string[] = []
@@ -108,7 +106,6 @@ export function resetChatMock() {
   counter = 0
   createDelayMs = null
   flows = new Map()
-  flowMeta = new Map()
   continuations = new Map()
   reconnects = []
   manyChats = false
@@ -223,36 +220,6 @@ function flowSteps(frames: readonly MockFrame[]): FlowStep[] {
 /** Read-only view for other mock groups and tests. */
 export const chatMockRows = (): ChatSessionRow[] => [...chats.values()].map((c) => c.row)
 
-/**
- * What the agent proxy saves for a chat turn sent to an agent with a `contextId` (EE Weave, d6b216fc1: "the proxy
- * saves both sides of every turn"): the session it names, created and titled from the first prompt when it doesn't
- * exist yet, gets the user's message now; the returned callback saves the reply, exactly as streamed, when the stream
- * ends. Another user's session is left alone.
- */
-export function chatMockProxyTurn(
-  ctx: ChatMockContext,
-  sessionId: string,
-  agent: { id: string; name: string },
-  prompt: string,
-): (reply: string) => void {
-  seed(ctx)
-  let c = chats.get(sessionId)
-  if (c && c.row.user_id !== ctx.userId()) return () => undefined
-  if (!c) {
-    const now = ctx.now()
-    const title = prompt.trim() ? prompt.trim().replace(/\s+/g, ' ').slice(0, 60) : 'New chat'
-    c = { row: row(ctx, sessionId, agent.id, agent.name, title, now, now), messages: [], hitl: [] }
-    chats.set(sessionId, c)
-  }
-  const chat = c
-  chat.messages.push(msg(sessionId, 'user', prompt, ctx.now()))
-  return (reply) => {
-    if (!reply.trim()) return
-    chat.messages.push(msg(sessionId, 'assistant', reply, ctx.now()))
-    chat.row = { ...chat.row, updated_at: iso(ctx.now()) }
-  }
-}
-
 const iso = (ms: number) => new Date(ms).toISOString()
 const id = (prefix: string) =>
   `5eedc${prefix}-0000-4000-8000-${String(++counter).padStart(12, '0')}`
@@ -265,9 +232,6 @@ const unauthorized = () =>
   )
 const rpcError = (s: number, code: number, message: string) =>
   HttpResponse.json({ jsonrpc: '2.0', id: null, error: { code, message } }, { status: s })
-
-/** Seed the chats now (other mocks read them, e.g. the optimization preview's latest chat). */
-export const ensureChatSeed = (ctx: ChatMockContext) => seed(ctx)
 
 function seed(ctx: ChatMockContext) {
   if (seeded) return
@@ -360,54 +324,19 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
   })
   const c4 = '5eedc000-0000-4000-8000-00000000c004'
   const t4 = now - 4 * 86_400_000
-  // Usage as the CLI reports it (estimated, API list price: claude-sonnet-4 at $3 / $15 per M tokens), plus the
-  // ledger's proposed per-turn records (AH-7, plans/feat-agent-centric.md PR1b): context report, memory use and the
-  // controls that acted. The ledger reads those only in preview mode.
-  const turn = (
-    i: number,
-    prompt: string,
-    reply: string,
-    calls: ToolCallSeed[],
-    proposed: Record<string, unknown> = {},
-  ) => {
-    const at = t4 + i * 120_000
-    const input = 12_000 + i * 3_000
-    const output = 900 + i * 200
-    return [
-      { ...msg(c4, 'user', prompt, at), external_turn_id: `c004-turn-${i}` },
-      {
-        ...msg(c4, 'assistant', reply, at + 60_000),
-        external_turn_id: `c004-turn-${i}`,
-        model: 'claude-sonnet-4',
-        input_tokens: input,
-        output_tokens: output,
-        cost_usd: ((input * 3 + output * 15) / 1e6).toFixed(6),
-        usage_estimated: true,
-        metadata: {
-          coding_agent: {
-            capture_policy: 'content',
-            tool_calls: calls.map((c, n) => toolCall(c, at + n * 4_000)),
-            ...proposed,
-          },
+  const turn = (i: number, prompt: string, reply: string, calls: ToolCallSeed[]) => [
+    msg(c4, 'user', prompt, t4 + i * 120_000),
+    {
+      ...msg(c4, 'assistant', reply, t4 + i * 120_000 + 60_000),
+      model: 'claude-sonnet-4',
+      metadata: {
+        coding_agent: {
+          capture_policy: 'content',
+          tool_calls: calls.map((c, n) => toolCall(c, t4 + i * 120_000 + n * 4_000)),
         },
       },
-    ]
-  }
-  const ctxReport = (pool: number, poolTokens: number, kept: number, keptTokens: number) => ({
-    'nasiko.context.strategy': 'pacms',
-    'nasiko.context.level': 'medium',
-    'nasiko.context.pool': pool,
-    'nasiko.context.pool_tokens': poolTokens,
-    'nasiko.context.kept': kept,
-    'nasiko.context.kept_tokens_est': keptTokens,
-  })
-  const control = (
-    i: number,
-    kind: string,
-    rule: { id: string; name: string },
-    outcome: string,
-    extra: Record<string, unknown> = {},
-  ) => ({ at: iso(t4 + i * 120_000 + 30_000), kind, rule, outcome, ...extra })
+    },
+  ]
   chats.set(c4, {
     row: recorded(c4, 'Refactor billing webhook', t4),
     messages: [
@@ -461,65 +390,34 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
             ms: 5,
           },
         ],
-        {
-          context: ctxReport(40, 21_400, 12, 12_000),
-          memory: { tokens: 1_800, items: 4 },
-          controls: [
-            control(
-              0,
-              'context',
-              { id: 'pacms-medium', name: 'History: PACMS (Medium)' },
-              'trimmed',
-              { tokens_saved: 9_400 },
-            ),
-          ],
-        },
       ),
       // Five calls (shown one by one): the other failure statuses and the calls with no result.
-      ...turn(
-        1,
-        'Why did the test time out?',
-        'Still checking the mock server.',
-        [
-          {
-            name: 'bash',
-            status: 'denied',
-            args: { cmd: 'rm -rf node_modules' },
-            error: 'The user denied this command.',
-          },
-          {
-            name: 'web_fetch',
-            status: 'timed_out',
-            args: { url: 'https://status.stripe.com' },
-            ms: 30_000,
-          },
-          { name: 'grep', status: 'cancelled', args: { pattern: 'stripe-mock' } },
-          { name: 'bash', status: 'pending', args: { cmd: 'docker ps' }, quality: 'inferred' },
-          {
-            name: 'read_file',
-            status: 'running',
-            args: { path: 'docker-compose.yml' },
-            quality: 'receipt',
-          },
-        ],
+      ...turn(1, 'Why did the test time out?', 'Still checking the mock server.', [
         {
-          context: ctxReport(42, 24_100, 14, 15_000),
-          memory: { tokens: 2_100, items: 5 },
-          controls: [
-            control(
-              1,
-              'tool_rule',
-              { id: 'rule-shell-delete', name: 'Block destructive shell commands' },
-              'blocked',
-              { tool: 'bash' },
-            ),
-          ],
+          name: 'bash',
+          status: 'denied',
+          args: { cmd: 'rm -rf node_modules' },
+          error: 'The user denied this command.',
         },
-      ),
+        {
+          name: 'web_fetch',
+          status: 'timed_out',
+          args: { url: 'https://status.stripe.com' },
+          ms: 30_000,
+        },
+        { name: 'grep', status: 'cancelled', args: { pattern: 'stripe-mock' } },
+        { name: 'bash', status: 'pending', args: { cmd: 'docker ps' }, quality: 'inferred' },
+        {
+          name: 'read_file',
+          status: 'running',
+          args: { path: 'docker-compose.yml' },
+          quality: 'receipt',
+        },
+      ]),
       ...turn(
         2,
         'Summarise the diff.',
-        'Three functions extracted; behavior unchanged except clearer 4xx errors.',
+        'Three functions extracted; behaviour unchanged except clearer 4xx errors.',
         [
           // A value the CLI already cut (CLI integration/report.rs canonical_event, cb3aaf0c): a string where JSON was expected, longer than the UI cap.
           {
@@ -531,21 +429,13 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
           },
           { name: 'telemetry', status: 'unknown', association: 'unknown' },
         ],
-        {
-          context: ctxReport(44, 27_300, 15, 18_000),
-          controls: [
-            control(2, 'budget', { id: 'owner-budget', name: 'Your monthly budget' }, 'warned'),
-          ],
-        },
       ),
     ],
     hitl: [],
   })
   const c5 = '5eedc000-0000-4000-8000-00000000c005'
   chats.set(c5, {
-    // 10 days back: Older in the rail, and off the demo's spike day now that session/list lists recorded chats too
-    // (docs/designs/openruntime-demo-script.md pins that day's session count).
-    row: recorded(c5, CODING_SESSION_TITLE, now - 10 * 86_400_000),
+    row: recorded(c5, CODING_SESSION_TITLE, now - 9 * 86_400_000),
     messages: [],
     hitl: [],
   })
@@ -998,7 +888,7 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
   const guard = () => (ctx.loggedIn() ? null : unauthorized())
 
   /** A routed dispatch: the orchestrator's stream, with the assistant row saved server-side at Done (§2.3). */
-  const routedDispatch = (sessionId: string, message: string) => {
+  const routedDispatch = (sessionId: string) => {
     const picked = fixedScenario ?? ctx.scenario()
     const scenario: ChatScenario = isRoutedScenario(picked) ? picked : 'routed-plain'
     // Pre-stream errors (a2a_dispatch.rs:2204-2242); 429 is plain text with no Retry-After.
@@ -1034,8 +924,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
       }
     }
     flows.set(traceId, flowSteps(frames))
-    // a2a_dispatch.rs titles a routed flow with the user's message.
-    flowMeta.set(traceId, { at: Date.now(), sessionId, title: message })
     return sseResponse(
       frames.map((f, i) => (i === 0 ? f : { ...f, delayMs: f.delayMs ?? 15 })),
       {
@@ -1061,18 +949,8 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50))
       const agentId = url.searchParams.get('agent_id')
       const cursor = url.searchParams.get('cursor')
-      // `?surface=<name>` lists that surface's `<name>_` sessions; the general list hides every namespaced id
-      // except the platform's own `ses_` (routes.rs `surface_predicate`).
-      const surface = url.searchParams.get('surface')
-      const inScope = (sid: string) =>
-        surface ? sid.startsWith(`${surface}_`) : !sid.includes('_') || sid.startsWith('ses_')
       const rows = [...chats.values()]
-        .filter(
-          (c) =>
-            c.row.user_id === ctx.userId() &&
-            (!agentId || c.row.agent_id === agentId) &&
-            inScope(c.row.session_id),
-        )
+        .filter((c) => c.row.user_id === ctx.userId() && (!agentId || c.row.agent_id === agentId))
         .map(listRow)
         .sort(
           (a, b) =>
@@ -1200,7 +1078,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
         role?: string
         content?: string
         usage?: Record<string, unknown>
-        file_parts?: unknown
       }
       if (body.role !== 'user' && body.role !== 'assistant')
         return text('role must be "user" or "assistant"', 400)
@@ -1217,10 +1094,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
         cost_usd: typeof u.cost_usd === 'number' ? u.cost_usd.toFixed(8) : null,
         usage_estimated: typeof u.estimated === 'boolean' ? u.estimated : null,
         trace_id: typeof u.trace_id === 'string' ? u.trace_id : null,
-        // Stored as sent (routes.rs `file_parts_json`): the Weave dock keeps its view on the message here.
-        ...(body.file_parts != null
-          ? { file_parts: body.file_parts as ChatMessage['file_parts'], has_file_parts: true }
-          : {}),
       }
       c.messages.push(saved)
       c.row = { ...c.row, updated_at: saved.timestamp }
@@ -1231,36 +1104,11 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
     http.get('/api/flows/:id', ({ params }) => {
       const denied = guard()
       if (denied) return denied
-      const id = String(params.id)
-      const steps = flows.get(id)
+      const steps = flows.get(String(params.id))
       if (!steps) return new HttpResponse(null, { status: 404 })
-      // The server's full shape (flows.rs `Flow`, `FlowStep`), so the Flows page can open it too: one step per
-      // call, a second and a half apart, the flow done when its last step is.
-      const meta = flowMeta.get(id) ?? { at: Date.now(), sessionId: '', title: null }
-      const iso = (ms: number) => new Date(ms).toISOString()
-      const sorted = [...steps].sort((a, b) => a.step_order - b.step_order)
-      const open = (st: FlowStep) => st.status === 'running' || st.status === 'awaiting_human'
-      const end = meta.at + sorted.length * 1_500
       return HttpResponse.json({
-        flow: {
-          flow_id: id,
-          status: sorted.some((st) => st.status === 'awaiting_human')
-            ? 'paused'
-            : sorted.some((st) => st.status === 'failed')
-              ? 'failed'
-              : 'completed',
-          root_agent_name: 'orchestrator',
-          title: meta.title,
-          metadata: { context_id: meta.sessionId },
-          created_at: iso(meta.at),
-          completed_at: sorted.some(open) ? null : iso(end),
-        },
-        steps: sorted.map((st, i) => ({
-          ...st,
-          id: `${id}-step-${i + 1}`,
-          created_at: iso(meta.at + i * 1_500 + 100),
-          completed_at: open(st) ? null : iso(meta.at + i * 1_500 + 1_300),
-        })),
+        flow: { flow_id: String(params.id), status: 'completed', root_agent_name: 'orchestrator' },
+        steps: [...steps].sort((a, b) => a.step_order - b.step_order),
       })
     }),
 
@@ -1387,7 +1235,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
           c.hitl.push(next)
         } else {
           flows.set(traceId, flowSteps(frames))
-          flowMeta.set(traceId, { at: Date.now(), sessionId: c.row.session_id, title: null })
           persistRouted(ctx, c, frames, traceId)
         }
         h.resume_status = 'completed'
@@ -1492,7 +1339,7 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
       const text0 = (body.params?.message?.parts ?? []).map((p) => p.text ?? '').join('')
       if (!text0.trim()) return rpcError(400, -32602, 'message has no text')
       // No agent_id (or "orchestrator"): the ReAct orchestrator (a2a_dispatch.rs:199, 584-592).
-      if (!agentId || agentId === 'orchestrator') return routedDispatch(sessionId, text0)
+      if (!agentId || agentId === 'orchestrator') return routedDispatch(sessionId)
       // resolve_agent filters on status = 'running' (a2a_dispatch.rs:1067-1074): a stopped agent is AgentNotFound too.
       const agent = ctx.agents().find((a) => (a.id === agentId || a.name === agentId) && a.running)
       if (!agent) return rpcError(404, -32604, `agent '${agentId}' not found or not running`)

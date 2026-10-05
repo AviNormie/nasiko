@@ -1,3 +1,5 @@
+'use client'
+
 import type { scaleBand, scaleLinear, scaleTime } from '@visx/scale'
 
 type ScaleLinear<Output, _Input = number> = ReturnType<typeof scaleLinear<Output>>

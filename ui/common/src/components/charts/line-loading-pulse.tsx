@@ -1,3 +1,5 @@
+'use client'
+
 import { animate, motion, useMotionValue, useTransform } from 'motion/react'
 import { useEffect, useId } from 'react'
 import { chartCssVars, useChartStable } from './chart-context'

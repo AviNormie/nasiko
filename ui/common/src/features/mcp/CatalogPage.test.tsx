@@ -29,15 +29,11 @@ describe('MCP catalog (plans/feat-mcp.md §2)', () => {
     expect(within(await card('Gmail')).getByText(copy.toolkit)).toBeInTheDocument()
     expect(within(await card('Finance ledger')).getByText(/^Shared by \S+/)).toBeInTheDocument()
 
-    const source = async (name: string) => {
-      await userEvent.click(screen.getByRole('combobox', { name: copy.viewLabel }))
-      await userEvent.click(await screen.findByRole('option', { name }))
-    }
-    await source(copy.views.toolkits)
+    await userEvent.click(screen.getByRole('button', { name: copy.views.toolkits }))
     await waitFor(() => expect(screen.queryByText('Docs search')).toBeNull())
     expect(screen.getByText('Slack')).toBeInTheDocument()
 
-    await source(copy.allViews)
+    await userEvent.click(screen.getByRole('button', { name: copy.views.toolkits }))
     await userEvent.click(await screen.findByRole('tab', { name: /Connected/ }))
     await waitFor(() => expect(screen.queryByText('Slack')).toBeNull())
     expect(screen.getByText('GitHub')).toBeInTheDocument()

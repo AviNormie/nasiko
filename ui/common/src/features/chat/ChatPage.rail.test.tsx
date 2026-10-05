@@ -159,7 +159,7 @@ describe('layout', () => {
     expect(document.querySelector('main')!.parentElement).toHaveClass('h-dvh')
     expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat')
     await router.navigate({ to: '/agents' })
-    await waitFor(() => expect(document.querySelector('main .max-w-page')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('main')).toHaveClass('max-w-page'))
     expect(document.querySelector('main')!.parentElement).toHaveClass('min-h-screen')
   })
 })

@@ -1,24 +1,29 @@
 /**
- * TokenOps, question-led (plans/feat-tokenops-page.md), as one open page: nothing hides behind an expander.
+ * TokenOps, question-led (plans/feat-tokenops-page.md).
  *
- *   Hero bento: narrative + spend curve │ six KPI tiles │ more metrics │ savings strip
- *   ── sticky section nav (Spend · Drivers · Optimisation) ──
- *   Spend: F2 timeline (Spend · Latency) ─ click bucket ─▶ ?day= ─▶ DayPanel ─ agent ─▶ ?agent= │ View traces ─▶ ?traces=true
- *          F1 This month (calendar + forecast) ─ click day ─▶ ?day=
- *   Drivers: concentration + token mix │ F3 attribution | F5 cost × p95   F3 row "Traces" ─▶ ?agent=<id>&traces=true
- *   Optimisation: /finops/savings bento + chat history (CX-V3)
+ *   F1 hero "This month" (always MTD) ─ click day ─▶ ?day=
+ *   ── Window divider ──
+ *   KPI strip (4 + More)
+ *   F2 timeline ─ click bucket ─▶ ?day=  ─▶ DayPanel ─ agent ─▶ ?agent=  │ View traces ─▶ ?traces=true
+ *   F3 attribution  |  F5 cost × p95          F3 row "Traces" ─▶ ?agent=<id>&traces=true
  *   F4 traces drawer (sheet)
  *
- * The shell's top bar carries the time presets and the drill path (TokenOps › day › agent › Traces); the page header
- * keeps the title, freshness and filters. All state lives in the URL. Drill-downs push history (Back unwinds them);
- * sort and search replace it (A5). `?open=` (links from other pages) scrolls to its section on arrival.
+ * All state lives in the URL. Drill-downs push history (Back unwinds them); sort,
+ * search and the KPI expander replace it (A5).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, DollarSign, Info, X } from 'lucide-react'
-import { AnimatePresence, m } from 'motion/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -27,12 +32,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { env } from '@/lib/env'
 import { fmtLocalTime, fmtPct, fmtShortDay } from '@/lib/format'
-import { useMediaQuery } from '@/lib/useMediaQuery'
-import { transitions } from '@/lib/motion'
+import { prefersReducedMotion, useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import {
   useDashboard,
@@ -45,25 +50,24 @@ import {
   type Filters,
 } from './api'
 import { compareOn, withoutWindow } from '@/app/shell/context'
-import { TopBar } from '@/app/shell/TopBar'
 import { tokenopsNarrative } from '@/features/narrative/tokenops'
 import { buildAttribution } from './attribution'
 import { summarizeMonth } from './forecast'
-import { openSet, type Disclosure as DisclosureId, type TokenopsSearch } from './search'
+import {
+  DISCLOSURES,
+  openSet,
+  toggleOpen,
+  type Disclosure as DisclosureId,
+  type TokenopsSearch,
+} from './search'
 import { toTimeline, zeroFillTimeline } from './series'
 import { DAY_MS, dayWindow, monthKey, resolveWindow, utcMonthStart } from './window'
 import { AttributionTable } from './components/AttributionTable'
 import { CostPerformance } from './components/CostPerformance'
 import { DayPanel } from './components/DayPanel'
-import { DriversOverview } from './components/DriversOverview'
-import { ChatHistory } from './components/ChatHistory'
-import { Reveal, RevealItem } from '@/components/shared/reveal'
-import { Segmented } from './components/Segmented'
-import { SectionNav } from './components/SectionNav'
-import { scrollToSection, sectionDomId } from './sections'
-import { useSavingsTrend } from '@/features/optimization/api'
+import { Disclosure } from '@/components/shared/disclosure'
+import { KpiStrip } from './components/KpiStrip'
 import { MonthHero } from './components/MonthHero'
-import { copy as optimizationCopy } from '@/features/optimization/copy'
 import { OptimisationPanel } from './components/OptimisationPanel'
 import { SavingsHighlight } from './components/SavingsHighlight'
 import { summarizeOptimisation } from './optimisation'
@@ -73,7 +77,7 @@ import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { SpendTimeline } from './components/SpendTimeline'
 import { SummaryHero } from './components/SummaryHero'
-import { CustomRange, InvalidRangeNote, TimePresets } from '@/components/shared/time-control'
+import { TimeControl } from '@/components/shared/time-control'
 import { TracesDrawer } from './components/TracesDrawer'
 
 export type SetSearch = (patch: Partial<TokenopsSearch>, opts?: { replace?: boolean }) => void
@@ -138,8 +142,6 @@ export function TokenopsPage({
   const calLast = useCalendar(monthKey(lastMonth), filters, ready)
   const day = useDay(search.day, filters, ready)
   const providers = useProviders(ready)
-  // CX-V3 (proposed): history selection's savings, the /optimization lead's read under the same key.
-  const history = useSavingsTrend(win, ready)
   const traces = useTopTraces(tracesWin, filters, ready && !!search.traces)
 
   // Agent filter options: the unfiltered dashboard (same cache entry when no filter is set).
@@ -241,20 +243,105 @@ export function TokenopsPage({
     attrRows,
   ])
 
-  // Arriving with `?open=` (the Overview's "See the breakdown", a trace's "Open in TokenOps") should land on that
-  // section, not the top of the page. No dependency array on purpose: the sections sit behind the page loader, so on a
-  // cold load the element does not exist yet and no single piece of state marks the moment it appears. Retry each
-  // render until it is there, then latch, so a later scroll of the user's own is never yanked back.
-  const arrivedAt = useRef(false)
+  // Disclosures, one open at a time: Spend over time starts open, the rest collapsed; a drill-down
+  // or table state in the URL opens its own. This month keeps Spend over time open beside it,
+  // because its calendar opens the day panel there.
+  // A disclosure forced open by URL state can still be collapsed: `closed` remembers that locally.
+  const open = openSet(search.open)
+  // The collapse is remembered against the URL state that forced it open, so a new drill-down
+  // (another day, a new search) opens the disclosure again. Closing the day panel doesn't.
+  const forcedBy = (id: DisclosureId) =>
+    id === 'spend'
+      ? (search.day ?? '')
+      : id === 'drivers'
+        ? `${search.q ?? ''}|${search.sort}|${search.view}|${open.has('perf')}`
+        : id === 'metrics'
+          ? String(search.more ?? '')
+          : ''
+  const [closed, setClosed] = useState<ReadonlyMap<DisclosureId, string>>(new Map())
+  // Opening This month also opens Spend over time above it, which pushes This month down:
+  // bring its header back to just under the sticky bar.
+  const stickyBar = useRef<HTMLDivElement>(null)
+  const scrollToMonth = useRef(false)
   useEffect(() => {
-    if (arrivedAt.current) return
-    const target = arrivalSection(openSet(search.open))
-    if (!target) {
-      arrivedAt.current = true
+    const header = document.getElementById('disclosure-month-title')
+    if (!scrollToMonth.current || !header || !openSet(search.open).has('month')) return
+    scrollToMonth.current = false
+    header.style.scrollMarginTop = `${(stickyBar.current?.offsetHeight ?? 0) + 8}px`
+    header.scrollIntoView?.({
+      block: 'start',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    })
+  }, [search.open, showLoader])
+  /**
+   * Put the optimisation section under the sticky bar.
+   *
+   * One function for both ways in — the in-page button and the Overview's link — because they are
+   * the same request and must land in the same place. They did not: the button scrolled without the
+   * sticky-bar offset, so it stopped with the heading hidden behind the bar.
+   */
+  const scrollToOptimise = () => {
+    const header = document.getElementById('disclosure-optimise-title')
+    if (!header) return false
+    header.style.scrollMarginTop = `${(stickyBar.current?.offsetHeight ?? 0) + 8}px`
+    header.scrollIntoView?.({
+      block: 'start',
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    })
+    return true
+  }
+
+  // Arriving from the Overview's "See the breakdown" should land on the section, not the top of a
+  // page with four other panels above it.
+  //
+  // No dependency array on purpose. The disclosures sit behind the page loader, so on a cold load
+  // the element does not exist yet, and there is no single piece of state whose change reliably
+  // marks the moment it appears — `painted` is set during render, so it is already settled by the
+  // time effects run. Retrying each render until the element is there, then latching on the ref,
+  // is both simpler and correct; the cost is one `getElementById` per render, and only until it
+  // succeeds. The ref also stops a later toggle of the same section from yanking the viewport.
+  const scrolledToOpened = useRef(false)
+  useEffect(() => {
+    if (scrolledToOpened.current || !openSet(search.open).has('optimise')) return
+    if (scrollToOptimise()) scrolledToOpened.current = true
+  })
+  const collapsed = (id: DisclosureId) =>
+    closed.has(id) && (closed.get(id) === forcedBy(id) || (id === 'spend' && !search.day))
+  const isOpen = (id: DisclosureId) =>
+    !collapsed(id) &&
+    (open.has(id) ||
+      id === 'spend' ||
+      // Open by default: savings are the one piece of good news on this page, and burying them
+      // behind an expand made them invisible to anyone who did not already know to look.
+      id === 'optimise' ||
+      (id === 'drivers' &&
+        (!!search.q || search.sort !== 'cost' || search.view !== 'agent' || open.has('perf'))) ||
+      (id === 'metrics' && !!search.more))
+  const toggle = (id: DisclosureId) => {
+    if (isOpen(id)) {
+      setClosed((prev) => new Map(prev).set(id, forcedBy(id)))
+      if (open.has(id)) setSearch({ open: toggleOpen(search.open, id) }, { replace: true })
       return
     }
-    if (scrollToSection(target)) arrivedAt.current = true
-  })
+    const keep: DisclosureId[] = id === 'month' ? ['spend', 'month'] : [id]
+    if (id === 'month') scrollToMonth.current = true
+    setClosed((prev) => {
+      const n = new Map(prev)
+      for (const d of DISCLOSURES) {
+        if (keep.includes(d)) n.delete(d)
+        else if (isOpen(d)) n.set(d, forcedBy(d))
+      }
+      return n
+    })
+    setSearch(
+      {
+        open: keep.join(','),
+        // This month opens on today's hour-by-hour breakdown unless a day is already picked.
+        ...(id === 'month' && !search.day ? { day: now.toISOString().slice(0, 10) } : {}),
+      },
+      { replace: true },
+    )
+  }
 
   // Opening the day panel or the drawer pushes history. Closing goes Back only when the
   // current entry is still the one that open created (history index = pre-open + 1), so a
@@ -334,110 +421,75 @@ export function TokenopsPage({
     const matches = agentOptions.filter((a) => a.name === name)
     return matches.length === 1 ? matches[0].id : undefined
   }
-  // MTD's KPI Δ compares with the same-length window before the month, not "same days last month" (the month's comparison).
+  // MTD's KPI Δ compares with the same-length window before the month, not "same days last month" (the hero's comparison).
   const mtdDays = Math.max(1, Math.round((win.end.getTime() - win.start.getTime()) / DAY_MS))
   const kpiCompareLabel =
     win.preset === 'mtd' ? `the previous ${mtdDays === 1 ? 'day' : `${mtdDays} days`}` : undefined
-  const historyData =
-    history.data?.kind === 'ready'
-      ? history.data.data
-      : history.isError || history.data
-        ? null
-        : undefined
-  const optimiseHint = optimisation
-    ? `${optimisation.optimisedCount} of ${optimisation.totalAgents} agents · ${showOptPct(optimisation.savedPct)} tokens saved`
-    : 'savings per layer and per agent'
-  const sections = [
-    { id: 'spend', label: 'Spend', hint: win.label },
-    { id: 'drivers', label: 'Drivers' },
-    { id: 'optimize', label: 'Optimization', hint: optimisation ? optimiseHint : undefined },
-  ]
-
-  const time = {
-    preset: search.preset,
-    invalid: search.preset === 'custom' && win.preset !== 'custom',
-    from: search.from,
-    to: search.to,
-    today,
-    onChange: (n: Pick<TokenopsSearch, 'preset' | 'from' | 'to'>) =>
-      setSearch(
-        { preset: n.preset, from: n.from, to: n.to },
-        { replace: search.preset === 'custom' && n.preset === 'custom' },
-      ),
-  }
-
-  const filterControls = (
-    <>
-      <FilterSelect
-        label="Agent"
-        value={search.agent}
-        options={agentOptions.map((a) => ({ value: a.id, label: a.name }))}
-        onChange={(v) => setSearch({ agent: v, traces: undefined })}
-        extraLabel={agentLabel}
-      />
-      <FilterSelect
-        label="Provider"
-        value={search.provider}
-        options={(providers.data ?? []).map((p) => ({ value: p.provider, label: p.provider }))}
-        onChange={(v) => setSearch({ provider: v, model: undefined })}
-      />
-      <FilterSelect
-        label="Model"
-        value={search.model}
-        options={uniqueModels.map((m) => ({ value: m, label: m }))}
-        onChange={(v) => setSearch({ model: v })}
-      />
-    </>
-  )
 
   if (firstRun) return <FirstRun />
 
   return (
-    // The page's first load is the one page loader below the header (plan §8 Phase 9: one busy region).
+    // The page's first load is the one page loader below the sticky bar (plan §8 Phase 9: one busy region).
     <div className="flex flex-col gap-4">
-      {/* The top bar is the page's one sticky row: the presets and the drill path stay in view (A1). */}
-      <TopBar
-        {...drillTrail(search, agentLabel, setSearch)}
-        actions={
-          <>
-            <TimePresets {...time} />
-            {/* Custom dates sit beside the presets; a phone's bar has no room, so there they join the filters. */}
-            {isMd ? <CustomRange {...time} noteElsewhere /> : null}
-          </>
-        }
-        pinActions
-      />
-      {/* Left: what you are looking at and how fresh it is. Right: what narrows it, under the time presets. */}
-      <PageHeader
-        title="TokenOps"
-        description={
-          dash.dataUpdatedAt ? (
-            <span title="When this data was fetched">
-              Data as of {fmtLocalTime(dash.dataUpdatedAt, true)}
-            </span>
-          ) : null
-        }
-        actions={
-          isMd ? (
-            // A column, so the invalid-range note sits under the filters and both keep the right edge.
-            <div data-tour="tokenops-filters" className="flex flex-col items-end gap-1">
-              <div className="flex flex-wrap items-center justify-end gap-2">{filterControls}</div>
-              {time.invalid ? <InvalidRangeNote /> : null}
-            </div>
-          ) : null
-        }
-        className="mb-2"
-      />
-      {/* Phones: the custom dates and the filters scroll sideways in one row instead of wrapping (A1b). */}
-      {isMd ? null : (
-        <div
-          data-tour="tokenops-filters"
-          className="-mx-4 mb-2 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 [&>*]:shrink-0"
-        >
-          <CustomRange {...time} />
-          {filterControls}
+      {/* Sticky bar: title, time control, filters, breadcrumb, freshness (A1). */}
+      <div
+        ref={stickyBar}
+        className="sticky top-0 z-20 -mx-4 flex flex-col gap-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
+      >
+        <PageHeader
+          title="TokenOps"
+          actions={
+            <TimeControl
+              preset={search.preset}
+              invalid={search.preset === 'custom' && win.preset !== 'custom'}
+              from={search.from}
+              to={search.to}
+              today={today}
+              onChange={(n) =>
+                setSearch(
+                  { preset: n.preset, from: n.from, to: n.to },
+                  { replace: search.preset === 'custom' && n.preset === 'custom' },
+                )
+              }
+            />
+          }
+        />
+        {/* Chips scroll horizontally on narrow screens instead of growing the sticky bar (A1b). */}
+        <div className="-mx-4 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0 [&>*]:shrink-0">
+          <FilterSelect
+            label="Agent"
+            value={search.agent}
+            options={agentOptions.map((a) => ({ value: a.id, label: a.name }))}
+            onChange={(v) => setSearch({ agent: v, traces: undefined })}
+            extraLabel={agentLabel}
+          />
+          <FilterSelect
+            label="Provider"
+            value={search.provider}
+            options={(providers.data ?? []).map((p) => ({ value: p.provider, label: p.provider }))}
+            onChange={(v) => setSearch({ provider: v, model: undefined })}
+          />
+          <FilterSelect
+            label="Model"
+            value={search.model}
+            options={uniqueModels.map((m) => ({ value: m, label: m }))}
+            onChange={(v) => setSearch({ model: v })}
+          />
+          <DrillCrumbs
+            win={win.label}
+            day={search.day}
+            agent={agentLabel}
+            traces={!!search.traces}
+            setSearch={setSearch}
+          />
+          <span
+            className="ml-auto text-xs text-muted-foreground"
+            title="When this data was fetched"
+          >
+            {dash.dataUpdatedAt ? `Data as of ${fmtLocalTime(dash.dataUpdatedAt, true)}` : null}
+          </span>
         </div>
-      )}
+      </div>
 
       {showLoader ? <PageLoader label="Loading TokenOps" /> : null}
       {showLoader ? null : unknownAgent ? (
@@ -480,23 +532,32 @@ export function TokenopsPage({
               ) : null
             }
             windowLabel={win.label}
-            compareLabel={kpiCompareLabel}
-            data={dash.data}
-            points={summaryStale ? [] : timeline}
+            kpis={dash.data?.kpis}
+            totalAgents={dash.data?.summary.total_agents}
             compare={compare && !prevUnavailable}
             unpriced={unpriced > 0}
             month={summary}
             loading={dash.isPending || summaryStale}
             error={dash.error}
             onRetry={() => void dash.refetch()}
-          >
-            <SavingsHighlight data={optimisation} onSeeDetail={() => scrollToSection('optimize')} />
-          </SummaryHero>
+          />
 
-          <SectionNav sections={sections} />
+          <SavingsHighlight
+            data={optimisation}
+            onSeeDetail={() => {
+              if (!isOpen('optimise')) toggle('optimise')
+              scrollToOptimise()
+            }}
+          />
 
-          <Reveal data-tour="tokenops-sections" className="flex flex-col gap-10">
-            <PageSection id="spend" title="Spend" hint={win.label}>
+          <div className="flex flex-col">
+            <Disclosure
+              id="spend"
+              title="Spend over time"
+              hint={win.label}
+              open={isOpen('spend')}
+              onToggle={() => toggle('spend')}
+            >
               <SpendTimeline
                 points={timeline}
                 bucket={timeseries.data?.bucket ?? 'day'}
@@ -508,88 +569,92 @@ export function TokenopsPage({
                 windowLabel={win.label.toLowerCase()}
               />
 
-              <AnimatePresence initial={false}>
-                {search.day ? (
-                  <m.div
-                    key="day"
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={transitions.disclosure}
-                  >
-                    <DayPanel
-                      date={search.day}
-                      data={day.data}
-                      loading={day.isPending}
-                      error={day.error}
-                      onRetry={() => void day.refetch()}
-                      onClose={() => close('day')}
-                      announce={announceDay}
-                      onAnnounced={() => setAnnounceDay(false)}
-                      canFilterAgent={(name) => agentIdForDisplayName(name) !== undefined}
-                      onFilterAgent={(name) => {
-                        const id = agentIdForDisplayName(name)
-                        if (id) setSearch({ agent: id, view: 'agent' })
-                      }}
-                      onViewTraces={() => openTraces({})}
-                      morph={narrative?.spike?.date !== search.day}
-                      sessionsLink={
-                        <Link
-                          to="/sessions"
-                          search={{ ...withoutWindow(search), day: search.day, sort: 'cost' }}
-                          className="text-sm font-medium text-primary-text underline-offset-4 hover:underline"
-                        >
-                          See sessions <span aria-hidden>→</span>
-                        </Link>
-                      }
-                    />
-                  </m.div>
-                ) : null}
-              </AnimatePresence>
-
-              {/* `layout`: when the day panel opens above, the month glides down instead of jumping. */}
-              <m.div layout="position" transition={transitions.disclosure}>
-                <MonthHero
-                  summary={summary}
-                  unpricedCalls={
-                    win.preset === 'mtd' && noFilters && dash.data && !dash.isPlaceholderData
-                      ? unpriced
-                      : null
-                  }
-                  days={calPending ? undefined : calThis.data?.days}
-                  monthStart={thisMonth}
-                  today={today}
-                  selectedDay={search.day}
-                  onSelectDay={openDay}
-                  loading={calPending}
-                  error={calThis.error ?? calLast.error}
-                  onRetry={() => {
-                    void calThis.refetch()
-                    void calLast.refetch()
+              {search.day ? (
+                <DayPanel
+                  date={search.day}
+                  data={day.data}
+                  loading={day.isPending}
+                  error={day.error}
+                  onRetry={() => void day.refetch()}
+                  onClose={() => close('day')}
+                  announce={announceDay}
+                  onAnnounced={() => setAnnounceDay(false)}
+                  canFilterAgent={(name) => agentIdForDisplayName(name) !== undefined}
+                  onFilterAgent={(name) => {
+                    const id = agentIdForDisplayName(name)
+                    if (id) setSearch({ agent: id, view: 'agent' })
                   }}
+                  onViewTraces={() => openTraces({})}
+                  morph={narrative?.spike?.date !== search.day}
+                  sessionsLink={
+                    <Link
+                      to="/sessions"
+                      search={{ ...withoutWindow(search), day: search.day, sort: 'cost' }}
+                      className="text-sm font-medium text-primary-text underline-offset-4 hover:underline"
+                    >
+                      See sessions <span aria-hidden>→</span>
+                    </Link>
+                  }
                 />
-              </m.div>
-            </PageSection>
+              ) : null}
+            </Disclosure>
 
-            <PageSection
-              id="drivers"
-              title="Drivers"
-              hint={search.view === 'agent' ? 'agents, tokens, cost vs performance' : 'workflows'}
+            <Disclosure
+              id="optimise"
+              title="Token optimisation"
+              hint={
+                optimisation
+                  ? `${optimisation.optimisedCount} of ${optimisation.totalAgents} agents · ${showOptPct(optimisation.savedPct)} tokens saved`
+                  : 'savings per layer and per agent'
+              }
+              open={isOpen('optimise')}
+              onToggle={() => toggle('optimise')}
             >
-              <DriversOverview
-                rows={attrRows}
-                tokens={dash.data?.token_usage}
-                view={search.view}
-                loading={dash.isPending}
-              />
-              {search.view === 'agent' && !isMd ? (
-                <Segmented
-                  label="Panel"
-                  value={mobilePanel}
-                  options={MOBILE_PANELS}
-                  onChange={setMobilePanel}
-                  className="w-fit"
-                />
+              {savings.isError ? (
+                <StateCard
+                  tone="warning"
+                  title="Savings could not be loaded"
+                  fix="Retry, or check the control plane logs for the finops savings query."
+                  action={
+                    <Button variant="outline" size="sm" onClick={() => void savings.refetch()}>
+                      Retry
+                    </Button>
+                  }
+                >
+                  {savings.error instanceof Error ? savings.error.message : 'Request failed.'}
+                </StateCard>
+              ) : optimisation ? (
+                <OptimisationPanel data={optimisation} />
+              ) : (
+                <div className="h-48 animate-pulse rounded-md bg-muted" aria-busy />
+              )}
+            </Disclosure>
+
+            <Disclosure
+              id="drivers"
+              title="Who is driving cost"
+              hint="agents, workflows, cost vs performance"
+              open={isOpen('drivers')}
+              onToggle={() => toggle('drivers')}
+            >
+              {search.view === 'agent' ? (
+                <div className="md:hidden">
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    size="sm"
+                    value={mobilePanel}
+                    onValueChange={(v) => v && setMobilePanel(v as 'attribution' | 'performance')}
+                    aria-label="Panel"
+                  >
+                    <ToggleGroupItem value="attribution" className="px-3 text-xs">
+                      Who drives cost
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="performance" className="px-3 text-xs">
+                      Cost vs performance
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
               ) : null}
               <div className="grid gap-4 xl:grid-cols-12">
                 {showAttribution ? (
@@ -634,50 +699,58 @@ export function TokenopsPage({
                   </div>
                 ) : null}
               </div>
-            </PageSection>
+            </Disclosure>
 
-            <PageSection id="optimize" title="Optimization" hint={optimiseHint}>
-              {savings.isError ? (
-                <StateCard
-                  tone="warning"
-                  title="Savings could not be loaded"
-                  fix="Retry, or check the control plane logs for the finops savings query."
-                  action={
-                    <Button variant="outline" size="sm" onClick={() => void savings.refetch()}>
-                      Retry
-                    </Button>
-                  }
-                >
-                  {savings.error instanceof Error ? savings.error.message : 'Request failed.'}
-                </StateCard>
-              ) : optimisation ? (
-                <>
-                  <OptimisationPanel
-                    data={optimisation}
-                    history={
-                      <ChatHistory
-                        data={historyData}
-                        loading={history.isPending}
-                        filtered={!noFilters}
-                        search={search}
-                      />
-                    }
-                  />
-                  {/* P3 (plans/feat-optimization-page.md): the trend, the agents and the fixes live on Optimization,
-                      opened on this window (R7A: the two pages share the window keys). */}
-                  <Link
-                    to="/optimization"
-                    search={{ preset: search.preset, from: search.from, to: search.to }}
-                    className="inline-block w-fit text-xs underline underline-offset-4 hover:text-primary-text pointer-coarse:py-3"
-                  >
-                    {optimizationCopy.savings.more}
-                  </Link>
-                </>
-              ) : (
-                <div className="h-48 animate-pulse rounded-md bg-muted" aria-busy />
-              )}
-            </PageSection>
-          </Reveal>
+            <Disclosure
+              id="month"
+              title="This month"
+              hint="calendar and forecast method"
+              open={isOpen('month')}
+              onToggle={() => toggle('month')}
+            >
+              <MonthHero
+                summary={summary}
+                unpricedCalls={
+                  win.preset === 'mtd' && noFilters && dash.data && !dash.isPlaceholderData
+                    ? unpriced
+                    : null
+                }
+                days={calPending ? undefined : calThis.data?.days}
+                monthStart={thisMonth}
+                today={today}
+                selectedDay={search.day}
+                onSelectDay={openDay}
+                loading={calPending}
+                error={calThis.error ?? calLast.error}
+                onRetry={() => {
+                  void calThis.refetch()
+                  void calLast.refetch()
+                }}
+              />
+            </Disclosure>
+
+            <Disclosure
+              id="metrics"
+              title="All metrics"
+              hint={`operations, cost per operation, latency · ${win.label}`}
+              open={isOpen('metrics')}
+              onToggle={() => toggle('metrics')}
+            >
+              <KpiStrip
+                data={dash.data}
+                loading={dash.isPending}
+                error={dash.error}
+                onRetry={() => void dash.refetch()}
+                more={!!search.more}
+                onToggleMore={() =>
+                  setSearch({ more: search.more ? undefined : true }, { replace: true })
+                }
+                windowLabel={win.label}
+                compareLabel={kpiCompareLabel}
+                hideDeltas={!compare}
+              />
+            </Disclosure>
+          </div>
 
           <TracesDrawer
             open={!!search.traces}
@@ -696,51 +769,6 @@ export function TokenopsPage({
         </>
       )}
     </div>
-  )
-}
-
-const MOBILE_PANELS = [
-  { value: 'attribution', label: 'Who drives cost' },
-  { value: 'performance', label: 'Cost vs performance' },
-] as const
-
-/** Which section an `?open=` link means; the retired ids map onto the section that now holds them. */
-function arrivalSection(open: Set<DisclosureId>): string | undefined {
-  if (open.has('optimize')) return 'optimize'
-  if (open.has('drivers') || open.has('perf')) return 'drivers'
-  if (open.has('month') || open.has('spend')) return 'spend'
-  return undefined
-}
-
-/** One part of the page: a quiet header the section nav jumps to, then its panels. */
-function PageSection({
-  id,
-  title,
-  hint,
-  children,
-}: {
-  id: string
-  title: string
-  hint?: string
-  children: React.ReactNode
-}) {
-  return (
-    <RevealItem>
-      {/* scroll-mt clears the sticky section nav (the root's scroll-padding already clears the top bar). */}
-      <section
-        id={sectionDomId(id)}
-        aria-labelledby={`${sectionDomId(id)}-title`}
-        className="flex scroll-mt-14 flex-col gap-4"
-      >
-        <header className="flex items-baseline gap-2">
-          <h2 id={`${sectionDomId(id)}-title`} className="text-base font-semibold tracking-tight">
-            {title}
-          </h2>
-          {hint ? <span className="text-sm text-muted-foreground">{hint}</span> : null}
-        </header>
-        {children}
-      </section>
-    </RevealItem>
   )
 }
 
@@ -793,38 +821,60 @@ function FilterSelect({
   )
 }
 
-/**
- * The drill path as the top bar's breadcrumb: TokenOps › day › agent › Traces. Each level above the current one is a
- * button that clears what sits below it; TokenOps clears the whole drill but keeps the window and the other filters.
- * With nothing drilled the shell's own breadcrumb stays.
- */
-function drillTrail(
-  search: TokenopsSearch,
-  agentLabel: string | undefined,
-  setSearch: SetSearch,
-): { root?: React.ReactNode; trail?: React.ReactNode[] } {
-  const { day, traces } = search
-  if (!day && !agentLabel && !traces) return {}
-  const levels: { label: string; clear: Partial<TokenopsSearch> }[] = [
-    { label: 'TokenOps', clear: { day: undefined, agent: undefined, traces: undefined } },
+function DrillCrumbs({
+  win,
+  day,
+  agent,
+  traces,
+  setSearch,
+}: {
+  win: string
+  day?: string
+  agent?: string
+  traces: boolean
+  setSearch: SetSearch
+}) {
+  if (!day && !agent && !traces) return null
+  const crumbs: { level: string; label: string; clear: Partial<TokenopsSearch> }[] = [
+    { level: 'window', label: win, clear: { day: undefined, agent: undefined, traces: undefined } },
   ]
-  if (day) levels.push({ label: fmtShortDay(day), clear: { agent: undefined, traces: undefined } })
-  if (agentLabel) levels.push({ label: agentLabel, clear: { traces: undefined } })
-  if (traces) levels.push({ label: 'Traces', clear: {} })
-  const [root, ...trail] = levels.map((l, i) =>
-    i === levels.length - 1 ? (
-      l.label
-    ) : (
-      <Button
-        variant="link"
-        className="h-auto p-0 text-sm font-normal text-muted-foreground hover:text-foreground"
-        onClick={() => setSearch(l.clear)}
-      >
-        {l.label}
-      </Button>
-    ),
+  if (day)
+    crumbs.push({
+      level: 'day',
+      label: fmtShortDay(day),
+      clear: { agent: undefined, traces: undefined },
+    })
+  if (agent) crumbs.push({ level: 'agent', label: agent, clear: { traces: undefined } })
+  if (traces) crumbs.push({ level: 'traces', label: 'Traces', clear: {} })
+  return (
+    <Breadcrumb aria-label="Drill-down">
+      <BreadcrumbList className="gap-1 text-xs sm:gap-1">
+        {crumbs.map((c, i) => (
+          <Fragment key={c.level}>
+            {i > 0 ? <BreadcrumbSeparator className="[&>svg]:size-3" /> : null}
+            <BreadcrumbItem className="gap-1">
+              {i === crumbs.length - 1 ? (
+                <BreadcrumbPage aria-current="location" className="font-medium">
+                  {c.label}
+                </BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink asChild>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs font-normal text-muted-foreground underline-offset-2 hover:text-foreground"
+                    onClick={() => setSearch(c.clear)}
+                  >
+                    {c.label}
+                  </Button>
+                </BreadcrumbLink>
+              )}
+            </BreadcrumbItem>
+          </Fragment>
+        ))}
+      </BreadcrumbList>
+    </Breadcrumb>
   )
-  return { root, trail }
 }
 
 function Notice({ tone, children }: { tone: 'info' | 'warning'; children: React.ReactNode }) {

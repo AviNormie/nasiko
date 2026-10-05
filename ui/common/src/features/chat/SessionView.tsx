@@ -3,7 +3,6 @@
  * the registry or a mutation. Reconciling a finished turn with history is `reconcile.ts`, dispatched by
  * `useReconcile`.
  */
-import { TopBar } from '@/app/shell/TopBar'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
@@ -235,14 +234,10 @@ function SessionView({
   const [traceTarget, setTraceTarget] = useState<TraceTarget | null>(null)
   // Focus stays in the composer after send (§8.1): the first send remounts this view (/chat →
   // /chat/$id), and delete or a fresh load leaves focus on <body>. Never steals it.
-  // A Previous/Next click asks for the composer outright; a J/K step leaves focus alone, so the keys keep stepping.
   const composerShown = target.kind !== 'readonly'
-  const chatFocus = useRouterState({ select: (s) => s.location.state.chatFocus })
   useEffect(() => {
-    if (!composerShown || chatFocus === 'none') return
-    if (chatFocus === 'composer') composer.current?.focus()
-    else focusIfIdle(composer.current)
-  }, [composerShown, chatFocus])
+    if (composerShown) focusIfIdle(composer.current)
+  }, [composerShown])
 
   // Search a few more rail pages for this chat's row (§6.11).
   const { hasNextPage: moreRows, isFetchingNextPage: fetchingRows, fetchNextPage: nextRows } = list
@@ -445,7 +440,9 @@ function SessionView({
     const missing = history.error instanceof ApiError && history.error.status === 404
     return (
       <>
-        {railButton ? <TopBar trail={[railButton]} /> : null}
+        <header className="flex h-12 shrink-0 items-center border-b border-border">
+          <div className={cn(CHAT_COLUMN, 'flex items-center gap-2')}>{railButton}</div>
+        </header>
         {/* The rail still announces (a list failure) while this screen shows. */}
         <StatusAnnouncer live={undefined} agentName={agentName} />
         <div className="mx-auto mt-12 w-full max-w-md px-4">
@@ -513,7 +510,7 @@ function SessionView({
 
   return (
     <>
-      <title>{`${titlePrefix}${row?.title ?? copy.chatsNav} · Nasiko`}</title>
+      <title>{`${titlePrefix}${row?.title ?? copy.chatsNav} · OpenRuntime`}</title>
       <SessionHeader
         sessionId={sessionId}
         row={row}

@@ -1,3 +1,5 @@
+'use client'
+
 import { ParentSize } from '@visx/responsive'
 import type { Transition } from 'motion/react'
 import { Children, isValidElement, type ReactElement, type ReactNode, useMemo, useRef } from 'react'

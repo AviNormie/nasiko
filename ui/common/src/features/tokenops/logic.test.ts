@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  buildAttribution,
-  cacheShare,
-  concentrationSlices,
-  searchRows,
-  sortRows,
-  type AttributionRow,
-} from './attribution'
+import { buildAttribution, searchRows, sortRows, type AttributionRow } from './attribution'
 import { dedupeCatalog } from './catalog'
 import { buildConcentration, OTHERS_KEY, segmentAt } from './concentration'
 import { csvCell, downloadCsv, toCsv } from './csv'
@@ -833,7 +826,7 @@ function measured(over: Partial<Savings> = {}): Savings {
   }
 }
 
-describe('summarizeOptimization', () => {
+describe('summarizeOptimisation', () => {
   /** A savings payload with one agent, shaped exactly as the server flattens it. */
   const savings = (over: Partial<SavingsData> = {}): SavingsData => ({
     window: { start: '2026-03-01T00:00:00Z', end: '2026-03-31T00:00:00Z' },
@@ -852,7 +845,7 @@ describe('summarizeOptimization', () => {
       {
         ...measured({ saved_tokens: 250, saved_cost_usd: 2.5, token_reduction_pct: 20 }),
         program: 'caveman',
-        label: 'Payload optimization',
+        label: 'Payload optimisation',
         layers: [],
       },
     ],
@@ -893,7 +886,7 @@ describe('summarizeOptimization', () => {
     expect(s.tokensSaved).toBe(250)
   })
 
-  it('reports coverage and the biggest unoptimized spender', () => {
+  it('reports coverage and the biggest unoptimised spender', () => {
     const s = summarizeOptimisation(savings())
     expect(s.optimisedCount).toBe(1)
     expect(s.totalAgents).toBe(4)
@@ -950,41 +943,5 @@ describe('summarizeOptimization', () => {
     })
     expect(isUnconfigured(summarizeOptimisation(empty))).toBe(true)
     expect(isUnconfigured(summarizeOptimisation(savings()))).toBe(false)
-  })
-})
-
-describe('redesign rules (cache share, concentration, big deltas)', () => {
-  it('cache share never exceeds 100%: cached input counted apart from prompt is added back', () => {
-    // OpenAI style: prompt includes the cached tokens.
-    expect(cacheShare(1000, 250)).toBe(25)
-    // Anthropic style: 2 uncached + 1.31M cached printed 6550732.8% before.
-    expect(cacheShare(20, 1_310_000)).toBeCloseTo(99.998, 2)
-    expect(cacheShare(0, 0)).toBeNull()
-  })
-
-  it('concentration: top five by spend, the rest as one Other slice, shares summing to 100', () => {
-    const row = (id: string, cost: number) => ({ id, name: id, cost }) as AttributionRow
-    const slices = concentrationSlices([
-      row('a', 50),
-      row('b', 20),
-      row('c', 10),
-      row('d', 8),
-      row('e', 6),
-      row('f', 4),
-      row('g', 2),
-      row('z', 0),
-    ])
-    expect(slices.map((s) => s.name)).toEqual(['a', 'b', 'c', 'd', 'e', 'Other (2)'])
-    expect(slices.reduce((t, s) => t + s.pct, 0)).toBeCloseTo(100)
-    expect(concentrationSlices([row('a', 0)])).toEqual([])
-  })
-
-  it('a change of 1000% or more reads as a multiple, not a seven-digit percentage', () => {
-    expect(describeDelta(676918.2, POLARITY.spend)).toMatchObject({
-      text: '6,770×',
-      arrow: '▲',
-      tone: 'bad',
-    })
-    expect(describeDelta(999, POLARITY.spend).text).toBe('+999.0%')
   })
 })

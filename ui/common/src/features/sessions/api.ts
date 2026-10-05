@@ -53,55 +53,6 @@ export const sessionKeys = {
   day: (day: string) => ['sessions', 'day', day] as const,
   detail: (id: string) => ['sessions', 'detail', id] as const,
   trace: (id: string) => ['trace', id] as const,
-  /** A small, filtered page under its own key — the Overview's two reads. */
-  page: (windowKey: string, limit: number, status?: string) =>
-    ['sessions', 'page', windowKey, limit, status ?? 'any'] as const,
-}
-
-export interface SessionPageOptions {
-  limit: number
-  /** Filtered in SQL, so `matchingCount` is every match in the window. */
-  status?: 'failed' | 'ok' | 'running'
-}
-
-/**
- * One small page of `session/list`, with the server's own status and count.
- *
- * Separate from `useFleetSessions` on purpose: that one is the Sessions page's
- * 100-row infinite list, and sharing its key made the Overview pay for 100 rows
- * to show five.
- */
-export function useSessionPage(
-  windowKey: string,
-  start: Date,
-  end: Date,
-  opts: SessionPageOptions,
-  enabled: boolean,
-) {
-  const path = withQuery(`${OBS}/session/list`, {
-    start_time: start.toISOString(),
-    end_time: end.toISOString(),
-    limit: opts.limit,
-    ...(opts.status ? { status: opts.status } : {}),
-  })
-  const q = useQuery({
-    queryKey: sessionKeys.page(windowKey, opts.limit, opts.status),
-    queryFn: async ({ signal }) => {
-      const raw = await apiFetch<SessionListResponse>(path, { signal })
-      if (!raw?.data?.sessions)
-        throw new ApiError(200, raw, path, 'session/list → unexpected response')
-      return raw.data
-    },
-    staleTime: Infinity,
-    enabled,
-    meta: { path },
-  })
-  return {
-    ...q,
-    rows: q.data?.sessions ?? [],
-    /** Every row matching the filter in the window, not just this page. */
-    matchingCount: q.data?.matching_count ?? 0,
-  }
 }
 
 function listPath(start: Date, limit: number, offset: number) {

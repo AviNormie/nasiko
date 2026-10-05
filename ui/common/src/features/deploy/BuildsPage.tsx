@@ -6,8 +6,9 @@
 import { Link } from '@tanstack/react-router'
 import { Hammer, SearchX } from 'lucide-react'
 import { useDeferredValue } from 'react'
+import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
-import { AgentsHeader } from '@/features/agents/components/bits'
+import { AgentsNav } from '@/features/agents/components/bits'
 import { PanelError } from '@/components/shared/panel'
 import { SearchInput } from '@/components/shared/search-input'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
@@ -56,28 +57,14 @@ export function BuildsPage({
     return a ? a.display_name || a.name : copy.builds.unknownAgent
   }
 
-  // No builds at all: the empty card offers Deploy, so the top bar doesn't repeat it.
-  const nothingYet =
-    !data.isPending &&
-    !data.error &&
-    !data.noRights &&
-    !all.length &&
-    filter === 'all' &&
-    !search.q &&
-    page === 0
   const header = (
-    <AgentsHeader
-      current="/builds"
-      description={copy.builds.description}
-      action={nothingYet ? null : <DeployAgentButton />}
-    />
+    <>
+      <PageHeader title={copy.builds.title} description={copy.builds.description} />
+      <AgentsNav current="/builds" />
+    </>
   )
-  // The table's toolbar: status on the left, search on the right.
   const filters = (
-    <div
-      data-tour="builds-filters"
-      className="flex flex-wrap items-center gap-2 border-b border-border p-2"
-    >
+    <div className="flex flex-wrap items-center gap-2">
       <ToggleGroup
         type="single"
         variant="outline"
@@ -106,30 +93,17 @@ export function BuildsPage({
           setSearch({ q: e.target.value || undefined, page: undefined }, { replace: true })
         }
         placeholder={copy.builds.searchPlaceholder}
-        className="w-full sm:ml-auto sm:w-64"
+        className="w-full sm:w-64"
       />
     </div>
   )
 
   let body
   if (data.error && isEndpointAbsent(data.error))
-    body = (
-      <div className="p-2">
-        <StateCard title={copy.builds.newerServer} />
-      </div>
-    )
-  else if (data.noRights)
-    body = (
-      <div className="p-2">
-        <StateCard title={copy.builds.noRights} />
-      </div>
-    )
+    body = <StateCard title={copy.builds.newerServer} />
+  else if (data.noRights) body = <StateCard title={copy.builds.noRights} />
   else if (data.error && !all.length)
-    body = (
-      <div className="p-2">
-        <PanelError error={data.error} onRetry={data.retry} what={copy.builds.what} />
-      </div>
-    )
+    body = <PanelError error={data.error} onRetry={data.retry} what={copy.builds.what} />
   else if (data.isPending && !all.length) body = <PageLoader label={copy.builds.loading} />
   else if (!all.length) {
     const filtered = filter !== 'all' || !!search.q || page > 0
@@ -137,7 +111,6 @@ export function BuildsPage({
       <EmptyState
         icon={SearchX}
         title={copy.builds.noMatch}
-        className="border-0"
         action={
           <Button
             size="sm"
@@ -152,12 +125,7 @@ export function BuildsPage({
         {copy.builds.noMatchHint}
       </EmptyState>
     ) : (
-      <EmptyState
-        icon={Hammer}
-        title={copy.builds.empty}
-        action={<DeployAgentButton />}
-        className="border-0"
-      >
+      <EmptyState icon={Hammer} title={copy.builds.empty} action={<DeployAgentButton />}>
         {copy.builds.emptyHint}
       </EmptyState>
     )
@@ -221,7 +189,7 @@ export function BuildsPage({
           </TableBody>
         </Table>
         {page > 0 || data.hasNext ? (
-          <div className="flex justify-end gap-2 border-t border-border p-2">
+          <div className="flex justify-end gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -248,10 +216,8 @@ export function BuildsPage({
   return (
     <div className="mx-auto flex w-full max-w-page flex-col gap-4">
       {header}
-      <div data-tour="builds-panel" className="rounded-lg border border-border">
-        {filters}
-        {body}
-      </div>
+      {filters}
+      {body}
     </div>
   )
 }

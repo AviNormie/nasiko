@@ -1,7 +1,6 @@
 /**
- * Needs you rendered on its own with hand-built data (ship coverage audit): the states and links the page tests can't
- * reach deterministically from the seed (plans/feat-overview.md §6-§10). The home (PR2) keeps this card; the Overview's
- * other cards were retired with the Overview page (plans/feat-agent-centric.md PR2a).
+ * Overview cards rendered on their own with hand-built data (ship coverage audit): the states and links the page tests
+ * can't reach deterministically from the seed (plans/feat-overview.md §6-§10).
  */
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -13,13 +12,18 @@ import {
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { readRailView } from '@/features/chat/rememberTarget'
-import type { HarnessSummary, NeedsYou as NeedsYouData, Spend as SpendData } from './api'
+import type {
+  BudgetCard,
+  BudgetLine,
+  HarnessSummary,
+  NeedsYou as NeedsYouData,
+  Spend as SpendData,
+} from './api'
+import { Budget } from './components/Budget'
 import { Harnesses, HarnessesLine } from './components/Harnesses'
-import { HarnessCell } from './components/SetUpNow'
 import { Headline } from './components/Headline'
-import { MonthBar } from './components/MonthBar'
 import { NeedsYou } from './components/NeedsYou'
+import { MonthBar } from './components/MonthBar'
 import { Spend } from './components/Spend'
 import { copy } from './copy'
 import { mergeNeeds, type NeedsInput } from './needs'
@@ -38,7 +42,6 @@ const needsData = (input: NeedsInput, retry = retries()): NeedsYouData => ({
   lastChecked: 0,
   retry,
   sessions: {} as NeedsYouData['sessions'],
-  waiting: {} as NeedsYouData['waiting'],
 })
 
 describe('Needs you rows', () => {
@@ -74,39 +77,13 @@ describe('Needs you rows', () => {
           budgets: {
             state: 'ok',
             value: [
-              {
-                id: 'b1',
-                label: copy.needs.yourBudget,
-                agentId: null,
-                crossed: 80,
-                state: 'warning',
-                over: null,
-                stopped: false,
-                stops: false,
-                runsOutOn: null,
-                resetsAt: null,
-                period: 'month' as const,
-                covers: 'routed_calls' as const,
-              },
-              {
-                id: 'b2',
-                label: 'Helper',
-                agentId: 'a3',
-                crossed: null,
-                state: 'exceeded',
-                over: null,
-                stopped: false,
-                stops: false,
-                runsOutOn: null,
-                resetsAt: null,
-                period: 'month' as const,
-                covers: 'routed_calls' as const,
-              },
+              { id: 'b1', label: copy.needs.yourBudget, crossed: 80, state: 'warning' },
+              { id: 'b2', label: 'Helper', crossed: null, state: 'exceeded' },
             ],
           },
           sessions: {
             state: 'ok',
-            value: { failed: 3, agents: ['Crashy', 'Unknown agent'] },
+            value: { failed: 3, checked: 25, agents: ['Crashy', 'Unknown agent'] },
           },
         })}
       />,
@@ -118,12 +95,11 @@ describe('Needs you rows', () => {
     expect(href(copy.needs.reviewLabel('Deploy chat'))).toBe('/chat/s1')
     expect(href(copy.needs.openWaiting)).toBe('/chat')
     expect(href(copy.needs.openAgentLabel('Crashy'))).toBe('/agents/a1')
-    // A stopped agent budget opens the agent's Budget section on its hub (B5).
-    expect(href(copy.needs.agentBudgetLabel('Spender'))).toBe('/agents/a2#hub-budget')
+    expect(href(copy.needs.budgetsLabel('Spender'))).toBe('/router#router-budgets')
     expect(within(list).getByText('Your monthly budget is at 80%')).toBeInTheDocument()
     expect(within(list).getByText('Helper budget is over its limit')).toBeInTheDocument()
-    expect(href(copy.needs.agentBudgetLabel('Helper'))).toBe('/agents/a3#hub-budget')
-    expect(within(list).getByText(copy.needs.sessions(3))).toBeInTheDocument()
+    expect(href(copy.needs.budgetsLabel('Helper'))).toBe('/router#router-budgets')
+    expect(within(list).getByText(copy.needs.sessions(3, 25))).toBeInTheDocument()
     expect(href(copy.needs.seeFailing)).toMatch(/^\/sessions\?(?=.*preset=7d)(?=.*lane=failing)/)
     // Severity is said by an icon with a label, most urgent sources first.
     expect(
@@ -187,43 +163,6 @@ describe('shadcn conversion review (2026-09-29)', () => {
   })
 })
 
-// Moved from the retired Overview page tests (plans/feat-agent-centric.md PR2a; /review of PR2a: testing).
-describe('Needs you on its own', () => {
-  it('the outside-Chat row opens Chat on the Waiting view', async () => {
-    renderInRouter(
-      <NeedsYou
-        userId="u1"
-        now={0}
-        data={needsData({
-          requests: { state: 'ok', value: { chats: [], outside: 2 } },
-          agents: { state: 'ok', value: [] },
-          budgets: { state: 'absent' },
-          sessions: { state: 'ok', value: { failed: 0, agents: [] } },
-        })}
-      />,
-    )
-    await userEvent.click(await screen.findByRole('link', { name: copy.needs.openWaiting }))
-    expect(readRailView('u1')).toBe('waiting')
-  })
-
-  it('on OSS (budgets absent) shows one card error when every available source failed', async () => {
-    renderInRouter(
-      <NeedsYou
-        userId="u1"
-        now={0}
-        data={needsData({
-          requests: { state: 'failed' },
-          agents: { state: 'failed' },
-          budgets: { state: 'absent' },
-          sessions: { state: 'failed' },
-        })}
-      />,
-    )
-    expect(await screen.findByText(copy.couldntLoad(copy.needs.what))).toBeInTheDocument()
-  })
-})
-
-// The cards Weave still renders (genui/catalog/views/overview.tsx) after the Overview page itself retired.
 describe('Headline', () => {
   it('says it is checking until either sentence is known', () => {
     render(<Headline narrative={{ money: null, attention: null }} nothing={false} />)
@@ -237,9 +176,7 @@ const day = (date: string, spend: number) => ({
   label: date.slice(5),
   spend,
   operations: 0,
-  p50: null,
   p95: null,
-  p99: null,
   topAgent: null,
   topAgentSpend: null,
 })
@@ -261,7 +198,6 @@ const spendData = (over: Partial<SpendData> = {}): SpendData => ({
   rangeDays: 30,
   totals: { spend: 120, runs: 10, previous: null },
   totalsError: null,
-  tokens: null,
   days: [day('2026-09-28', 20), day('2026-09-29', 100)],
   stack: null,
   stackPending: false,
@@ -270,7 +206,6 @@ const spendData = (over: Partial<SpendData> = {}): SpendData => ({
   other: null,
   driversError: null,
   unpriced: false,
-  latency: null,
   retry: vi.fn(),
   ...over,
 })
@@ -350,7 +285,7 @@ describe('Spend chart', () => {
     expect(screen.queryByRole('figure')).toBeNull()
   })
 
-  it('keys each driver to its color, and the Table view lists the stacked days by keyboard', async () => {
+  it('keys each driver to its colour, and the Table view lists the stacked days by keyboard', async () => {
     renderInRouter(<Spend now={Date.parse('2026-09-30T12:00:00Z')} spend={stacked()} />)
     const fig = await screen.findByRole('figure')
     expect(fig).toHaveAccessibleName(/\$120\.00 in all, peaking on 09-29 at \$100\.00/)
@@ -401,7 +336,81 @@ describe('Spend chart', () => {
   })
 })
 
-describe('Coding harnesses', () => {
+describe('Budgets', () => {
+  const line = (over: Partial<BudgetLine> = {}): BudgetLine => ({
+    id: 'b1',
+    name: null,
+    limit: 100,
+    used: 85,
+    pct: 85,
+    state: 'warning',
+    stopped: false,
+    thresholds: [50, 80, 100],
+    action: 'alert',
+    forecast: { show: true, hidden: null, low: 110, high: 120, overLimit: true },
+    daysLeft: 1,
+    ...over,
+  })
+  const card = (over: Partial<BudgetCard> = {}): BudgetCard => ({
+    absent: false,
+    isPending: false,
+    error: null,
+    own: line(),
+    agents: [],
+    retry: vi.fn(),
+    ...over,
+  })
+
+  it('shows the own budget in words, with the forecast past the limit flagged', async () => {
+    renderInRouter(<Budget data={card()} month="September 2026" />)
+    const c = await screen.findByTestId('overview-budget')
+    expect(c).toHaveTextContent('$85.00 of $100.00')
+    expect(c).toHaveTextContent(copy.budget.state('warning', false))
+    expect(c).toHaveTextContent('85.0% used')
+    expect(c).toHaveTextContent('1 day left')
+    expect(c).toHaveTextContent(`$110.00–$120.00, ${copy.budget.overLimit}`)
+    expect(c).toHaveTextContent('50%, 80%, 100%')
+    expect(c).toHaveTextContent(copy.budget.alertOnly)
+    expect(within(c).getByRole('link', { name: /Budgets/ })).toHaveAttribute(
+      'href',
+      '/router#router-budgets',
+    )
+  })
+
+  it('lists agent budgets with a stopped one said as a word, and offers to set one when there are none', async () => {
+    const { unmount } = renderInRouter(
+      <Budget
+        data={card({
+          own: null,
+          agents: [line({ id: 'b2', name: 'Code Reviewer', state: 'exceeded', stopped: true })],
+        })}
+        month="September 2026"
+      />,
+    )
+    const c = await screen.findByTestId('overview-budget')
+    expect(c).toHaveTextContent(
+      `Code Reviewer$85.00 of $100.00${copy.budget.state('exceeded', true)}`,
+    )
+    expect(c).not.toHaveTextContent(copy.budget.forecast)
+    unmount()
+    renderInRouter(<Budget data={card({ own: null })} month="September 2026" />)
+    expect(await screen.findByRole('link', { name: copy.budget.set })).toHaveAttribute(
+      'href',
+      '/router#router-budgets',
+    )
+  })
+
+  it('fails as a whole card with Retry', async () => {
+    const retry = vi.fn()
+    renderInRouter(
+      <Budget data={card({ error: new Error('boom'), retry })} month="September 2026" />,
+    )
+    await userEvent.click(await screen.findByRole('button', { name: copy.retry }))
+    expect(retry).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Harnesses', () => {
   const data = (over: Partial<HarnessSummary>): HarnessSummary => ({
     isPending: false,
     error: null,
@@ -446,7 +455,7 @@ describe('Coding harnesses', () => {
     const rows = screen.getAllByRole('listitem')
     expect(rows[1]).toHaveTextContent(`mystery${copy.harnesses.unpriced}`)
   })
-  it('keeps the one-line Harnesses (Weave’s view) to one sentence per state, with only priced cost', async () => {
+  it('keeps the first run line to one sentence per state, with only priced cost', async () => {
     const { unmount } = renderInRouter(<HarnessesLine data={data({})} days={30} />)
     const line = await screen.findByTestId('overview-harnesses')
     expect(line).toHaveTextContent(`${copy.harnesses.noneYet}·${copy.harnesses.connect}.`)
@@ -470,34 +479,6 @@ describe('Coding harnesses', () => {
     second.unmount()
     const retry = vi.fn()
     renderInRouter(<HarnessesLine data={data({ error: new Error('x'), retry })} days={30} />)
-    await userEvent.click(await screen.findByRole('button', { name: copy.retry }))
-    expect(retry).toHaveBeenCalled()
-  })
-  it('gives the first run harness cell one status per state, with only priced cost', async () => {
-    const { unmount } = renderInRouter(<HarnessCell data={data({})} days={30} />)
-    const cell = await screen.findByTestId('overview-harnesses')
-    expect(cell).toHaveTextContent(`${copy.harnesses.title}${copy.setUpNow.noHarnesses}`)
-    expect(within(cell).getByRole('link')).toHaveAttribute('href', '/harnesses')
-    unmount()
-    const second = renderInRouter(
-      <HarnessCell
-        data={data({
-          connected: 2,
-          ownOnly: true,
-          harnesses: [
-            { id: 'claude-code', cost: 12, unpriced: false },
-            { id: 'mystery', cost: 3, unpriced: true },
-          ],
-        })}
-        days={30}
-      />,
-    )
-    expect(await screen.findByTestId('overview-harnesses')).toHaveTextContent(
-      `${copy.harnesses.connected(2)} (${copy.kpi.yourUsage}) · ${copy.harnesses.lineCost('$12.00', 30)}`,
-    )
-    second.unmount()
-    const retry = vi.fn()
-    renderInRouter(<HarnessCell data={data({ error: new Error('x'), retry })} days={30} />)
     await userEvent.click(await screen.findByRole('button', { name: copy.retry }))
     expect(retry).toHaveBeenCalled()
   })

@@ -1,5 +1,5 @@
-import { z } from 'zod/mini'
-import { flag, opt, text } from '@/lib/search'
+import { z } from 'zod'
+import { flag, text } from '@/lib/search'
 
 /**
  * URL state for the agent pages (plan §7). Junk values fall back instead of throwing, so a
@@ -7,12 +7,12 @@ import { flag, opt, text } from '@/lib/search'
  */
 export const catalogSearchSchema = z.object({
   /** Untrimmed while typing (trimming here would eat the space between words); matching trims. */
-  q: opt(z.string().check(z.maxLength(200))),
-  tag: opt(text),
-  harnesses: opt(flag),
-  yours: opt(flag),
-  /** The home's rating badges link here (plans/feat-agent-centric.md PR2a); computed by `useFleetHealth` (eng R1). */
-  health: opt(z.enum(['healthy', 'watch', 'action', 'unknown'])),
+  q: z.string().max(200).optional().catch(undefined),
+  tag: text.optional().catch(undefined),
+  harnesses: flag.optional().catch(undefined),
+  yours: flag.optional().catch(undefined),
+  /** The Overview's Fleet health count links here (overview design 15A, 16B); computed by `useFleetHealth` (eng R1). */
+  health: z.enum(['healthy', 'watch', 'action', 'unknown']).optional().catch(undefined),
 })
 export type CatalogSearch = z.infer<typeof catalogSearchSchema>
 
@@ -25,10 +25,10 @@ export const MINE_TABS = [
   'harnesses',
 ] as const
 export const mineSearchSchema = z.object({
-  tab: opt(z.enum(MINE_TABS)),
-  harnesses: opt(flag),
+  tab: z.enum(MINE_TABS).optional().catch(undefined),
+  harnesses: flag.optional().catch(undefined),
   /** Superusers only: whose agents to list (a UUID). */
-  owner: opt(z.uuid()),
+  owner: z.string().uuid().optional().catch(undefined),
 })
 export type MineSearch = z.infer<typeof mineSearchSchema>
 
@@ -40,11 +40,12 @@ export const DETAIL_TABS = [
   'mcp',
   'access',
   'settings',
-  // Today's Overview facts, since the hub took the Overview over (plans/feat-agent-centric.md PR1c).
-  'details',
 ] as const
 export type DetailTab = (typeof DETAIL_TABS)[number]
-// The detail route's schema is the hub's (`features/hub/search.ts`): `tab` plus the hub's window, slice and marker.
+/** Unknown tab values are kept as strings so the page can fall back to Overview with replace-history. */
+export const detailSearchSchema = z.object({
+  tab: z.string().trim().max(40).optional().catch(undefined),
+})
 
 /**
  * The delete result, carried to Your agents in router history state, not the URL: a crafted

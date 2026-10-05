@@ -2,24 +2,18 @@
  * The signed-in layout (plans/feat-app-shell.md §4.1): sidebar + page area. Rendered by the `_app`
  * route, so /login stays bare. Pages keep their own max width; Chat fills the viewport height.
  */
-import { Outlet, useRouterState } from '@tanstack/react-router'
-import { type ComponentType, type ReactNode, use, useState } from 'react'
-import { applyNav } from '@/app/edition'
-import { EditionContext } from '@/app/edition-context'
+import { Link, Outlet, useRouterState } from '@tanstack/react-router'
+import { type ReactNode, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
 import { AppSidebar, type NavBadges } from './AppSidebar'
 import { copy } from './copy'
-import { activeItem, NAV_GROUPS, NAV_ITEMS } from './nav'
-import { ShellTopBar } from './TopBar'
 import { SidebarPanelContext } from './panelSlot'
 import { widthDefaultOpen, readSidebarCookie } from './sidebarState'
 
-/** Chat, Settings and Account own their scrolling (their section column stays put): the page fills the viewport (plan §7.1, EN20). */
-const FULL_HEIGHT = /^\/(chat|settings|account)(\/|$)/
-/** Pages without the top bar from `md` up (phones keep it for the menu button). */
-const BARE = /^\/(chat\/?)?$/
+/** Chat and Settings own their scrolling (their section column stays put): the page fills the viewport (plan §7.1, EN20). */
+const FULL_HEIGHT = /^\/(chat|settings)(\/|$)/
 
 /**
  * `end` and `badges` come from the `_app` route, which may import features (the shell never does): Deploy's build
@@ -27,29 +21,15 @@ const BARE = /^\/(chat\/?)?$/
  */
 export function AppShell({
   end,
-  split: Split,
   badges,
   hidden,
 }: {
   end?: ReactNode
-  split?: ComponentType<{ path: string; children: ReactNode }> | null
   badges?: NavBadges
-  /** Nav paths to leave out (onboarding hides Home while its guide stands in for it). */
+  /** Nav paths to leave out (onboarding hides Overview while its guide stands in for it). */
   hidden?: readonly string[]
 } = {}) {
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const fullHeight = FULL_HEIGHT.test(pathname)
-  // The top bar's start: the page's nav group and item, layer patches applied (as the sidebar does).
-  const active = activeItem(pathname, applyNav(NAV_ITEMS, use(EditionContext).edition.layers))
-  const item = active
-    ? {
-        to: active.to,
-        label: active.label,
-        group: NAV_GROUPS.find((g) => g.id === active.group)?.label ?? null,
-      }
-    : null
-  // Overview and New chat have no bar on desktop (user, 2026-10-08): nothing to place, nowhere to step.
-  const bare = BARE.test(pathname)
+  const fullHeight = useRouterState({ select: (s) => FULL_HEIGHT.test(s.location.pathname) })
   // Controlled (v1c E1): the cookie wins; with none, the width default. Chat used to start as the icon rail so its
   // history column fit beside the nav; its history is the sidebar's drill-in panel now, so it needs the open sidebar.
   // Only a user toggle sets `choice`, and the sidebar writes the cookie then, so the default is never stored.
@@ -59,29 +39,12 @@ export function AppShell({
   // The drill-in slot (sidebarPanel.ts): the sidebar hands out `target`, a page's SidebarPanel portals into it.
   const [target, setTarget] = useState<HTMLElement | null>(null)
   const [panels, setPanels] = useState(0)
-  const inset = (
-    <SidebarInset id="main" tabIndex={-1} className={cn('outline-none', fullHeight && 'min-h-0')}>
-      {/* One bar above every page (TopBar.tsx); on phones it also holds the menu button (§4.2). */}
-      <ShellTopBar item={item} pathname={pathname} bare={bare}>
-        {fullHeight ? (
-          <div className="min-h-0 flex-1">
-            <Outlet />
-          </div>
-        ) : (
-          <div className="mx-auto w-full max-w-page px-4 py-4">
-            <Outlet />
-          </div>
-        )}
-      </ShellTopBar>
-    </SidebarInset>
-  )
   return (
     <SidebarPanelContext value={{ target, setTarget, panels, setPanels }}>
       <SidebarProvider
         open={open}
         onOpenChange={setChoice}
-        // A bare page has no bar to clear: its sticky rows and anchor jumps go to the top.
-        className={cn(fullHeight ? 'h-dvh' : 'min-h-screen', bare && 'md:[--topbar-h:0px]')}
+        className={fullHeight ? 'h-dvh' : 'min-h-screen'}
       >
         {/* A button, not an `#main` link: a fragment navigation would add a history entry and make
           the router reload the route (review: red team). */}
@@ -94,7 +57,33 @@ export function AppShell({
           {copy.skipToContent}
         </Button>
         <AppSidebar badges={badges} hidden={hidden} />
-        {Split ? <Split path={pathname}>{inset}</Split> : inset}
+        <SidebarInset
+          id="main"
+          tabIndex={-1}
+          className={cn('outline-none', fullHeight ? 'min-h-0' : 'mx-auto max-w-page')}
+        >
+          {/* Phones: a slim top bar with the menu button opens the nav sheet (§4.2). */}
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 md:hidden">
+            <SidebarTrigger aria-label={copy.openMenu} className="size-11" />
+            <Link
+              to="/"
+              activeOptions={{ exact: true }}
+              className="flex h-11 items-center gap-2 rounded-md px-2 text-sm font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+            >
+              <img src="/mark-nasiko.svg" alt="" aria-hidden className="size-4" />
+              {copy.brand}
+            </Link>
+          </div>
+          {fullHeight ? (
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
+          ) : (
+            <div className="w-full px-4 py-4">
+              <Outlet />
+            </div>
+          )}
+        </SidebarInset>
         {end}
       </SidebarProvider>
     </SidebarPanelContext>

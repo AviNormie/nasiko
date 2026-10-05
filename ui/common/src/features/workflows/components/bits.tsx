@@ -1,7 +1,4 @@
-import { Link } from '@tanstack/react-router'
-import { Plus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { SectionNav as SharedSectionNav } from '@/components/shared/section-nav'
 import { copy } from '../copy'
 import type { Tone } from '../logic'
@@ -37,17 +34,6 @@ const SECTIONS = [
   { to: '/workflows/drafts', label: copy.nav.drafts },
   { to: '/workflows/runs', label: copy.nav.runs },
 ] as const
-
-/** The module's one action, in the top bar on every section. */
-export function CreateWorkflowLink() {
-  return (
-    <Button asChild size="sm" className="pointer-coarse:min-h-11">
-      <Link to="/workflows/new">
-        <Plus aria-hidden /> {copy.create}
-      </Link>
-    </Button>
-  )
-}
 
 /** Deployed · Drafts · Runs: the three lists are one module (the React nav's three items). */
 export function SectionNav({ current }: { current: (typeof SECTIONS)[number]['to'] }) {

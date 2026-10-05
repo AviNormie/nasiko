@@ -7,7 +7,6 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { clearChatRegistry } from '@/features/chat/registry'
-import { apiFetch } from '@/lib/api/client'
 import { configureMocks } from '@/mocks/handlers'
 import { configureChatMock } from '@/mocks/chatStore'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
@@ -15,7 +14,6 @@ import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { copy } from './copy'
-import { FAILED_SESSION_ROWS, RECENT_SESSION_ROWS, SAVED_BARS } from './tuning'
 
 setupPinnedSeed()
 afterEach(() => {
@@ -48,7 +46,7 @@ describe('Spend', () => {
     expect(document.body).not.toHaveTextContent(/You've spent/i)
   })
 
-  it('stacks 30 days by the top drivers, whose series come from one grouped timeseries', async () => {
+  it('stacks 30 days by the top drivers, whose own series come from the filtered timeseries', async () => {
     const reqs = recordRequests()
     renderApp('/')
     await loaded()
@@ -58,23 +56,15 @@ describe('Spend', () => {
     const heads = within(fig)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-    // The drivers' series used to be one filtered request each — a fan-out that
-    // grew with the chart. `group_by=agent` returns all of them at once.
-    expect(
-      reqs.urls.filter(
-        (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.has('agent_id'),
-      ),
-    ).toEqual([])
-    const grouped = reqs.urls.filter(
-      (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.get('group_by') === 'agent',
+    const filtered = reqs.urls.filter(
+      (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.has('agent_id'),
     )
-    expect(grouped).toHaveLength(1)
-    expect(grouped[0].searchParams.get('top')).toBe('5')
-    // Columns are Day, one per driver that actually spent, Other, Total — so the
-    // chart can carry fewer series than the drivers table has rows.
-    const k = heads.length - 3
+    // One filtered series per driver with spend, at most five (one per chart colour).
+    const k = new Set(filtered.map((u) => u.searchParams.get('agent_id'))).size
     expect(k).toBeGreaterThan(0)
     expect(k).toBeLessThanOrEqual(5)
+    // Day, the drivers (named as in the drivers table), Other, Total.
+    expect(heads).toHaveLength(k + 3)
     const drivers = within(spend).getAllByTestId('spend-driver')
     heads.slice(1, k + 1).forEach((h, i) => expect(drivers[i]).toHaveTextContent(h!))
     reqs.stop()
@@ -116,12 +106,7 @@ describe('Fleet health', () => {
           name: `Remove the Health: ${copy.rating.watch} filter`,
         })
         await waitFor(() =>
-          expect(
-            within(screen.getByRole('main'))
-              .queryAllByRole('listitem')
-              // The top bar's breadcrumb is a list too.
-              .filter((li) => !li.closest('[data-slot="breadcrumb"]')),
-          ).toHaveLength(n),
+          expect(within(screen.getByRole('main')).queryAllByRole('listitem')).toHaveLength(n),
         )
       }
     }
@@ -176,65 +161,6 @@ describe('Needs you', () => {
     )
   })
 
-  it('a request row links its chat’s paused flow, without a second row (plans/feat-flows.md O2)', async () => {
-    configureChatMock({ waiting: true })
-    // The paused flows, one per chat with a pending request (as the server would have for those pauses).
-    server.use(
-      http.get('/api/flows', async ({ request }) => {
-        if (new URL(request.url).searchParams.get('status') !== 'paused') return undefined
-        const pending = await apiFetch<{
-          data?: { execution: { chat_session_id: string | null } }[]
-        }>('/api/hitl/pending')
-        const chats = [
-          ...new Set((pending.data ?? []).flatMap((r) => r.execution.chat_session_id ?? [])),
-        ]
-        return HttpResponse.json({
-          data: chats.map((c, i) => ({
-            flow_id: `5eedf00000000000000000000000${String(i).padStart(4, '0')}`,
-            status: 'paused',
-            root_agent_name: 'orchestrator',
-            metadata: { context_id: c },
-            created_at: '2026-03-20T14:00:00Z',
-          })),
-          total: chats.length,
-        })
-      }),
-    )
-    renderApp('/')
-    await settled()
-    const rows = within(needs())
-      .getAllByRole('listitem')
-      .filter((li) => li.querySelector('[data-kind="request"]'))
-    expect(rows.length).toBeGreaterThan(0)
-    await waitFor(() =>
-      expect(within(rows[0]!).getByRole('link', { name: 'Open flow' })).toHaveAttribute(
-        'href',
-        expect.stringMatching(/^\/flows\/5eedf/),
-      ),
-    )
-    // Still one row per chat: no paused-flow rows of their own.
-    expect(needs().querySelectorAll('[data-kind="flow"]')).toHaveLength(0)
-  })
-
-  it('a failed paused-flows read only means no flow links: the inbox still shows (O2a)', async () => {
-    configureChatMock({ waiting: true })
-    server.use(
-      http.get('/api/flows', ({ request }) =>
-        new URL(request.url).searchParams.get('status') === 'paused'
-          ? new HttpResponse('internal error', { status: 500 })
-          : undefined,
-      ),
-    )
-    renderApp('/')
-    await settled()
-    const rows = within(needs())
-      .getAllByRole('listitem')
-      .filter((li) => li.querySelector('[data-kind="request"]'))
-    expect(rows.length).toBeGreaterThan(0)
-    expect(within(needs()).queryByRole('link', { name: 'Open flow' })).toBeNull()
-    expect(within(needs()).queryByText(/flows/i)).toBeNull()
-  })
-
   it('a normal user gets one "outside Chat" row for requests no chat claims (eng R5)', async () => {
     configureMocks({ superuser: false })
     configureChatMock({ waiting: true })
@@ -262,14 +188,12 @@ describe('Needs you', () => {
 })
 
 describe('first run (design 7A)', () => {
-  it('puts the Setup guide in the hero beside Deploy, and it reopens the guide', async () => {
+  it('leads with the Setup guide card instead of the deploy card, and it reopens the guide', async () => {
     server.use(http.get('*/api/agents', () => HttpResponse.json([])))
     const user = userEvent.setup()
     renderApp('/')
     const guideCard = await screen.findByTestId('overview-setup-guide')
-    // The guide fills the hero's right half (redesign 2026-10-21), not a card of its own; no range with nothing to range.
-    expect(card('overview-first-run')).toContainElement(guideCard)
-    expect(screen.queryByRole('group', { name: copy.range.label })).toBeNull()
+    expect(document.querySelector('[data-testid="overview-first-run"]')).toBeNull()
     // One next action: Deploy beside the headline; the header's Setup guide and Quick actions' Deploy step aside.
     expect(screen.getAllByRole('link', { name: deployCopy.entry.label })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: copy.setup.button })).toBeNull()
@@ -363,7 +287,7 @@ describe('first run (design 7A)', () => {
 })
 
 describe('Recent sessions and the session checks (eng R7)', () => {
-  it('reads session status from the list, with no per-session or per-trace fan-out', async () => {
+  it('status-checks at most the newest 25 sessions', async () => {
     const rec = recordRequests()
     renderApp('/')
     await loaded()
@@ -373,19 +297,11 @@ describe('Recent sessions and the session checks (eng R7)', () => {
       { timeout: 5000 },
     )
     rec.stop()
-    const paths = rec.urls.map((u) => u.pathname)
-    // `session/list` carries `status`, so the Overview no longer downloads a
-    // session detail (and 3 traces each) to compute one boolean per row. This
-    // was up to 100 requests, every one a trace-store read on the server.
-    expect(paths.filter((p) => /\/session\/(?!list)[^/]+$/.test(p))).toEqual([])
-    expect(paths.filter((p) => p.includes('/trace/'))).toEqual([])
-    // Two list reads: the rows shown, and the failed ones Needs you counts.
-    const lists = rec.urls.filter((u) => u.pathname.endsWith('/session/list'))
-    expect(lists).toHaveLength(2)
-    expect(lists.map((u) => Number(u.searchParams.get('limit'))).sort((x, y) => x - y)).toEqual(
-      [RECENT_SESSION_ROWS, FAILED_SESSION_ROWS].sort((x, y) => x - y),
+    const details = new Set(
+      rec.urls.map((u) => u.pathname).filter((p) => /\/session\/(?!list)[^/]+$/.test(p)),
     )
-    expect(lists.some((u) => u.searchParams.get('status') === 'failed')).toBe(true)
+    expect(details.size).toBeGreaterThan(0)
+    expect(details.size).toBeLessThanOrEqual(25)
   })
 
   it('says the trace store is needed when the session list fails with a 503', async () => {
@@ -438,14 +354,14 @@ describe('Budgets', () => {
     ).toHaveAttribute('href', '/router#router-budgets')
   })
 
-  it('hides both on a server without budgets (a bare 404); Recent sessions sits beside Fleet health', async () => {
+  it('hides both on a server without budgets (a bare 404), and Recent sessions takes the row', async () => {
     server.use(http.get('*/api/budgets', () => new HttpResponse(null, { status: 404 })))
     renderApp('/')
     await loaded()
     await waitFor(() => expect(card('overview-budget')).toBeNull())
     const actions = card('overview-actions')
     expect(within(actions).queryByRole('link', { name: copy.actions.adjustBudget })).toBeNull()
-    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-7')
+    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-4')
   })
 })
 
@@ -455,13 +371,13 @@ describe('structure (design 14A)', () => {
     await loaded()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     const ids = [
-      // Savings is the summary card's last block; Fleet health sits beside Needs you (redesign 2026-10-19).
+      // Savings sits between the summary and the detail grid: a headline feature, above the fold.
       'overview-savings',
       'overview-needs',
-      'overview-health',
       'overview-spend',
+      // 'overview-budget', // Budgets hidden: no server support yet (R-L10).
+      'overview-health',
       'overview-sessions',
-      'overview-saved',
       'overview-chats',
       'overview-actions',
     ]
@@ -495,34 +411,31 @@ describe('Loading', () => {
 })
 
 describe('Savings', () => {
-  it('shows what optimization saved plus one next step, then hands off to TokenOps', async () => {
+  it('shows what optimisation saved plus one next step, then hands off to TokenOps', async () => {
     // Not a small TokenOps: one number and one thing to do about it. Repeating the breakdown here
     // would give the reader the same work twice and a reason to skip both.
     renderApp('/')
     const row = await screen.findByTestId('overview-savings')
     expect(row).toHaveAttribute('data-state', 'saving')
-    expect(row).toHaveTextContent(/Token optimization/)
+    expect(row).toHaveTextContent(/Token optimisation/)
     expect(row).toHaveTextContent(/fewer tokens/)
     // The insight names the agent worth switching on, not the layer that happened to win.
     expect(row).toHaveTextContent(/biggest win left|Mostly from/)
     // Deep-links to the section, not the top of a page with four other panels above it.
     expect(within(row).getByRole('link', { name: /See the breakdown/ })).toHaveAttribute(
       'href',
-      '/tokenops?open=optimize',
+      '/tokenops?open=optimise',
     )
   })
 
-  it('the breakdown link lands on the optimization section', async () => {
+  it('the breakdown link lands on the optimisation section', async () => {
     const user = userEvent.setup()
     const { router } = renderApp('/')
     const row = await screen.findByTestId('overview-savings')
     await user.click(within(row).getByRole('link', { name: /See the breakdown/ }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
-    // TokenOps has no expanders: `open=optimise` scrolls to the section, which is always on the page.
-    expect(router.state.location.search).toMatchObject({ open: 'optimize' })
-    expect(
-      await screen.findByRole('heading', { name: 'Token optimization savings' }),
-    ).toBeInTheDocument()
+    const section = await screen.findByRole('button', { name: /^Token optimisation/ })
+    expect(section).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('keeps the tile grid to the four like-for-like counters', async () => {
@@ -632,36 +545,5 @@ describe('Savings', () => {
     renderApp('/')
     await screen.findByTestId('kpi-spend')
     expect(screen.queryByTestId('overview-savings')).toBeNull()
-  })
-})
-
-describe('the summary tiles (redesign 2026-10-19)', () => {
-  it('Tokens shows the range’s total and its input / output split; Runs shows cost per run', async () => {
-    renderApp('/')
-    await loaded()
-    const tokens = card('kpi-tokens')
-    expect(within(tokens).getByText(/^\d[\d.]*[KMB]?$/)).toBeInTheDocument()
-    expect(within(tokens).getByText(/^input \d/)).toBeInTheDocument()
-    expect(within(tokens).getByText(/^output \d/)).toBeInTheDocument()
-    expect(within(card('kpi-runs')).getByTestId('kpi-cost-per-run')).toHaveTextContent(/per run$/)
-    // The run states moved from the old Agents running tile to Fleet health.
-    expect(screen.queryByTestId('kpi-agents')).toBeNull()
-    expect(within(card('overview-health')).getByTestId('health-run-states')).toHaveTextContent(
-      /^\d+ of \d+ running/,
-    )
-  })
-})
-
-describe('Saved tokens by agent (redesign 2026-10-19)', () => {
-  it('ranks visible agents largest first, each opening its hub, and folds the rest into Other', async () => {
-    renderApp('/')
-    await loaded()
-    const saved = card('overview-saved')
-    const list = await within(saved).findByRole('list', { name: copy.saved.title })
-    const links = within(list).getAllByRole('link')
-    expect(links.length).toBeGreaterThan(0)
-    expect(links.length).toBeLessThanOrEqual(SAVED_BARS)
-    for (const l of links) expect(l.getAttribute('href')).toMatch(/^\/agents\/[^/]+$/)
-    expect(saved).toHaveTextContent(copy.saved.subtitle('measured'))
   })
 })

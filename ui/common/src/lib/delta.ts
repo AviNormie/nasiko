@@ -59,18 +59,8 @@ export function describeDelta(
   const up = changePct > 0
   const tone: Tone =
     polarity === 'neutral' ? 'neutral' : (polarity === 'down-good') === up ? 'bad' : 'good'
-  const verdict = tone === 'good' ? ', better' : tone === 'bad' ? ', worse' : ''
-  // Past +1000% a percentage stops reading as a quantity ("+676918.2%"); the multiple of the previous value does.
-  if (changePct >= 1000) {
-    const times = Math.round(1 + changePct / 100).toLocaleString('en-US')
-    return {
-      tone,
-      arrow: '▲',
-      text: `${times}×`,
-      label: `up to ${times} times the previous period${verdict}`,
-    }
-  }
   const text = `${up ? '+' : '−'}${Math.abs(changePct).toFixed(1)}%`
+  const verdict = tone === 'good' ? ', better' : tone === 'bad' ? ', worse' : ''
   return {
     tone,
     arrow: up ? '▲' : '▼',

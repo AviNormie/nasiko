@@ -29,10 +29,10 @@ import {
 } from './tuning'
 
 export type Rating = 'healthy' | 'watch' | 'action' | 'unknown'
-type Level = 'watch' | 'action'
-type Dimension = 'reliability' | 'cost' | 'activity' | 'latency'
+export type Level = 'watch' | 'action'
+export type Dimension = 'reliability' | 'cost' | 'activity' | 'latency'
 
-interface Reason {
+export interface Reason {
   dimension: Dimension
   level: Level
   text: string
@@ -143,7 +143,7 @@ export interface FleetHealthSummary {
   byId: Map<string, AgentHealth>
   /** Watch agents, most reasons first, then by name. */
   watch: AgentHealth[]
-  /** Needs-action agents, for Needs you (the home's rows show every agent's rating). */
+  /** Needs-action agents, for Needs you (they don't repeat in the Fleet health card). */
   action: AgentHealth[]
 }
 

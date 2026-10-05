@@ -1,6 +1,6 @@
-import { z } from 'zod/mini'
+import { z } from 'zod'
 import { sharedSearchSchema } from '@/app/shell/context'
-import { fallback, flag, isoDate, opt } from '@/lib/search'
+import { flag, isoDate } from '@/lib/search'
 
 /**
  * Everything the TokenOps page shows is driven by these URL search params
@@ -10,11 +10,8 @@ import { fallback, flag, isoDate, opt } from '@/lib/search'
 const SORTS = ['cost', 'tokens', 'operations', 'latency', 'hours', 'name'] as const
 export type SortKey = (typeof SORTS)[number]
 
-/**
- * Section ids the `open` param names (links from other pages: the page scrolls to that section on arrival). The page
- * has no expanders any more; `perf`, `month` and `metrics` are kept so older links still parse.
- */
-export const DISCLOSURES = ['spend', 'optimize', 'drivers', 'perf', 'month', 'metrics'] as const
+/** TokenOps disclosure ids (the `open` param). */
+export const DISCLOSURES = ['spend', 'optimise', 'drivers', 'perf', 'month', 'metrics'] as const
 export type Disclosure = (typeof DISCLOSURES)[number]
 
 /** Normalise `open` to a canonical CSV (kept a string so the URL stays `open=spend,drivers`). */
@@ -34,22 +31,30 @@ export function openSet(open: string | undefined): Set<Disclosure> {
   )
 }
 
+/** `open` with one disclosure toggled (undefined when none are left). */
+export function toggleOpen(open: string | undefined, id: Disclosure): string | undefined {
+  const set = openSet(open)
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
+  return set.size ? DISCLOSURES.filter((d) => set.has(d)).join(',') : undefined
+}
+
 /** The shared context (app/shell/context.ts) plus TokenOps' own keys. */
-export const tokenopsSearchSchema = z.extend(sharedSearchSchema, {
-  view: fallback(z.enum(['agent', 'workflow']), 'agent'),
-  sort: fallback(z.enum(SORTS), 'cost'),
+export const tokenopsSearchSchema = sharedSearchSchema.extend({
+  view: z.enum(['agent', 'workflow']).default('agent').catch('agent'),
+  sort: z.enum(SORTS).default('cost').catch('cost'),
   /** Truncated, never discarded: a long query must not clear the box while typing. */
-  q: opt(
-    z.pipe(
-      z.string(),
-      z.transform((s) => s.slice(0, 200)),
-    ),
-  ),
+  q: z
+    .string()
+    .transform((s) => s.slice(0, 200))
+    .optional()
+    .catch(undefined),
   /** Selected day for the day panel (UTC date). */
-  day: opt(isoDate),
-  traces: opt(flag),
-  /** Sections to land on: CSV of DISCLOSURES, or `all`. Unknown ids are dropped. */
-  open: opt(z.pipe(z.string(), z.transform(parseOpen))),
+  day: isoDate.optional().catch(undefined),
+  traces: flag.optional().catch(undefined),
+  more: flag.optional().catch(undefined),
+  /** Open disclosures: CSV of DISCLOSURES, or `all`. Unknown ids are dropped. */
+  open: z.string().transform(parseOpen).optional().catch(undefined),
 })
 
 export type TokenopsSearch = z.infer<typeof tokenopsSearchSchema>

@@ -1,6 +1,6 @@
 /**
- * Catalog and Your agents (plan §10, component): search, the Tag and Owner filters, `/`, the
- * harness switch, paging past 100, partial failure, the first-run steps; owner=sub, tabs and
+ * Catalog and Your agents (plan §10, component): search, tags, `/`, the Yours chip, the
+ * harness toggle, paging past 100, partial failure, the first-run steps; owner=sub, tabs and
  * counts, harnesses excluded, the pinned section, the deleted notice and the turn count wording.
  */
 import { screen, waitFor, within } from '@testing-library/react'
@@ -11,7 +11,6 @@ import { ADMIN_ID } from '@/mocks/seed-harness'
 import { seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
-import { copy } from './copy'
 
 setupPinnedSeed()
 
@@ -46,7 +45,7 @@ describe('catalog', () => {
     expect(cards()).toHaveLength(live.length)
     expect(screen.getAllByText('Yours').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Available to you').length).toBeGreaterThan(0)
-    await userEvent.click(screen.getByRole('switch', { name: /Coding harnesses/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Show coding harnesses/ }))
     await waitFor(() => expect(cards().length).toBeGreaterThan(live.length))
     expect(screen.getAllByText('Coding harness').length).toBeGreaterThan(0)
   })
@@ -71,17 +70,13 @@ describe('catalog', () => {
     expect(screen.getByRole('searchbox', { name: 'Search agents' })).toHaveFocus()
   })
 
-  it("Owner: Yours keeps only the caller's agents; a tag keeps only that tag", async () => {
+  it("the Yours chip keeps only the caller's agents; a tag chip keeps only that tag", async () => {
     renderApp('/agents')
     await firstCard()
-    const pick = async (filter: string, option: string) => {
-      await userEvent.click(screen.getByRole('combobox', { name: filter }))
-      await userEvent.click(await screen.findByRole('option', { name: option }))
-    }
-    await pick(copy.ownerFilter, copy.yours)
+    await userEvent.click(screen.getByRole('button', { name: 'Yours', pressed: false }))
     await waitFor(() => expect(screen.queryByText('Available to you')).toBeNull())
-    await pick(copy.ownerFilter, copy.anyone)
-    await pick(copy.tagFilter, 'ops')
+    await userEvent.click(screen.getByRole('button', { name: 'Yours', pressed: true }))
+    await userEvent.click(screen.getByRole('button', { name: 'ops' }))
     await waitFor(() => expect(cards().length).toBeLessThan(live.length))
     expect(cards().length).toBeGreaterThan(0)
   })

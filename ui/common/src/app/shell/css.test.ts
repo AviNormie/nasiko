@@ -48,7 +48,7 @@ describe('index.css tokens', () => {
     expect(css).not.toMatch(/--sidebar[a-z-]*:\s*hsl/)
   })
 
-  it('has no retired accent presets, and status colors stay per mode, outside the theme blocks', () => {
+  it('has no retired accent presets, and status colours stay per mode, outside the theme blocks', () => {
     expect(css).not.toMatch(/data-accent/)
     for (const b of blocks().filter((x) => x.selector.includes('data-theme'))) {
       expect(b.body, b.selector).not.toMatch(/--(success|warning|destructive|info|logo):/)
@@ -59,7 +59,7 @@ describe('index.css tokens', () => {
 describe('accent text class (design D3)', () => {
   // TypeScript is covered by ESLint (eslint.config.js `banned`: any string or template literal with bare
   // text-primary); this checks the stylesheets, which ESLint doesn't read.
-  it('colors accent text with text-primary-text, never text-primary, in any stylesheet', () => {
+  it('colours accent text with text-primary-text, never text-primary, in any stylesheet', () => {
     const offenders: string[] = []
     const walk = (dir: string) => {
       for (const f of readdirSync(dir)) {

@@ -27,6 +27,9 @@ export function isEndpointAbsent(err: unknown): boolean {
 /** TokenOps F4: the proposed `/finops/top-traces` is missing (the drawer says "needs a newer nasiko-server"). */
 export const isTopTracesAbsent = (err: unknown) => isEndpointAbsent(err)
 
+/** Router R2: the proposed `/api/budgets` is missing (the section says "Budgets need a newer OpenRuntime server"). */
+export const isBudgetsAbsent = (err: unknown) => isEndpointAbsent(err)
+
 /**
  * nasiko-server 401 reasons that mean the token is already dead (auth/middleware.rs @ cb3aaf0c, sent as the
  * AuthRejection envelope's `message`). "token validation unavailable" is NOT one: the database was unreachable,
