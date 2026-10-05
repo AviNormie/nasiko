@@ -12,9 +12,7 @@ use serde::Deserialize;
 use tracing::instrument;
 use utoipa::IntoParams;
 
-use super::service::{
-    EnsureSessionOutcome, InsightsRequest, ObservabilityService, parse_iso_or_default,
-};
+use super::service::{EnsureSessionOutcome, FinopsAccess, InsightsRequest, ObservabilityService};
 
 /// Request extension injected by EE middleware to scope FinOps queries to a
 /// set of user UUIDs (org-unit filter). OSS handlers check for this extension
@@ -494,8 +492,7 @@ pub async fn get_finops_dashboard(
             Err(r) => return r,
         };
 
-    let user_ids = user_scope.map(|Extension(s)| s.0);
-    let accessible_agent_ids = accessible_agent_ids(&state, &claims).await;
+    let scope = finops_scope(&state, &claims, user_scope).await;
     let owner_id = (params.my_agent && agent_name.is_none()).then_some(claims.sub.as_str());
     match svc(&state)
         .get_finops_dashboard(
@@ -508,8 +505,7 @@ pub async fn get_finops_dashboard(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
-            user_ids.as_deref(),
-            accessible_agent_ids.as_deref(),
+            scope.access(),
             owner_id,
             view,
         )
@@ -569,10 +565,11 @@ fn resolve_range_params(
         (status = 400, description = "Malformed filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_timeseries(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsFilterParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -582,6 +579,8 @@ pub async fn get_finops_spend_timeseries(
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_timeseries(
             params.start_time.as_deref(),
@@ -590,6 +589,7 @@ pub async fn get_finops_spend_timeseries(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -611,10 +611,11 @@ pub async fn get_finops_spend_timeseries(
         (status = 400, description = "Malformed month/filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_calendar(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsSpendCalendarParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -624,6 +625,8 @@ pub async fn get_finops_spend_calendar(
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_calendar(
             &params.month,
@@ -631,6 +634,7 @@ pub async fn get_finops_spend_calendar(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -652,22 +656,26 @@ pub async fn get_finops_spend_calendar(
         (status = 400, description = "Malformed date/filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_calendar_day(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsDayDrilldownParams>,
 ) -> Response {
     let agent_name = match resolve_agent_filter(&state.db, params.agent_id.as_deref()).await {
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_calendar_day(
             &params.date,
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -691,10 +699,11 @@ pub async fn get_finops_spend_calendar_day(
         (status = 400, description = "Malformed filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_attributions(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsAttributionsParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -713,6 +722,8 @@ pub async fn get_finops_attributions(
             Ok(v) => v,
             Err(r) => return r,
         };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_attributions(
             start_time.as_deref(),
@@ -725,6 +736,7 @@ pub async fn get_finops_attributions(
             params.sort_dir.as_deref(),
             params.limit,
             params.offset,
+            access,
         )
         .await
     {
@@ -796,6 +808,35 @@ pub async fn get_agent_hours(
     {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => obs_err(e),
+    }
+}
+
+struct CallerScope {
+    user_ids: Option<Vec<uuid::Uuid>>,
+    accessible_agent_ids: Option<Vec<uuid::Uuid>>,
+    workflow_owner: Option<uuid::Uuid>,
+}
+
+impl CallerScope {
+    fn access(&self) -> FinopsAccess<'_> {
+        FinopsAccess {
+            user_ids: self.user_ids.as_deref(),
+            accessible_agent_ids: self.accessible_agent_ids.as_deref(),
+            workflow_owner: self.workflow_owner,
+        }
+    }
+}
+
+async fn finops_scope(
+    state: &AppState,
+    claims: &Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
+) -> CallerScope {
+    CallerScope {
+        user_ids: user_scope.map(|Extension(s)| s.0),
+        accessible_agent_ids: accessible_agent_ids(state, claims).await,
+        workflow_owner: (!claims.is_superuser)
+            .then(|| claims.sub.parse().unwrap_or(uuid::Uuid::nil())),
     }
 }
 
@@ -912,129 +953,5 @@ mod tests {
     fn resolve_range_params_rejects_an_invalid_range_with_400() {
         let err = resolve_range_params(&None, &None, &Some("bogus".to_string())).unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-    }
-}
-
-// ── finops/savings ────────────────────────────────────────────────────────────
-
-/// Query params for `GET /finops/savings`.
-///
-/// The window and dimension filters are deliberately the same ones `/finops/dashboard` takes, so a
-/// client can carry its filter state across without translating it, and so the savings aggregate
-/// answers the same question as the spend aggregate beside it.
-#[derive(Debug, Deserialize)]
-pub struct SavingsParams {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub range: Option<String>,
-    pub agent_id: Option<String>,
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    /// "total" (default) | "agent" | "session".
-    pub scope: Option<String>,
-    /// One session's savings; implies `scope=session`.
-    pub session_id: Option<String>,
-    /// Row cap for the agent and session scopes.
-    pub limit: Option<i64>,
-}
-
-/// Rows returned for the agent and session scopes. Bounded so a wide window cannot return the whole
-/// estate in one response.
-const SAVINGS_DEFAULT_LIMIT: i64 = 25;
-const SAVINGS_MAX_LIMIT: i64 = 200;
-
-pub async fn get_finops_savings(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(params): Query<SavingsParams>,
-) -> Response {
-    if let Err(r) = validate_range(params.range.as_deref()) {
-        return r;
-    }
-    let scope = match super::savings::Scope::parse(params.scope.as_deref()) {
-        Ok(s) => s,
-        Err(r) => return r,
-    };
-    // `session_id` names one session, which only means anything in the session rollup.
-    let scope = if params.session_id.is_some() {
-        super::savings::Scope::Session
-    } else {
-        scope
-    };
-
-    let (start_time, end_time) =
-        match resolve_range_params(&params.start_time, &params.end_time, &params.range) {
-            Ok(v) => v,
-            Err(r) => return r,
-        };
-    let start = parse_iso_or_default(start_time.as_deref(), 30);
-    let end = end_time
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.with_timezone(&Utc))
-        .unwrap_or_else(Utc::now);
-
-    // The dashboard accepts a name or a UUID here; the ledger is UUID-keyed, so resolve before use.
-    let agent_uuid = match resolve_agent_uuid(&state.db, params.agent_id.as_deref()).await {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    if let Some(id) = agent_uuid
-        && !crate::acl::can_access_agent(&state, &claims, id).await
-    {
-        return (StatusCode::NOT_FOUND, "agent not found").into_response();
-    }
-
-    let accessible = accessible_agent_ids(&state, &claims).await;
-    let query = super::savings::SavingsQuery {
-        start,
-        end,
-        scope,
-        agent_id: agent_uuid,
-        provider: params.provider.as_deref(),
-        model: params.model.as_deref(),
-        session_id: params.session_id.as_deref(),
-        limit: params
-            .limit
-            .unwrap_or(SAVINGS_DEFAULT_LIMIT)
-            .clamp(1, SAVINGS_MAX_LIMIT),
-        accessible_agent_ids: accessible.as_deref(),
-    };
-
-    match super::savings::get_savings(&state.db, &query).await {
-        Ok(data) => Json(super::savings::SavingsResponse {
-            data,
-            status_code: 200,
-            message: "ok".into(),
-        })
-        .into_response(),
-        Err(e) => {
-            tracing::error!(%e, "finops savings query failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
-        }
-    }
-}
-
-/// Resolve an `agent_id` param that may be a UUID or a name to the UUID the ledger is keyed on.
-#[allow(clippy::result_large_err)]
-async fn resolve_agent_uuid(
-    db: &sqlx::PgPool,
-    raw: Option<&str>,
-) -> Result<Option<uuid::Uuid>, Response> {
-    let Some(raw) = raw.filter(|s| !s.is_empty()) else {
-        return Ok(None);
-    };
-    if let Ok(id) = uuid::Uuid::parse_str(raw) {
-        return Ok(Some(id));
-    }
-    let found: Option<uuid::Uuid> =
-        sqlx::query_scalar("SELECT id FROM agents WHERE name = $1 AND deleted_at IS NULL")
-            .bind(raw)
-            .fetch_optional(db)
-            .await
-            .unwrap_or(None);
-    match found {
-        Some(id) => Ok(Some(id)),
-        None => Err((StatusCode::NOT_FOUND, "agent not found").into_response()),
     }
 }

@@ -13,8 +13,8 @@ use chrono::{DateTime, Datelike, Duration, SecondsFormat, TimeZone, Utc};
 use futures::stream::{self, StreamExt};
 use nasiko_config::Config;
 use nasiko_observability::{
-    CostBreakdown, ObservabilityError, ObservabilityProvider, TimeBucket, extract_token_attrs,
-    extract_usage_attrs,
+    CostBreakdown, ObservabilityError, ObservabilityProvider, TimeBucket,
+    extract_cache_token_attrs, extract_token_attrs,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -120,7 +120,7 @@ fn parse_iso_param(
     }
 }
 
-pub(super) fn parse_iso_or_default(iso: Option<&str>, default_days_ago: i64) -> DateTime<Utc> {
+fn parse_iso_or_default(iso: Option<&str>, default_days_ago: i64) -> DateTime<Utc> {
     parse_iso(iso).unwrap_or_else(|| Utc::now() - Duration::days(default_days_ago))
 }
 
@@ -315,9 +315,8 @@ fn build_span_tree(
         if !seen.insert(&span.span_id) {
             continue;
         }
-        let u = extract_usage_attrs(&span.attributes);
-        let (input, output, model) = (u.input, u.output, u.model.clone());
-        let (cache_read, cache_creation) = (u.cache_read, u.cache_creation);
+        let (input, output, model) = extract_token_attrs(&span.attributes);
+        let (cache_read, cache_creation) = extract_cache_token_attrs(&span.attributes);
         trace_usage.0 += input;
         trace_usage.1 += output;
         trace_usage.2 += cache_read;
@@ -339,8 +338,9 @@ fn build_span_tree(
                 trace_usage.3,
             )
         } else {
-            let u = extract_usage_attrs(&s.attributes);
-            (u.input, u.output, u.model, u.cache_read, u.cache_creation)
+            let (input, output, model) = extract_token_attrs(&s.attributes);
+            let (cache_read, cache_creation) = extract_cache_token_attrs(&s.attributes);
+            (input, output, model, cache_read, cache_creation)
         };
         SpanNode {
             id: encode_span_id(&s.span_id),
@@ -812,10 +812,6 @@ pub struct FinopsSummary {
     /// silently skips these, so `total_cost` under-reports; this surfaces the gap
     /// as a known number rather than a smaller one.
     pub unpriced_calls: usize,
-    /// Sum of rows explicitly priced using inferred rates or usage evidence.
-    pub estimated_cost: f64,
-    /// Older materializations without recorded pricing confidence.
-    pub unknown_confidence_calls: usize,
 }
 
 #[derive(Serialize, Clone, ToSchema)]
@@ -1137,6 +1133,19 @@ pub enum EnsureSessionOutcome {
     Conflict,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct FinopsAccess<'a> {
+    pub user_ids: Option<&'a [uuid::Uuid]>,
+    pub accessible_agent_ids: Option<&'a [uuid::Uuid]>,
+    pub workflow_owner: Option<uuid::Uuid>,
+}
+
+struct ScopeBinds {
+    agent_names: Option<Vec<String>>,
+    has_user_filter: bool,
+    user_ids: Vec<uuid::Uuid>,
+}
+
 impl ObservabilityService {
     pub fn from_state(state: &crate::state::AppState) -> Self {
         Self {
@@ -1151,6 +1160,34 @@ impl ObservabilityService {
     /// doubles as the Tempo `service.name` (the injector sets OTEL_SERVICE_NAME
     /// to the agent name); `id` is the UUID reported to callers.
     /// OSS: returns all agents (NoopAuthorizer). EE adds RBAC at a higher layer.
+    async fn scope_binds(
+        &self,
+        access: FinopsAccess<'_>,
+    ) -> Result<ScopeBinds, ObservabilityError> {
+        let agent_names = match access.accessible_agent_ids {
+            None => None,
+            Some(ids) => Some(
+                sqlx::query_scalar::<_, String>(
+                    "SELECT name FROM agents WHERE id = ANY($1) AND deleted_at IS NULL",
+                )
+                .bind(ids.to_vec())
+                .fetch_all(&self.db)
+                .await
+                .map_err(|e| ObservabilityError::Internal(e.to_string()))?,
+            ),
+        };
+        let user_ids = access
+            .user_ids
+            .filter(|ids| !ids.is_empty())
+            .map(<[uuid::Uuid]>::to_vec)
+            .unwrap_or_default();
+        Ok(ScopeBinds {
+            agent_names,
+            has_user_filter: !user_ids.is_empty(),
+            user_ids,
+        })
+    }
+
     async fn get_agent_names(
         &self,
         owner_id: Option<uuid::Uuid>,
@@ -1312,7 +1349,7 @@ impl ObservabilityService {
             agent_id: agent_name,
             num_traces: Some(details.trace_count as u32),
             start_time: started_at.map(fmt_ts),
-            // Clients parsing this as a timestamp need a non-empty string — fall back
+            // Flutter's DateTime.parse requires a non-empty string — fall back
             // to start_time when no end time is known.
             end_time: ended_at.or(started_at).map(fmt_ts),
             duration_ms,
@@ -1726,18 +1763,14 @@ impl ObservabilityService {
             if !seen_spans.insert(&span.span_id) {
                 continue;
             }
-            let u = extract_usage_attrs(&span.attributes);
-            if u.is_empty() {
+            let (input, output, model) = extract_token_attrs(&span.attributes);
+            let (cache_read, cache_creation) = extract_cache_token_attrs(&span.attributes);
+            if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
                 continue;
             }
             cost.add_assign(
                 self.provider
-                    .cost(nasiko_observability::CostRequest::from_usage(
-                        nasiko_observability::span_provider(span),
-                        u.model.as_deref(),
-                        span.started_at,
-                        &u,
-                    ))
+                    .cost_with_cache(model.as_deref(), input, output, cache_read, cache_creation)
                     .await,
             );
         }
@@ -2065,13 +2098,16 @@ impl ObservabilityService {
         agent_name: Option<&str>,
         model: Option<&str>,
         provider: Option<&str>,
-        // User UUIDs to scope results to (EE org-unit filter). `None` = no filter.
-        user_ids: Option<&[uuid::Uuid]>,
-        accessible_agent_ids: Option<&[uuid::Uuid]>,
+        access: FinopsAccess<'_>,
         // When `Some`, restricts the agent list to agents owned by this user UUID.
         owner_id: Option<&str>,
         view: &str,
     ) -> Result<FinopsDashboardResponse, ObservabilityError> {
+        let FinopsAccess {
+            user_ids,
+            accessible_agent_ids,
+            ..
+        } = access;
         let parsed_owner_id = owner_id.and_then(|s| s.parse::<uuid::Uuid>().ok());
         let accessible: Option<HashSet<uuid::Uuid>> =
             accessible_agent_ids.map(|ids| ids.iter().copied().collect());
@@ -2173,8 +2209,6 @@ impl ObservabilityService {
             cache_read_tokens: i64,
             cache_creation_tokens: i64,
             total_cost: f64,
-            estimated_cost: f64,
-            unknown_confidence_calls: i64,
             tool_call_count: i64,
             p50_latency: Option<f64>,
             p95_latency: Option<f64>,
@@ -2202,8 +2236,6 @@ impl ObservabilityService {
                       COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
                       COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
                       COALESCE(SUM(cost_usd), 0)::FLOAT8 AS total_cost,
-                      COALESCE(SUM(cost_usd) FILTER (WHERE cost_estimated), 0)::FLOAT8 AS estimated_cost,
-                      COUNT(*) FILTER (WHERE cost_estimated IS NULL)::BIGINT AS unknown_confidence_calls,
                       COALESCE(SUM(tool_call_count), 0)::BIGINT AS tool_call_count,
                       percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms)::FLOAT8 AS p50_latency,
                       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::FLOAT8 AS p95_latency,
@@ -2502,7 +2534,7 @@ impl ObservabilityService {
 
         let attributions = if view == "workflow" {
             let rows = self
-                .get_workflow_finops_rows(start, now, agent_name)
+                .get_workflow_finops_rows(start, now, agent_name, access)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(error = %e, "workflow finops aggregation failed");
@@ -2526,11 +2558,6 @@ impl ObservabilityService {
                     total_agents,
                     total_container_hours,
                     unpriced_calls: unpriced_calls.max(0) as usize,
-                    estimated_cost: current_rows.iter().map(|row| row.estimated_cost).sum(),
-                    unknown_confidence_calls: current_rows
-                        .iter()
-                        .map(|row| row.unknown_confidence_calls.max(0) as usize)
-                        .sum(),
                 },
                 agents: agent_rows,
                 token_usage: FinopsTokenUsage {
@@ -2552,6 +2579,7 @@ impl ObservabilityService {
 
     // ── 6b. finops/spend-timeseries ───────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn get_finops_spend_timeseries(
         &self,
         start_time: Option<&str>,
@@ -2560,7 +2588,9 @@ impl ObservabilityService {
         agent_name: Option<&str>,
         model: Option<&str>,
         provider: Option<&str>,
+        access: FinopsAccess<'_>,
     ) -> Result<FinopsSpendTimeseriesResponse, ObservabilityError> {
+        let scope = self.scope_binds(access).await?;
         let (start, end, bucket) = resolve_window(start_time, end_time, range)?;
         let trunc = match bucket {
             TimeBucket::Hour => "hour",
@@ -2598,6 +2628,8 @@ impl ObservabilityService {
                      AND ($3::TEXT IS NULL OR agent_name = $3)
                      AND ($4::TEXT IS NULL OR model = $4)
                      AND ($5::TEXT IS NULL OR provider = $5)
+                     AND ($6::TEXT[] IS NULL OR agent_name = ANY($6::TEXT[]))
+                     AND (NOT $7::BOOL OR user_id = ANY($8::UUID[]))
                    GROUP BY bucket_start, agent_name
                ),
                ranked AS (
@@ -2615,6 +2647,8 @@ impl ObservabilityService {
                      AND ($3::TEXT IS NULL OR agent_name = $3)
                      AND ($4::TEXT IS NULL OR model = $4)
                      AND ($5::TEXT IS NULL OR provider = $5)
+                     AND ($6::TEXT[] IS NULL OR agent_name = ANY($6::TEXT[]))
+                     AND (NOT $7::BOOL OR user_id = ANY($8::UUID[]))
                    GROUP BY bucket_start
                )
                SELECT r.bucket_start,
@@ -2638,6 +2672,9 @@ impl ObservabilityService {
             .bind(agent_name)
             .bind(model)
             .bind(provider)
+            .bind(&scope.agent_names)
+            .bind(scope.has_user_filter)
+            .bind(&scope.user_ids)
             .fetch_all(&self.db)
             .await
             .map_err(|e| ObservabilityError::Internal(e.to_string()))?;
@@ -2674,7 +2711,9 @@ impl ObservabilityService {
         agent_name: Option<&str>,
         model: Option<&str>,
         provider: Option<&str>,
+        access: FinopsAccess<'_>,
     ) -> Result<FinopsSpendCalendarResponse, ObservabilityError> {
+        let scope = self.scope_binds(access).await?;
         let month_start = chrono::NaiveDateTime::parse_from_str(
             &format!("{month}-01 00:00:00"),
             "%Y-%m-%d %H:%M:%S",
@@ -2705,6 +2744,8 @@ impl ObservabilityService {
                  AND ($3::TEXT IS NULL OR agent_name = $3)
                  AND ($4::TEXT IS NULL OR model = $4)
                  AND ($5::TEXT IS NULL OR provider = $5)
+                 AND ($6::TEXT[] IS NULL OR agent_name = ANY($6::TEXT[]))
+                 AND (NOT $7::BOOL OR user_id = ANY($8::UUID[]))
                GROUP BY DATE(started_at)
                ORDER BY date"#,
         )
@@ -2713,6 +2754,9 @@ impl ObservabilityService {
         .bind(agent_name)
         .bind(model)
         .bind(provider)
+        .bind(&scope.agent_names)
+        .bind(scope.has_user_filter)
+        .bind(&scope.user_ids)
         .fetch_all(&self.db)
         .await
         .map_err(|e| ObservabilityError::Internal(e.to_string()))?;
@@ -2766,7 +2810,9 @@ impl ObservabilityService {
         agent_name: Option<&str>,
         model: Option<&str>,
         provider: Option<&str>,
+        access: FinopsAccess<'_>,
     ) -> Result<FinopsDayDrilldownResponse, ObservabilityError> {
+        let scope = self.scope_binds(access).await?;
         let day_start =
             chrono::NaiveDateTime::parse_from_str(&format!("{date} 00:00:00"), "%Y-%m-%d %H:%M:%S")
                 .map(|d| d.and_utc())
@@ -2789,6 +2835,8 @@ impl ObservabilityService {
                  AND ($3::TEXT IS NULL OR agent_name = $3)
                  AND ($4::TEXT IS NULL OR model = $4)
                  AND ($5::TEXT IS NULL OR provider = $5)
+                 AND ($6::TEXT[] IS NULL OR agent_name = ANY($6::TEXT[]))
+                 AND (NOT $7::BOOL OR user_id = ANY($8::UUID[]))
                GROUP BY hour, agent_name
                ORDER BY hour"#,
         )
@@ -2797,6 +2845,9 @@ impl ObservabilityService {
         .bind(agent_name)
         .bind(model)
         .bind(provider)
+        .bind(&scope.agent_names)
+        .bind(scope.has_user_filter)
+        .bind(&scope.user_ids)
         .fetch_all(&self.db)
         .await
         .map_err(|e| ObservabilityError::Internal(e.to_string()))?;
@@ -2897,7 +2948,13 @@ impl ObservabilityService {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         agent_name: Option<&str>,
+        access: FinopsAccess<'_>,
     ) -> Result<Vec<WorkflowFinopsRow>, ObservabilityError> {
+        let org_user_ids = access
+            .user_ids
+            .filter(|ids| !ids.is_empty())
+            .map(<[uuid::Uuid]>::to_vec)
+            .unwrap_or_default();
         #[derive(sqlx::FromRow)]
         struct ExecRow {
             maf_id: Option<uuid::Uuid>,
@@ -2919,11 +2976,16 @@ impl ObservabilityService {
                          SELECT 1 FROM jsonb_array_elements(e.step_results) elem
                          WHERE elem->>'agent_name' = $3
                      )
-                 )"#,
+                 )
+                 AND ($4::UUID IS NULL OR e.user_id = $4)
+                 AND (NOT $5::BOOL OR e.user_id = ANY($6::UUID[]))"#,
         )
         .bind(start)
         .bind(end)
         .bind(agent_name)
+        .bind(access.workflow_owner)
+        .bind(!org_user_ids.is_empty())
+        .bind(&org_user_ids)
         .fetch_all(&self.db)
         .await
         .map_err(|e| ObservabilityError::Internal(e.to_string()))?;
@@ -3025,6 +3087,7 @@ impl ObservabilityService {
         sort_dir: Option<&str>,
         limit: Option<i64>,
         offset: Option<i64>,
+        access: FinopsAccess<'_>,
     ) -> Result<FinopsAttributionsResponse, ObservabilityError> {
         let start = parse_iso_or_default(start_time, 30);
         let end = end_time
@@ -3036,7 +3099,7 @@ impl ObservabilityService {
 
         if view == "workflow" {
             let mut rows = self
-                .get_workflow_finops_rows(start, end, agent_name)
+                .get_workflow_finops_rows(start, end, agent_name, access)
                 .await?;
             sort_workflow_rows(&mut rows, sort_by, desc);
             Ok(FinopsAttributionsResponse {
@@ -3049,8 +3112,8 @@ impl ObservabilityService {
         } else {
             let dashboard = self
                 .get_finops_dashboard(
-                    "", None, None, None, start_time, end_time, agent_name, model, provider, None,
-                    None, None, "agent",
+                    "", None, None, None, start_time, end_time, agent_name, model, provider,
+                    access, None, "agent",
                 )
                 .await?;
             let mut rows = dashboard.data.agents;
@@ -3330,8 +3393,6 @@ fn empty_finops_response(total_container_hours: f64) -> FinopsDashboardResponse 
                 total_agents: 0,
                 total_container_hours,
                 unpriced_calls: 0,
-                estimated_cost: 0.0,
-                unknown_confidence_calls: 0,
             },
             agents: vec![],
             token_usage: FinopsTokenUsage {
@@ -3428,15 +3489,10 @@ mod tests {
         };
 
         let (roots, _) = build_span_tree(&[root, child]);
-        // `input_tokens: 10` is the whole prompt, of which 5 were cached (2 read + 3
-        // written) — the semconv reading, which `extract_usage_attrs` normalizes to a
-        // fresh count of 5. The total is therefore 5 fresh + 5 cached + 5 output = 15,
-        // not 20: summing the raw attribute alongside the cache classes would charge
-        // every cached token twice.
-        assert_eq!(roots[0].token_count_total, 15);
+        assert_eq!(roots[0].token_count_total, 20);
         assert_eq!(roots[0].cache_read_tokens, 2);
         assert_eq!(roots[0].cache_creation_tokens, 3);
-        assert_eq!(roots[0].children[0].token_count_total, 15);
+        assert_eq!(roots[0].children[0].token_count_total, 20);
     }
 
     #[test]
@@ -3492,7 +3548,6 @@ mod tests {
                 cache_read_usd: 0.25,
                 cache_creation_usd: 0.75,
                 total_usd: 4.0,
-                estimated: false,
             },
         };
 
