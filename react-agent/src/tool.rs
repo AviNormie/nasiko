@@ -217,19 +217,18 @@ impl Tool for A2aTool {
         tracing::info!(agent = %self.agent.name, message = %args.message, "invoking A2A agent");
 
         // Organization policy (L0), appended as its own message part — computed ONCE, here, rather
-        // than at each send site below, for the same reason a rebind of `args.message` would have
-        // needed to be: a fix applied at only one of the two send sites is a bug the other path
-        // hides silently. Never spliced into `args.message`, which is the LLM's own fresh wording
-        // for this sub-task and is sent to the agent, persisted, and traced verbatim — same
-        // representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
-        // `nasiko_agent_proxy::context_part`.
+        // than at each send site below, for the same reason the old prefix rebind was: a fix
+        // applied at only one of the two send sites is a bug the other path hides silently. Never
+        // spliced into `args.message`, which is the LLM's own fresh wording for this sub-task and
+        // is sent to the agent, persisted, and traced verbatim — same representation
+        // `a2a_dispatch.rs`/`agent_proxy.rs` use via `nasiko_agent_proxy::context_part`.
         //
         // Passed as `extra_text_parts`, a raw string, NOT pre-tagged into a `Value` the way
         // `file_parts` are: this call retries under BOTH A2A dialects if the agent rejects the
         // first one (`send_message_with_headers`/`call_streaming`'s own `-32601` fallback), and
         // this platform's real `a2a-lf` agents (proto dialect) reject an unexpected `"kind"`
-        // field outright. `build_message_body` re-tags this text per attempt, exactly like the
-        // primary message part already is.
+        // field outright — confirmed live against a real deployed agent. `build_message_body`
+        // re-tags this text per attempt, exactly like the primary message part already is.
         let extra_text_parts: Vec<String> = self.outbound_prefix.iter().cloned().collect();
 
         // No per-call user credential: the invoked agent authenticates to
@@ -249,7 +248,13 @@ impl Tool for A2aTool {
         let streamed = match self.progress {
             Some(ref orch_tx) => {
                 match self
-                    .call_streaming(&args, orch_tx.clone(), &per_call_headers, &extra_text_parts)
+                    .call_streaming(
+                        &args,
+                        orch_tx.clone(),
+                        &per_call_headers,
+                        &self.file_parts,
+                        &extra_text_parts,
+                    )
                     .await
                 {
                     Ok(SendOutcome::Text(text)) => Some(text),
@@ -367,6 +372,7 @@ impl A2aTool {
         args: &A2aToolArgs,
         orch_tx: tokio::sync::mpsc::Sender<OrchestratorEvent>,
         per_call_headers: &[(String, String)],
+        extra_parts: &[serde_json::Value],
         extra_text_parts: &[String],
     ) -> Result<SendOutcome, A2aClientError> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentStreamEvent>(64);
@@ -411,7 +417,7 @@ impl A2aTool {
                 args.context_id.as_deref(),
                 Some(tx),
                 per_call_headers,
-                &self.file_parts,
+                extra_parts,
                 extra_text_parts,
             )
             .await;

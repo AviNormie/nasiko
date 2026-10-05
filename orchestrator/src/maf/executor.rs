@@ -856,6 +856,10 @@ async fn execute_step(
         return StepLoopOutcome::Failed(err);
     }
 
+    // Org policy is appended as its own part inside `call_agent`, never composed back into
+    // `actual_prompt`: that value is persisted to `step_results[i].prompt` below and read back
+    // verbatim on resume, so folding the policy into it in place would put the policy in the
+    // record — and then re-append it to the already-appended copy on every resume.
     let raw_response = timed(
         "call_agent",
         execution_id,
@@ -1989,6 +1993,10 @@ async fn call_agent(
     context_id: &str,
     user_id: &str,
     prompt: &str,
+    // Organization policy (L0), appended as its own part — never spliced into `prompt`, which is
+    // persisted verbatim to `step_results[i].prompt` and read back on resume (see this function's
+    // caller). Same representation `a2a_dispatch.rs`/`agent_proxy.rs`/`tool.rs` use for the exact
+    // same reason: a second, independently-addressable part rather than a merged string.
     outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
