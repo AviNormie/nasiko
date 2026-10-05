@@ -2,9 +2,7 @@
  * One MCP server on one agent (plans/feat-mcp.md §5.1, legacy agent page MCP card): mark, name, a summary ("3 of 5 tools
  * allowed · 1 ask first"), an Enabled switch, and when expanded each tool with Allow / Ask / Block. A stance click saves
  * at once (`useSetStance`: optimistic, rolled back with a toast). The agent's MCP tab lists one per server; the
- * server's Agents tab shows the one for the picked agent. `noAsk` (coding harnesses) hides Ask: a harness call has no
- * flow, so the gateway answers Ask with TOOL_ASK and stores no request to approve (nasiko-cloud-rs PR #631 reverted
- * f5cb65e7); a tool already on Ask keeps the item so its stance shows.
+ * server's Agents tab shows the one for the picked agent.
  */
 import { Link } from '@tanstack/react-router'
 import { ChevronDown, RotateCw } from 'lucide-react'
@@ -34,12 +32,10 @@ export function ConnectorRules({
   agentId,
   target,
   defaultOpen = false,
-  noAsk = false,
 }: {
   agentId: string
   target: RuleTarget
   defaultOpen?: boolean
-  noAsk?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const tools = useAgentTools(agentId, target.connectorId, true)
@@ -126,7 +122,6 @@ export function ConnectorRules({
                 tool={t}
                 tools={tools.data}
                 disabled={!enabled}
-                noAsk={noAsk}
               />
             ))}
           </ul>
@@ -142,14 +137,12 @@ function ToolRow({
   tool,
   tools,
   disabled,
-  noAsk,
 }: {
   agentId: string
   connectorId: string
   tool: AgentTool
   tools: readonly AgentTool[]
   disabled: boolean
-  noAsk: boolean
 }) {
   const set = useSetStance(agentId, connectorId)
   return (
@@ -176,7 +169,7 @@ function ToolRow({
           )
         }}
       >
-        {STANCES.filter((s) => !noAsk || s !== 'ask' || tool.stance === 'ask').map((s) => (
+        {STANCES.map((s) => (
           <ToggleGroupItem key={s} value={s} title={STANCE[s].title} className="px-3 text-xs">
             {STANCE[s].label}
           </ToggleGroupItem>

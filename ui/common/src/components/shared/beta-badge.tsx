@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
-const BETA_EXPLAINER =
+export const BETA_EXPLAINER =
   'This is new and still being tuned. It is safe to turn on or off at any time, and takes effect on the next message — but the savings may be smaller than the figures suggest while we validate them.'
 
 /** Pill for a section header. Pair with {@link BetaLine} where there is room for a sentence. */
@@ -39,10 +39,7 @@ export function BetaBadge({ className }: { className?: string }) {
   )
 }
 
-/**
- * The same caveat as a sentence, for places with no header to hang a badge on.
- * @public Part of main's Beta kit (PR #28), not used on a page yet.
- */
+/** The same caveat as a sentence, for places with no header to hang a badge on. */
 export function BetaLine({ className }: { className?: string }) {
   return <p className={cn('text-xs text-muted-foreground', className)}>{BETA_EXPLAINER}</p>
 }

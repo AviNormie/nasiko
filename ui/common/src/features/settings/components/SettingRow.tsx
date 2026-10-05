@@ -12,35 +12,23 @@ import { cn } from '@/lib/utils'
 export function SettingRows({
   children,
   footer,
-  stickyFooter = false,
   className,
 }: {
   children: ReactNode
   /** The card's action bar (a form's Save), on a muted strip under the rows. */
   footer?: ReactNode
-  /**
-   * Keep the action bar at the bottom of the viewport while the card is on screen (the Optimization page's unsaved
-   * changes, plans/feat-optimization-page.md R2G). `overflow-clip`, not hidden, so the card isn't the bar's scroller.
-   */
-  stickyFooter?: boolean
   className?: string
 }) {
   return (
     <div
       className={cn(
-        '@container rounded-lg border border-border bg-card text-card-foreground',
-        stickyFooter ? 'overflow-clip' : 'overflow-hidden',
+        '@container overflow-hidden rounded-lg border border-border bg-card text-card-foreground',
         className,
       )}
     >
       {children}
       {footer ? (
-        <div
-          className={cn(
-            'flex flex-wrap items-center justify-end gap-3 border-t border-border px-5 py-3',
-            stickyFooter ? 'sticky bottom-0 z-10 bg-muted' : 'bg-muted/40',
-          )}
-        >
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border bg-muted/40 px-5 py-3">
           {footer}
         </div>
       ) : null}

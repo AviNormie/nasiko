@@ -1,8 +1,14 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
+import { AppearancePage } from '@/features/settings/AppearancePage'
+import { SettingsLayout } from '@/features/settings/SettingsLayout'
 
-// Account settings moved out of the workspace's Settings to /account (account menu → Settings): old links land there.
-export const Route = createFileRoute('/_app/settings/appearance')({
-  beforeLoad: () => {
-    throw redirect({ to: '/account/appearance', replace: true })
-  },
-})
+// Every user's own preference: no superuser gate, unlike the workspace sections.
+export const Route = createFileRoute('/_app/settings/appearance')({ component: AppearanceRoute })
+
+function AppearanceRoute() {
+  return (
+    <SettingsLayout>
+      <AppearancePage />
+    </SettingsLayout>
+  )
+}

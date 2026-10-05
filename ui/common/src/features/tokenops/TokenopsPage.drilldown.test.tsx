@@ -285,7 +285,7 @@ describe('closing panels', () => {
     const user = userEvent.setup()
     const { router } = renderApp('/tokenops?open=all')
     const grid = await screen.findByRole('grid')
-    const label = new Date(`${seed.spikeDate}T00:00:00Z`).toLocaleDateString('en-US', {
+    const label = new Date(`${seed.spikeDate}T00:00:00Z`).toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
       timeZone: 'UTC',

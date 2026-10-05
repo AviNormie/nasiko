@@ -1,7 +1,7 @@
 /**
  * The sidebar's items (plans/feat-app-shell.md §3): one source for AppSidebar and its tests.
  * Only pages that exist get an item. Overview is `/`; Status (`/status`) is reached from the footer's status row,
- * and Settings (the account's) opens from the account menu. Deploy and Builds belong to Agents (its sub-nav), so they mark it current.
+ * and Settings is a footer row too. Deploy and Builds belong to Agents (its sub-nav), so they mark it current.
  *
  * `shared` items carry the shared context (window, filters, compare) between them through
  * `pickShared` (src/app/shell/context.ts), as the old header nav did.
@@ -9,13 +9,10 @@
 import {
   Bot,
   DollarSign,
-  Gauge,
   LayoutDashboard,
   ListTree,
   MessageSquare,
-  Network,
   Plug,
-  Settings,
   SquareTerminal,
   Waypoints,
   Workflow,
@@ -24,7 +21,7 @@ import {
 import type { AnyNavItem } from '../edition'
 import { copy } from './copy'
 
-export type NavGroupId = 'work' | 'fleet' | 'connect' | 'observe' | 'org' | 'lab'
+export type NavGroupId = 'work' | 'fleet' | 'connect' | 'observe' | 'lab'
 
 /** In display order, grouped by job; the first group has no header. */
 export const NAV_GROUPS: readonly { id: NavGroupId; label: string | null }[] = [
@@ -32,8 +29,6 @@ export const NAV_GROUPS: readonly { id: NavGroupId; label: string | null }[] = [
   { id: 'fleet', label: copy.nav.fleet },
   { id: 'connect', label: copy.nav.connect },
   { id: 'observe', label: copy.nav.observe },
-  // The workspace's settings (EE inserts Access control before them).
-  { id: 'org', label: copy.nav.org },
   { id: 'lab', label: copy.nav.lab },
 ]
 
@@ -46,11 +41,8 @@ export interface NavItem {
     | '/mcp'
     | '/workflows'
     | '/sessions'
-    | '/flows'
     | '/tokenops'
-    | '/optimization'
     | '/harnesses'
-    | '/settings'
   label: string
   icon: LucideIcon
   group: NavGroupId
@@ -77,18 +69,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: '/router', label: copy.nav.router, icon: Waypoints, group: 'connect', shared: false },
   { to: '/mcp', label: copy.nav.mcp, icon: Plug, group: 'connect', shared: false },
   { to: '/sessions', label: copy.nav.sessions, icon: ListTree, group: 'observe', shared: true },
-  // One request's orchestration (plans/feat-flows.md F1): its own 7-day window, so it doesn't carry the shared one.
-  { to: '/flows', label: copy.nav.flows, icon: Network, group: 'observe', shared: false },
   { to: '/tokenops', label: copy.nav.tokenops, icon: DollarSign, group: 'observe', shared: true },
-  // What context optimization saves and your settings for it (plans/feat-optimization-page.md P7, P2).
-  {
-    to: '/optimization',
-    label: copy.nav.optimization,
-    icon: Gauge,
-    group: 'observe',
-    shared: true,
-    also: ['/settings/optimization'],
-  },
   {
     to: '/harnesses',
     label: copy.nav.harnesses,
@@ -96,8 +77,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
     group: 'observe',
     shared: true,
   },
-  // Workspace and Security settings; the account's own (Appearance, Password) are /account, from the account menu.
-  { to: '/settings', label: copy.nav.settings, icon: Settings, group: 'org', shared: false },
 ]
 
 const under = (pathname: string, to: string) =>
@@ -105,7 +84,7 @@ const under = (pathname: string, to: string) =>
 
 /**
  * The item for a pathname, including its sub-routes (`/agents/mine`, `/chat/<id>`) and the pages it owns (`/builds/<id>`
- * is Agents); Overview only on `/` itself, none on `/status` or `/account` (footer rows).
+ * is Agents); Overview only on `/` itself, none on `/status` or `/settings` (footer rows).
  */
 export function activeItem(
   pathname: string,
