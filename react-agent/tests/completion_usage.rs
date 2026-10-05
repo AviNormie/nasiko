@@ -68,6 +68,7 @@ async fn buffered_and_streamed_calls_emit_one_cache_aware_usage_before_done() {
                 description: "test".into(),
                 endpoint: "http://unused.invalid".into(),
                 skills: vec![],
+                auth_header: None,
             }]),
         );
         orchestrator.init().await.unwrap();
