@@ -38,30 +38,156 @@ const DAYS_BACK: i64 = 365;
 /// 3 = heavy) so the trend/heatmap/attribution views show a real
 /// distribution instead of uniform bars.
 const AGENTS: &[(&str, &str, &str, f64, f64, u32)] = &[
-    ("demo-support-triage", "anthropic", "claude-3-5-sonnet", 3.00, 15.00, 3),
-    ("demo-support-escalation", "anthropic", "claude-3-5-sonnet", 3.00, 15.00, 2),
+    (
+        "demo-support-triage",
+        "anthropic",
+        "claude-3-5-sonnet",
+        3.00,
+        15.00,
+        3,
+    ),
+    (
+        "demo-support-escalation",
+        "anthropic",
+        "claude-3-5-sonnet",
+        3.00,
+        15.00,
+        2,
+    ),
     ("demo-code-review", "openai", "gpt-4o", 2.50, 10.00, 3),
     ("demo-code-refactor", "openai", "gpt-4o", 2.50, 10.00, 2),
-    ("demo-pr-summarizer", "openai", "gpt-4.1-mini", 0.40, 1.60, 2),
-    ("demo-finops-analyst", "anthropic", "claude-3-5-haiku", 0.80, 4.00, 2),
-    ("demo-invoice-classifier", "anthropic", "claude-3-5-haiku", 0.80, 4.00, 1),
-    ("demo-rag-search", "google", "gemini-2.5-flash", 0.15, 0.60, 3),
+    (
+        "demo-pr-summarizer",
+        "openai",
+        "gpt-4.1-mini",
+        0.40,
+        1.60,
+        2,
+    ),
+    (
+        "demo-finops-analyst",
+        "anthropic",
+        "claude-3-5-haiku",
+        0.80,
+        4.00,
+        2,
+    ),
+    (
+        "demo-invoice-classifier",
+        "anthropic",
+        "claude-3-5-haiku",
+        0.80,
+        4.00,
+        1,
+    ),
+    (
+        "demo-rag-search",
+        "google",
+        "gemini-2.5-flash",
+        0.15,
+        0.60,
+        3,
+    ),
     ("demo-doc-qa", "google", "gemini-2.5-flash", 0.15, 0.60, 2),
-    ("demo-image-caption", "google", "gemini-2.5-pro", 1.25, 10.00, 1),
-    ("demo-lead-classifier", "openai", "gpt-4o-mini", 0.15, 0.60, 3),
+    (
+        "demo-image-caption",
+        "google",
+        "gemini-2.5-pro",
+        1.25,
+        10.00,
+        1,
+    ),
+    (
+        "demo-lead-classifier",
+        "openai",
+        "gpt-4o-mini",
+        0.15,
+        0.60,
+        3,
+    ),
     ("demo-email-router", "openai", "gpt-4o-mini", 0.15, 0.60, 2),
-    ("demo-crm-enrichment", "openai", "gpt-4.1-nano", 0.10, 0.40, 1),
+    (
+        "demo-crm-enrichment",
+        "openai",
+        "gpt-4.1-nano",
+        0.10,
+        0.40,
+        1,
+    ),
     ("demo-sql-generator", "openai", "o3-mini", 1.10, 4.40, 1),
-    ("demo-onboarding-guide", "anthropic", "claude-haiku-4", 0.80, 4.00, 2),
-    ("demo-release-notes", "anthropic", "claude-sonnet-4", 3.00, 15.00, 1),
-    ("demo-incident-summarizer", "anthropic", "claude-opus-4", 15.00, 75.00, 1),
-    ("demo-fast-classifier", "groq", "llama-3.1-8b-instant", 0.05, 0.08, 3),
-    ("demo-chatops-bot", "groq", "llama-3.3-70b-versatile", 0.59, 0.79, 2),
-    ("demo-cost-optimizer", "deepseek", "deepseek-chat", 0.14, 0.28, 1),
-    ("demo-deep-reasoner", "deepseek", "deepseek-reasoner", 0.55, 2.19, 1),
+    (
+        "demo-onboarding-guide",
+        "anthropic",
+        "claude-haiku-4",
+        0.80,
+        4.00,
+        2,
+    ),
+    (
+        "demo-release-notes",
+        "anthropic",
+        "claude-sonnet-4",
+        3.00,
+        15.00,
+        1,
+    ),
+    (
+        "demo-incident-summarizer",
+        "anthropic",
+        "claude-opus-4",
+        15.00,
+        75.00,
+        1,
+    ),
+    (
+        "demo-fast-classifier",
+        "groq",
+        "llama-3.1-8b-instant",
+        0.05,
+        0.08,
+        3,
+    ),
+    (
+        "demo-chatops-bot",
+        "groq",
+        "llama-3.3-70b-versatile",
+        0.59,
+        0.79,
+        2,
+    ),
+    (
+        "demo-cost-optimizer",
+        "deepseek",
+        "deepseek-chat",
+        0.14,
+        0.28,
+        1,
+    ),
+    (
+        "demo-deep-reasoner",
+        "deepseek",
+        "deepseek-reasoner",
+        0.55,
+        2.19,
+        1,
+    ),
     ("demo-log-triage", "openai", "gpt-3.5-turbo", 0.50, 1.50, 2),
-    ("demo-migration-planner", "openai", "o1-mini", 3.00, 12.00, 1),
-    ("demo-forecast-analyst", "google", "gemini-1.5-pro", 1.25, 5.00, 1),
+    (
+        "demo-migration-planner",
+        "openai",
+        "o1-mini",
+        3.00,
+        12.00,
+        1,
+    ),
+    (
+        "demo-forecast-analyst",
+        "google",
+        "gemini-1.5-pro",
+        1.25,
+        5.00,
+        1,
+    ),
 ];
 
 #[tokio::main]
@@ -77,9 +203,11 @@ async fn main() -> anyhow::Result<()> {
     )
     .fetch_optional(&db)
     .await?
-    .ok_or_else(|| anyhow::anyhow!(
-        "no superuser found — create at least one user before seeding demo FinOps data"
-    ))?;
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "no superuser found — create at least one user before seeding demo FinOps data"
+        )
+    })?;
 
     println!("Seeding synthetic FinOps/usage data for user {user_id}...");
 
