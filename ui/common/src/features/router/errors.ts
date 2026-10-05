@@ -20,8 +20,27 @@ type Rule = {
   view: (msg: string) => ErrorView
 }
 
-// R-L1..R-L9: these match the server's text; error codes would make them robust. Budget errors: budgets/errors.ts.
+// R-L1..R-L10: these match the server's text; error codes would make them robust.
 const RULES: Rule[] = [
+  { status: 409, match: /budget changed elsewhere/, view: () => ({ problem: copy.budgetChanged }) },
+  {
+    status: 409,
+    match: /budget already exists/,
+    view: () => ({
+      problem: 'This scope already has a budget.',
+      action: 'Edit that budget instead.',
+    }),
+  },
+  {
+    status: 400,
+    match: /limit_usd/,
+    view: () => ({ problem: copy.limitPositive, field: 'limit' }),
+  },
+  {
+    status: 400,
+    match: /thresholds must/,
+    view: () => ({ problem: copy.thresholdRange, field: 'thresholds' }),
+  },
   {
     status: 409,
     match: /already exists/,

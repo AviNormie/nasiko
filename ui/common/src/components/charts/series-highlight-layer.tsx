@@ -1,3 +1,5 @@
+'use client'
+
 import type { RefObject } from 'react'
 import { useChartStable } from './chart-context'
 import { HighlightSegment } from './highlight-segment'

@@ -41,7 +41,7 @@ describe('applyNav', () => {
       ],
     }
     const urls = applyNav(NAV_ITEMS, [layer]).map((i) => i.to)
-    expect(urls.slice(0, 4)).toEqual(['/', '/agents', '/users', '/workflows'])
+    expect(urls.slice(0, 4)).toEqual(['/', '/chat', '/agents', '/users'])
     expect(urls).not.toContain('/builds')
     expect(urls.at(-1)).toBe('/custom-views')
     expect(applyNav(NAV_ITEMS, [])).toEqual(NAV_ITEMS)

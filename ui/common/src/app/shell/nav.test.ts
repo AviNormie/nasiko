@@ -5,10 +5,9 @@ import { activeItem, backIndex, NAV_GROUPS, NAV_ITEMS } from './nav'
 
 /** The header nav before the sidebar (src/routes/__root.tsx at v0.7.1.0), minus Status (now the footer row) and Weave (EE only). */
 const OLD_NAV = [
-  // TokenOps became its own section; the page is its Monitor item.
-  { to: '/tokenops', label: 'Monitor', shared: true },
+  { to: '/tokenops', label: 'TokenOps', shared: true },
   { to: '/sessions', label: 'Sessions', shared: true },
-  { to: '/harnesses', label: 'Coding harnesses', shared: true },
+  { to: '/harnesses', label: 'Harnesses', shared: true },
   { to: '/agents', label: 'Agents', shared: false },
   { to: '/chat', label: 'Chat', shared: false },
 ]
@@ -17,19 +16,14 @@ describe('nav items', () => {
   it('keeps every old destination, label and shared flag (eng D5)', () => {
     const now = NAV_ITEMS.map(({ to, label, shared }) => ({ to, label, shared }))
     for (const old of OLD_NAV) expect(now).toContainEqual(old)
-    // Added since: Home (plans/feat-overview.md §3, renamed by plans/feat-agent-centric.md PR3), Workflows (plans/feat-workflows.md §1), the LLM router
-    // (plans/feat-llm-router.md §4), MCP servers (plans/feat-mcp.md §1), Flows (plans/feat-flows.md F1) and Optimization
-    // (plans/feat-optimization-page.md P7). Deploy and Builds are Agents' sub-pages. The workspace's Settings is the
-    // Organization group's item; the account's own settings (/account) open from the account menu. Budgets are
-    // Enterprise only (docs/requirements/budgets.md), so the item is an EE nav patch, not a core item.
+    // Added since: the Overview (plans/feat-overview.md §3), Workflows (plans/feat-workflows.md §1), the LLM router
+    // (plans/feat-llm-router.md §4) and MCP servers (plans/feat-mcp.md §1). Deploy and Builds are Agents' sub-pages and
+    // Settings is a footer row (sidebar review 2026-10-01).
     expect(now.filter((n) => !OLD_NAV.some((o) => o.to === n.to))).toEqual([
-      { to: '/', label: 'Home', shared: false },
+      { to: '/', label: 'Overview', shared: false },
       { to: '/workflows', label: 'Workflows', shared: false },
-      { to: '/flows', label: 'Flows', shared: false },
-      { to: '/optimization', label: 'Optimize', shared: true },
       { to: '/router', label: 'LLM router', shared: false },
       { to: '/mcp', label: 'MCP servers', shared: false },
-      { to: '/settings', label: 'Settings', shared: false },
     ])
   })
 
@@ -37,26 +31,20 @@ describe('nav items', () => {
     expect(NAV_GROUPS.map((g) => [g.id, g.label])).toEqual([
       ['work', null],
       ['fleet', 'Fleet'],
-      ['observe', 'Observe'],
-      ['tokenops', 'TokenOps'],
       ['connect', 'Connect'],
-      ['views', 'Views'],
-      ['org', 'Organization'],
+      ['observe', 'Observe'],
       ['lab', 'Lab'],
     ])
     expect(NAV_ITEMS.map((n) => n.label)).toEqual([
-      'Home',
+      'Overview',
+      'Chat',
       'Agents',
       'Workflows',
-      'Chat',
-      'Coding harnesses',
-      'Sessions',
-      'Flows',
-      'Monitor',
-      'Optimize',
       'LLM router',
       'MCP servers',
-      'Settings',
+      'Sessions',
+      'TokenOps',
+      'Harnesses',
     ])
     // Items of one group are contiguous and follow the group order.
     const order = NAV_ITEMS.map((n) => NAV_GROUPS.findIndex((g) => g.id === n.group))
@@ -84,22 +72,21 @@ describe('nav items', () => {
     expect(gen).not.toContain("'/weave'")
   })
 
-  it('marks the item for sub-routes and owned pages, Home only on / itself, and none on Status', () => {
+  it('marks the item for sub-routes and owned pages, Overview only on / itself, and none on Status', () => {
     expect(activeItem('/agents/mine')?.label).toBe('Agents')
     expect(activeItem('/agents/5eed0000-0000-4000-8000-000000000001')?.label).toBe('Agents')
     expect(activeItem('/sessions/abc')?.label).toBe('Sessions')
     expect(activeItem('/chat/abc')?.label).toBe('Chat')
-    expect(activeItem('/tokenops')?.label).toBe('Monitor')
-    expect(activeItem('/')?.label).toBe('Home')
+    expect(activeItem('/tokenops')?.label).toBe('TokenOps')
+    expect(activeItem('/')?.label).toBe('Overview')
     expect(activeItem('/status')).toBeUndefined()
     expect(activeItem('/chatter')).toBeUndefined()
-    // Agents owns Deploy and Builds (its sub-nav); account settings are the account menu's, not a nav item.
+    // Agents owns Deploy and Builds (its sub-nav); Settings is the footer's row, not a nav item.
     expect(activeItem('/deploy')?.label).toBe('Agents')
     expect(activeItem('/builds')?.label).toBe('Agents')
     expect(activeItem('/builds/5eed000b-0000-4000-8000-000000000001')?.label).toBe('Agents')
     expect(activeItem('/buildsx')).toBeUndefined()
-    expect(activeItem('/settings/secrets')?.label).toBe('Settings')
-    expect(activeItem('/account/password')).toBeUndefined()
+    expect(activeItem('/settings/secrets')).toBeUndefined()
   })
 
   it('Back from a panel goes to the newest page outside its module, search and all', () => {

@@ -192,7 +192,7 @@ describe('Crumbs', () => {
   it('collapses the middle on narrow screens and expands on demand', async () => {
     narrow()
     render(<Crumbs items={items} onClearHarness={() => {}} />)
-    const nav = within(screen.getByRole('navigation', { name: 'Levels' }))
+    const nav = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
     expect(nav.queryByText('Eng')).toBeNull()
     await userEvent.click(nav.getByRole('button', { name: 'Show full path' }))
     expect(nav.getByRole('button', { name: 'Eng' })).toBeInTheDocument()
@@ -284,7 +284,7 @@ describe('Trend', () => {
 })
 
 describe('HarnessPanels', () => {
-  const region = () => within(screen.getByRole('region', { name: 'Coding harnesses' }))
+  const region = () => within(screen.getByRole('region', { name: 'Harnesses' }))
 
   it('mostly unpriced reads "unpriced" with "—" ratios; a priced one shows its unpriced count', () => {
     wrap(
@@ -327,7 +327,7 @@ describe('HarnessPanels', () => {
         items={[{ harness: 'claude', totals: T() }]}
       />,
     )
-    const style = screen.getByRole('region', { name: 'Coding harnesses' }).getAttribute('style')!
+    const style = screen.getByRole('region', { name: 'Harnesses' }).getAttribute('style')!
     expect(style).toContain('--lg-cols: 3')
     expect(style).toContain('--xl-cols: 3')
   })

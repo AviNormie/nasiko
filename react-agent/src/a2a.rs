@@ -1,11 +1,22 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Budget for a unary call (`message/send`, agent card fetches). Short by
+/// design: the same client serves discovery, where a long hang is a bug, not
+/// patience. A caller that makes real agent turns sets its own with
+/// [`A2aClient::with_timeout`].
+const DEFAULT_UNARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Budget for a streaming call (`message/stream`). Streams legitimately outlive
+/// unary calls — progress events keep the caller informed while the agent works.
+const DEFAULT_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// A2A JSON-RPC client for calling remote agents via the protocol.
 #[derive(Clone)]
 pub struct A2aClient {
     http: reqwest::Client,
     default_timeout: std::time::Duration,
+    stream_timeout: std::time::Duration,
     request_metadata: Option<serde_json::Value>,
     extra_headers: Vec<(String, String)>,
 }
@@ -125,25 +136,26 @@ impl Default for A2aClient {
 
 impl A2aClient {
     pub fn new() -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            default_timeout: std::time::Duration::from_secs(30),
-            request_metadata: None,
-            extra_headers: Vec::new(),
-        }
+        Self::with_http_client(reqwest::Client::new())
     }
 
     pub fn with_http_client(http: reqwest::Client) -> Self {
         Self {
             http,
-            default_timeout: std::time::Duration::from_secs(30),
+            default_timeout: DEFAULT_UNARY_TIMEOUT,
+            stream_timeout: DEFAULT_STREAM_TIMEOUT,
             request_metadata: None,
             extra_headers: Vec::new(),
         }
     }
 
+    /// Set one budget for both unary and streaming calls. Callers that make
+    /// real agent turns pass the platform's agent-call timeout here, which
+    /// lifts `message/send` off the short discovery default — the fallback path
+    /// taken by agents that reject `message/stream` is a full agent turn too.
     pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.default_timeout = timeout;
+        self.stream_timeout = timeout;
         self
     }
 
@@ -173,13 +185,6 @@ impl A2aClient {
     /// Build the JSON-RPC request body for `message/send`/`message/stream` (or
     /// their proto-named equivalents), injecting `request_metadata` into
     /// `params.metadata`.
-    ///
-    /// `extra_parts` are pre-built `Value`s (file attachments) appended as-is; `extra_text_parts`
-    /// are raw strings this function tags itself, per `dialect` — a caller-supplied part built
-    /// once outside the retry loop would carry whichever dialect happened to be tried first, and
-    /// silently be wrong on the fallback attempt. See `nasiko_agent_proxy::context_part`'s module
-    /// doc for why the tag matters at all: this platform's real agents (a2a-lf-based) reject an
-    /// unexpected `"kind"` field outright.
     fn build_message_body(
         &self,
         dialect: Dialect,
@@ -187,11 +192,9 @@ impl A2aClient {
         message: &str,
         ctx: &str,
         extra_parts: &[serde_json::Value],
-        extra_text_parts: &[String],
     ) -> serde_json::Value {
         let mut parts = vec![dialect.text_part(message)];
         parts.extend(extra_parts.iter().cloned());
-        parts.extend(extra_text_parts.iter().map(|t| dialect.text_part(t)));
 
         let mut body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -231,7 +234,7 @@ impl A2aClient {
         message: &str,
         context_id: Option<&str>,
     ) -> Result<A2aResponse, A2aClientError> {
-        self.send_message_with_headers(endpoint, message, context_id, &[], &[], &[])
+        self.send_message_with_headers(endpoint, message, context_id, &[], &[])
             .await
             .map(|(_, response)| response)
     }
@@ -252,7 +255,6 @@ impl A2aClient {
         context_id: Option<&str>,
         per_call_headers: &[(String, String)],
         extra_parts: &[serde_json::Value],
-        extra_text_parts: &[String],
     ) -> Result<(String, A2aResponse), A2aClientError> {
         let ctx = context_id
             .map(|s| s.to_string())
@@ -274,7 +276,6 @@ impl A2aClient {
                 per_call_headers,
                 Dialect::JsonRpc,
                 extra_parts,
-                extra_text_parts,
             )
             .await
         {
@@ -290,7 +291,6 @@ impl A2aClient {
                     per_call_headers,
                     Dialect::Proto,
                     extra_parts,
-                    extra_text_parts,
                 )
                 .await
             }
@@ -299,7 +299,6 @@ impl A2aClient {
         result.map(|response| (ctx, response))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn send_message_dialect(
         &self,
         endpoint: &str,
@@ -308,10 +307,8 @@ impl A2aClient {
         per_call_headers: &[(String, String)],
         dialect: Dialect,
         extra_parts: &[serde_json::Value],
-        extra_text_parts: &[String],
     ) -> Result<A2aResponse, A2aClientError> {
-        let mut body =
-            self.build_message_body(dialect, false, message, ctx, extra_parts, extra_text_parts);
+        let mut body = self.build_message_body(dialect, false, message, ctx, extra_parts);
 
         if let Some(ref metadata) = self.request_metadata
             && let Some(params) = body.get_mut("params")
@@ -369,7 +366,6 @@ impl A2aClient {
     /// tool result. Agents that answer with plain JSON instead of an event
     /// stream are handled transparently, so callers don't need a capability
     /// check first.
-    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_streaming(
         &self,
         endpoint: &str,
@@ -378,7 +374,6 @@ impl A2aClient {
         progress: Option<tokio::sync::mpsc::Sender<AgentStreamEvent>>,
         per_call_headers: &[(String, String)],
         extra_parts: &[serde_json::Value],
-        extra_text_parts: &[String],
     ) -> Result<SendOutcome, A2aClientError> {
         let ctx = context_id
             .map(|s| s.to_string())
@@ -405,7 +400,6 @@ impl A2aClient {
                 per_call_headers,
                 Dialect::JsonRpc,
                 extra_parts,
-                extra_text_parts,
             )
             .await
         {
@@ -422,7 +416,6 @@ impl A2aClient {
                     per_call_headers,
                     Dialect::Proto,
                     extra_parts,
-                    extra_text_parts,
                 )
                 .await
             }
@@ -440,12 +433,10 @@ impl A2aClient {
         per_call_headers: &[(String, String)],
         dialect: Dialect,
         extra_parts: &[serde_json::Value],
-        extra_text_parts: &[String],
     ) -> Result<SendOutcome, A2aClientError> {
         use futures::StreamExt as _;
 
-        let mut body =
-            self.build_message_body(dialect, true, message, ctx, extra_parts, extra_text_parts);
+        let mut body = self.build_message_body(dialect, true, message, ctx, extra_parts);
 
         if let Some(ref metadata) = self.request_metadata
             && let Some(params) = body.get_mut("params")
@@ -461,9 +452,7 @@ impl A2aClient {
             .header("A2A-Version", nasiko_types::a2a::A2A_VERSION_HEADER_VALUE)
             .header("Accept", "text/event-stream")
             .json(&body)
-            // Streams outlive the non-streaming default: progress events keep
-            // the caller informed, so allow long-running agent work.
-            .timeout(std::time::Duration::from_secs(600));
+            .timeout(self.stream_timeout);
 
         for (key, value) in self.extra_headers.iter().chain(per_call_headers) {
             req = req.header(key, value);
@@ -681,7 +670,7 @@ impl A2aClient {
             .map(|s| s.to_string())
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let mut body = self.build_message_body(Dialect::JsonRpc, true, message, &ctx, &[], &[]);
+        let mut body = self.build_message_body(Dialect::JsonRpc, true, message, &ctx, &[]);
         // On `params.message.metadata`, not `params.metadata` — this method's
         // only real caller (weave_surface.rs) sets `request_metadata` to carry
         // `{skill: "generate-ui", ...}`, and the receiving agent's A2A server
@@ -705,7 +694,7 @@ impl A2aClient {
             .header("A2A-Version", "1.0")
             .header("Accept", "text/event-stream")
             .json(&body)
-            .timeout(std::time::Duration::from_secs(600));
+            .timeout(self.stream_timeout);
         for (key, value) in self.extra_headers.iter().chain(per_call_headers) {
             req = req.header(key, value);
         }
@@ -874,35 +863,35 @@ mod tests {
     #[test]
     fn jsonrpc_dialect_uses_standard_method_role_and_typed_parts() {
         let client = A2aClient::new();
-        let body = client.build_message_body(Dialect::JsonRpc, false, "hi", "ctx-1", &[], &[]);
+        let body = client.build_message_body(Dialect::JsonRpc, false, "hi", "ctx-1", &[]);
         assert_eq!(body["method"], "message/send");
         assert_eq!(body["params"]["message"]["role"], "user");
         assert_eq!(body["params"]["message"]["parts"][0]["kind"], "text");
         assert_eq!(body["params"]["message"]["parts"][0]["text"], "hi");
         assert_eq!(body["params"]["message"]["contextId"], "ctx-1");
 
-        let stream = client.build_message_body(Dialect::JsonRpc, true, "hi", "ctx-1", &[], &[]);
+        let stream = client.build_message_body(Dialect::JsonRpc, true, "hi", "ctx-1", &[]);
         assert_eq!(stream["method"], "message/stream");
     }
 
     #[test]
     fn proto_dialect_uses_grpc_method_role_and_untyped_parts() {
         let client = A2aClient::new();
-        let body = client.build_message_body(Dialect::Proto, false, "hi", "ctx-1", &[], &[]);
+        let body = client.build_message_body(Dialect::Proto, false, "hi", "ctx-1", &[]);
         assert_eq!(body["method"], "SendMessage");
         assert_eq!(body["params"]["message"]["role"], "ROLE_USER");
         // Proto parts carry no `kind` discriminator.
         assert!(body["params"]["message"]["parts"][0].get("kind").is_none());
         assert_eq!(body["params"]["message"]["parts"][0]["text"], "hi");
 
-        let stream = client.build_message_body(Dialect::Proto, true, "hi", "ctx-1", &[], &[]);
+        let stream = client.build_message_body(Dialect::Proto, true, "hi", "ctx-1", &[]);
         assert_eq!(stream["method"], "SendStreamingMessage");
     }
 
     #[test]
     fn request_metadata_is_injected_into_params() {
         let client = A2aClient::new().with_metadata(serde_json::json!({"traceparent": "abc"}));
-        let body = client.build_message_body(Dialect::JsonRpc, false, "hi", "ctx-1", &[], &[]);
+        let body = client.build_message_body(Dialect::JsonRpc, false, "hi", "ctx-1", &[]);
         assert_eq!(body["params"]["metadata"]["traceparent"], "abc");
     }
 
@@ -916,7 +905,6 @@ mod tests {
             "analyze this",
             "ctx-1",
             &[file_part],
-            &[],
         );
         let parts = body["params"]["message"]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2);
@@ -1172,7 +1160,7 @@ mod tests {
 
         let client = A2aClient::new();
         let result = client
-            .send_message_streaming(&server.url(), "hi", Some("sent-ctx"), None, &[], &[], &[])
+            .send_message_streaming(&server.url(), "hi", Some("sent-ctx"), None, &[], &[])
             .await;
 
         mock.assert_async().await;
@@ -1215,7 +1203,7 @@ mod tests {
 
         let client = A2aClient::new();
         let result = client
-            .send_message_streaming(&server.url(), "hi", Some("sent-ctx"), None, &[], &[], &[])
+            .send_message_streaming(&server.url(), "hi", Some("sent-ctx"), None, &[], &[])
             .await;
 
         mock.assert_async().await;

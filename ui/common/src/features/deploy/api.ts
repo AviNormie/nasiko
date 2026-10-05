@@ -43,7 +43,7 @@ import type { BuildsFilter } from './search'
 import { isActive } from './steps'
 import { follow } from './follower'
 
-const buildKeys = {
+export const buildKeys = {
   list: (p: { status?: BuildStatus; q?: string; page: number }) => ['builds', 'list', p] as const,
   active: (status: 'queued' | 'building') => ['builds', 'active', status] as const,
   detail: (id: string) => ['builds', 'detail', id] as const,
@@ -62,7 +62,7 @@ function gated<T>(body: unknown, parse: (b: unknown) => T): Gated<T> {
 const listUrl = (p: { status?: BuildStatus; q?: string; offset: number; limit: number }) =>
   withQuery('/api/builds', { limit: p.limit, offset: p.offset, status: p.status, q: p.q?.trim() })
 
-function buildsListQuery(p: { status?: BuildStatus; q?: string; page: number }) {
+export function buildsListQuery(p: { status?: BuildStatus; q?: string; page: number }) {
   return queryOptions({
     queryKey: buildKeys.list(p),
     queryFn: async ({ signal }) =>
@@ -193,22 +193,15 @@ export function useBuild(id: string, live: boolean) {
   })
 }
 
-/** The key of an agent's build records, shared by every reader so one invalidation reaches them all. */
-export const agentBuildsKey = (agentId: string) => buildKeys.forAgent(agentId)
-
-/** `GET /api/builds/agent/{id}`: the agent's newest 20 build records, or `{available:false}` without deploy rights. */
-export const fetchAgentBuilds = async (agentId: string, signal: AbortSignal) =>
-  gated(
-    await apiFetch<unknown>(`/api/builds/agent/${encodeURIComponent(agentId)}`, { signal }),
-    (b) => buildRecordSchema.array().parse(b),
-  )
-
-/** `GET /api/builds/agent/{id}` (last 20) for an agent's Builds tab and the agent hub's deploy markers. */
-export function useAgentBuilds(agentId: string, enabled = true) {
+/** `GET /api/builds/agent/{id}` (last 20) for an agent's Builds tab. */
+export function useAgentBuilds(agentId: string) {
   return useQuery({
     queryKey: buildKeys.forAgent(agentId),
-    enabled,
-    queryFn: ({ signal }) => fetchAgentBuilds(agentId, signal),
+    queryFn: async ({ signal }) =>
+      gated(
+        await apiFetch<unknown>(`/api/builds/agent/${encodeURIComponent(agentId)}`, { signal }),
+        (b) => buildRecordSchema.array().parse(b),
+      ),
     retry: false,
     // Like the Builds list (§6): refresh while one of them is queued or building and the tab is visible.
     refetchInterval: (q) =>
@@ -229,7 +222,7 @@ async function fetchUpload(id: string, signal: AbortSignal): Promise<UploadStatu
   }
 }
 
-function uploadQuery(id: string) {
+export function uploadQuery(id: string) {
   return queryOptions({
     queryKey: buildKeys.upload(id),
     queryFn: ({ signal }) => fetchUpload(id, signal),

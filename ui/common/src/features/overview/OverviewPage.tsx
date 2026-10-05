@@ -7,100 +7,50 @@
  * windows and the cards refresh together (design review 8A). Pending requests aren't refetched here: they already
  * refetch on focus (eng review correction).
  * The grids follow the page area's width, not the viewport, because the sidebar changes it (design review 1A). The summary
- * is a bento: the headline in a lead card beside the KPI tiles (2×2) from 1100 px of content, stacked below (tiles 2
- * across from 560 px). Below it, from 1100 px, twelve columns: Needs you and Spend each span the row, then Fleet health
- * beside Recent sessions and Recent chats beside Quick actions; 2 columns from 700 px, 1 below. DOM order stays the priority order (Needs you first); wide layouts place cards
- * explicitly, so nothing leaves a hole.
- *
- * Restored at `/` on 2026-10-17 in place of the agent-centric Home (its table, scope switch and chart band are gone),
- * with Home's Budget burn panel (the `budgets.useHomePanel` slot, EE only) spanning the row under Needs you. The panel
- * reads the persona's default scope (`homeScopeFor`: Fleet for leads and finance, Yours otherwise), since the Overview
- * has no scope switch; the first paint waits for it, so it never pushes the cards down mid-look.
- *
- * OSS only: the header's view switch swaps the summary bento for the estate's canvas (plans/feat-village-overview.md,
- * ported from nasiko-ui-lab feat/product-shell); the cards under it stay either way. `?view=village` draws the village
- * and `?view=map` the Map's board (`fleet/`), with the same HUD and insight drawer. A bare `/` opens the viewer's last
- * pick (`homeViewKey`), else the summary; a `?sel=` without a view opens the village. The estate is read only while the
- * canvas shows. Admins pick Org or Mine (`?scope=`) beside the range on the canvas; the filters bar shows only while a
- * filter is set. Other editions get the summary alone, whatever the URL says.
+ * card holds the headline and the KPI tiles: side by side from 1100 px of content (tiles 2×2), stacked below (tiles 2
+ * across from 560 px). Below it, from 1100 px, four columns: Spend then Recent
+ * sessions on the left three, Needs you, Budgets and Quick actions down the right, then Recent chats beside Fleet health;
+ * 2 columns from 700 px, 1 below. DOM order stays the priority order (Needs you first); wide layouts place cards
+ * explicitly, so nothing leaves a hole with or without budgets.
  */
-import { useEdition, useSlots } from '@/app/edition-context'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { RotateCw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { toast } from 'sonner'
-import { TourButton } from '@/app/shell/TopBar'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
-import { Reveal, RevealItem } from '@/components/shared/reveal'
 import { StateCard } from '@/components/shared/state-card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { useChatSessions } from '@/features/chat/api'
 import { overviewNarrative } from '@/features/narrative/overview'
-import { usePersona } from '@/features/onboarding/api'
-import { homeScopeFor } from '@/features/onboarding/logic'
 import { meQuery, type Me } from '@/lib/api/auth'
-import { DRAFT_PREFIX } from '@/lib/draftKeys'
-import { isEndpointAbsent } from '@/lib/api/detect'
 import { useReturnTick } from '@/lib/useReturnTick'
-import {
-  useFleetHealth,
-  useHarnessSummary,
-  useNeedsYou,
-  useOverviewSavings,
-  useSavedByAgent,
-  useSpend,
-} from './api'
-import { FirstRunHero, FirstRunPreview } from './components/FirstRun'
+// import { fmtMonthYear } from '@/lib/format' // Budgets hidden: used only by the Budgets card.
+// import { useBudgetCard, useFleetHealth, useHarnessSummary, useNeedsYou, useSpend } from './api'
+import { useFleetHealth, useHarnessSummary, useNeedsYou, useOverviewSavings, useSpend } from './api'
+// Budgets hidden: no server support for /api/budgets yet (R-L10). Restore when it lands.
+// import { Budget } from './components/Budget'
+import { FirstRun, FirstRunLead, FirstRunPreview } from './components/FirstRun'
 import { FleetHealth } from './components/FleetHealth'
+import { Harnesses, HarnessesLine } from './components/Harnesses'
+import { Headline } from './components/Headline'
+import { AgentsTile, RunsTile, SpendTile } from './components/Kpis'
+import { Savings } from './components/Savings'
+import { MonthBar } from './components/MonthBar'
 import { NeedsYou } from './components/NeedsYou'
-import { usePausedFlows } from '@/features/flows/paused'
 import { QuickActions } from './components/QuickActions'
 import { RecentChats } from './components/RecentChats'
 import { RecentSessions } from './components/RecentSessions'
-import { SavedByAgent } from './components/SavedByAgent'
 import { SetupGuide } from './components/SetupGuide'
-import { SetUpNow } from './components/SetUpNow'
-import { SummaryCard } from './components/SummaryCard'
 import { Spend } from './components/Spend'
-import { FilterBar } from './components/FilterBar'
 import { copy } from './copy'
-import { useEstate, useProblemAction } from './estate/api'
-import { estateCopy } from './estate/copy'
-import type { ProblemPatch } from './estate/types'
-import { useEstateView } from './estate/useEstateView'
-import { formatSel, parseSel, type Selection } from './map/selection'
-import type { ProblemActions } from './panel/ProblemCard'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES, type OverviewSearch } from './search'
 import { RETURN_REFRESH_MS } from './tuning'
-import type { VillageView } from './village/Hud'
-import { VillageCanvas, VillageLoading } from './village'
-import { loadVillage } from './village/load'
 
 type SetSearch = (patch: Partial<OverviewSearch>) => void
-type HomeView = 'overview' | VillageView
-const HOME_VIEWS: readonly HomeView[] = ['overview', 'village', 'map']
-
-/** The view a bare `/` opens, per viewer, under the drafts prefix (sign-out clears it, as chat's rail view). */
-const homeViewKey = (sub: string) => `${DRAFT_PREFIX}${sub}:meta:homeView`
-function readHomeView(sub: string): HomeView {
-  try {
-    const v = globalThis.localStorage?.getItem(homeViewKey(sub))
-    return HOME_VIEWS.find((x) => x === v) ?? 'overview'
-  } catch {
-    return 'overview'
-  }
-}
-/** Written when the viewer picks a view; arriving with `?view=` alone doesn't. */
-function rememberHomeView(sub: string, view: HomeView) {
-  try {
-    globalThis.localStorage?.setItem(homeViewKey(sub), view)
-  } catch {
-    // Blocked storage: a bare `/` opens the cards.
-  }
-}
 
 function Frame({
   description,
@@ -123,66 +73,15 @@ function HeaderActions({
   search,
   setSearch,
   setup,
-  admin,
-  view,
-  onView,
 }: {
   search: OverviewSearch
   setSearch: SetSearch
   /** False on first run: the Setup guide (or deploy) card is on the page already. */
   setup: boolean
-  /** Admins choose Org or Mine for the canvas; members only ever see their own. */
-  admin: boolean
-  view: HomeView
-  /** Null where the canvas isn't offered (any edition but OSS): no view switch. */
-  onView: ((v: HomeView) => void) | null
 }) {
   return (
     <>
-      {onView ? (
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={view}
-          onValueChange={(v) => v && onView(v as HomeView)}
-          aria-label={copy.views.label}
-        >
-          {HOME_VIEWS.map((v) => (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="px-3 text-xs pointer-coarse:min-h-11"
-              // Intent to open the canvas starts its download, so the switch feels instant.
-              onPointerEnter={v === 'overview' ? undefined : () => void loadVillage()}
-              onFocus={v === 'overview' ? undefined : () => void loadVillage()}
-            >
-              {copy.views[v]}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      ) : null}
-      {admin && view !== 'overview' ? (
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={search.scope ?? 'org'}
-          onValueChange={(s) =>
-            s && setSearch({ scope: s === 'org' ? undefined : 'mine', sel: undefined })
-          }
-          aria-label={estateCopy.scope.label}
-        >
-          <ToggleGroupItem value="mine" className="px-3 text-xs pointer-coarse:min-h-11">
-            {estateCopy.scope.mine}
-          </ToggleGroupItem>
-          <ToggleGroupItem value="org" className="px-3 text-xs pointer-coarse:min-h-11">
-            {estateCopy.scope.org}
-          </ToggleGroupItem>
-        </ToggleGroup>
-      ) : null}
       <ToggleGroup
-        data-tour="overview-range"
         type="single"
         variant="outline"
         size="sm"
@@ -205,29 +104,49 @@ function HeaderActions({
         ))}
       </ToggleGroup>
       {setup ? <SetupGuide /> : null}
-      {/* No top bar here on desktop (phones keep it, with its own button). */}
-      <TourButton className="max-md:hidden" />
     </>
   )
 }
 
-/** Where each card sits: twelve columns from 1100 px, 2 from 700. Literal class names, so Tailwind sees them. */
-// Redesign 2026-10-13: Needs you, Budget burn and Spend span the row; then Fleet health beside Recent sessions and
-// Recent chats beside Quick actions, alternating widths. Heights match within a row, so no card stretches far past
-// its content.
-// Redesign 2026-10-19: Needs you (8) beside Fleet health (4), both "what's wrong"; Needs you at that width draws one
-// row per item (its tiles start at 900 px of card). Budget burn and Spend span the row; then Recent sessions (7) beside
-// Saved tokens by agent (5), and Recent chats (7) beside Quick actions (5): pairs of about the same height, so neither
-// card in a row is left half empty.
+/** A first-run row that spans the grid at every width. */
+const FULL_ROW = '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3'
+
+/**
+ * Where each card sits from 1100 px (4 columns) and from 700 px (2), with and without budgets. Literal class names, so
+ * Tailwind sees them.
+ */
 const PLACE = {
-  needs: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-8',
-  health: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-4',
-  burn: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-12',
-  spend: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-12',
-  sessions: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-7',
-  saved: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-5',
-  chats: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-7',
-  actions: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-5',
+  budgets: {
+    needs:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-1 @[1100px]/overview:col-start-4 @[1100px]/overview:row-start-1',
+    spend:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-1 @[1100px]/overview:row-span-2',
+    budget: '@[1100px]/overview:col-start-4 @[1100px]/overview:row-start-2',
+    health:
+      '@[1100px]/overview:col-span-2 @[1100px]/overview:col-start-3 @[1100px]/overview:row-start-4',
+    sessions:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-3',
+    chats:
+      '@[1100px]/overview:col-span-2 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-4',
+    actions: '@[1100px]/overview:col-start-4 @[1100px]/overview:row-start-3',
+  },
+  // Quick actions takes the budget's place beside Spend, and Recent sessions spans the row.
+  none: {
+    needs:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-1 @[1100px]/overview:col-start-4 @[1100px]/overview:row-start-1',
+    spend:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-1 @[1100px]/overview:row-span-2',
+    budget: '',
+    health:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-start-3 @[1100px]/overview:row-start-4',
+    sessions:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-4 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-3',
+    chats:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-4',
+    // Full width at 2 columns, so it doesn't sit alone at half width on the last row.
+    actions:
+      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-1 @[1100px]/overview:col-start-4 @[1100px]/overview:row-start-2',
+  },
 } as const
 
 export function OverviewPage({
@@ -292,11 +211,8 @@ function Overview({
     void qc.invalidateQueries({ queryKey: ['agents'], exact: true })
     void qc.invalidateQueries({ queryKey: ['agents', 'deployment'] })
     void qc.invalidateQueries({ queryKey: ['router', 'budgets'] })
-    // The Budget burn panel's burn and At risk, and Needs you's budget rows (Home's rule, Codex 2).
-    void qc.invalidateQueries({ queryKey: ['budgets', 'v1'] })
     // The month calendar is keyed by month, not window: refresh it too, as TokenOps does (/ship review).
     void qc.invalidateQueries({ queryKey: ['tokenops', 'calendar'] })
-    void qc.invalidateQueries({ queryKey: ['overview', 'estate'] })
   }, [returnTick, qc])
 
   const fleet = useFleetHealth(now)
@@ -306,23 +222,15 @@ function Overview({
   const firstRun = !!fleet.summary && fleet.agentCount === 0
   const spend = useSpend(now, range, ready)
   const savings = useOverviewSavings(now, range, ready)
-  const savedByAgent = useSavedByAgent(now, range, fleet, ready && !firstRun)
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const harnesses = useHarnessSummary(now, me, range)
   // The Recent chats card's own query (same key): first paint waits for it too.
   const chats = useChatSessions()
-  // Budget burn (EE): the persona's default scope; null until the persona settles (it settles on a failure too).
-  const persona = usePersona()
-  const slots = useSlots()
-  const burn = slots.budgets.useHomePanel({
-    scope: persona.settled ? homeScopeFor(persona.persona, me.is_superuser) : null,
-    meSub: me.sub,
-    isSuperuser: me.is_superuser,
-    unitLabel: null,
-  })
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore when it lands.
+  // const budget = useBudgetCard(fleet, ready)
+  // const budgets = !budget.absent
+  const budgets = false
   const { needs } = needsYou
-  // Read only when there are requests to link (plans/feat-flows.md O2, amended 2026-10-06).
-  const pausedFlows = usePausedFlows(needs.rows.some((r) => r.kind === 'request'))
   const narrative = useMemo(
     () =>
       overviewNarrative({
@@ -336,103 +244,10 @@ function Overview({
     [spend.summary, spend.unpriced, needs],
   )
 
-  // The village and the map are OSS only. `list` was the village's List view; its list is the Map's System card now, so
-  // an old link opens the Map.
-  const offersCanvas = useEdition() === 'oss'
-  const [remembered, setRemembered] = useState(() => readHomeView(me.sub))
-  const view: HomeView = !offersCanvas
-    ? 'overview'
-    : search.view === 'list'
-      ? 'map'
-      : (search.view ?? (search.sel ? 'village' : remembered))
-  const canvas = view !== 'overview'
-  // The canvas's chunk downloads alongside the estate, not after it.
-  useEffect(() => {
-    if (canvas) void loadVillage()
-  }, [canvas])
-  const pickView = (v: HomeView) => {
-    rememberHomeView(me.sub, v)
-    setRemembered(v)
-    // The summary is the bare `/`; leaving the canvas drops its selection with it.
-    setSearch(v === 'overview' ? { view: undefined, sel: undefined } : { view: v })
-  }
-
-  // The canvas's estate: the server's (OV-1), or one built from the fleet when the endpoint is absent. Read only while
-  // the canvas shows, so the summary never waits for it.
-  const admin = me.is_superuser
-  const estateQ = useEstate(range, !firstRun && canvas)
-  const absent = estateQ.data === null || (estateQ.isError && isEndpointAbsent(estateQ.error))
-  const v = useEstateView({
-    estate: estateQ.data,
-    absent,
-    fleet,
-    me,
-    search,
-    admin,
-    waiting: needsYou.waiting,
-    now: now.getTime(),
-  })
-  // Selections made in the panel, so Back walks them.
-  const [trail, setTrail] = useState<string[]>([])
-  const select = useCallback(
-    (s: Selection) => {
-      const next = formatSel(s)
-      if (search.sel && search.sel !== next) setTrail((t) => [...t.slice(-20), search.sel ?? ''])
-      setSearch({ sel: next })
-    },
-    [search.sel, setSearch],
-  )
-  const clear = useCallback(() => {
-    setTrail([])
-    setSearch({ sel: undefined })
-  }, [setSearch])
-  const back = trail.length
-    ? () => {
-        const prev = trail[trail.length - 1]
-        setTrail((t) => t.slice(0, -1))
-        setSearch({ sel: prev || undefined })
-      }
-    : null
-  // OV-2: optimistic, with Undo in the toast.
-  const act = useProblemAction()
-  const problemActions: ProblemActions = {
-    enabled: !!estateQ.data && !v?.fallback,
-    me: me.sub,
-    patch: (id, patch: ProblemPatch, undo, message) =>
-      act.mutate(
-        { id, patch },
-        {
-          onSuccess: () => {
-            if (!message) return
-            toast(
-              message,
-              undo
-                ? {
-                    action: {
-                      label: estateCopy.card.toast.undo,
-                      onClick: () => act.mutate({ id, patch: undo }),
-                    },
-                  }
-                : undefined,
-            )
-          },
-          onError: () => toast.error(estateCopy.card.toast.failed),
-        },
-      ),
-    showChain: (id) => select({ type: 'chain', id }),
-  }
-
+  const grid =
+    'grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-3'
   const description = copy.greeting(now.getHours(), me.username, days)
-  const actions = (
-    <HeaderActions
-      search={search}
-      setSearch={setSearch}
-      setup={!firstRun}
-      admin={admin}
-      view={view}
-      onView={offersCanvas ? pickView : null}
-    />
-  )
+  const actions = <HeaderActions search={search} setSearch={setSearch} setup={!firstRun} />
   // One page loader until the first paint's reads settle (data or error: a failed read renders its card's error), in
   // place of every card's skeleton. Latched: a later range change or return tick keeps the cards' own loading states.
   // Needs you's rating and session checks aren't waited for: its card shows them loading (a fan-out can be slow).
@@ -442,9 +257,7 @@ function Overview({
     (!firstRun &&
       (spend.isPending ||
         (!spend.totals && !spend.totalsError) ||
-        needsYou.sessions.recent.isPending ||
-        !persona.settled ||
-        burn.pending ||
+        needsYou.sessions.list.isPending ||
         chats.isPending))
   const [painted, setPainted] = useState(false)
   if (!painted && !coldPending) setPainted(true)
@@ -456,119 +269,73 @@ function Overview({
     )
   }
   if (firstRun) {
-    // A spending limit can be set before anything runs: the budgets layer's strip (EE; OSS has no budgets).
-    const { FirstRunStrip } = slots.budgets
-    // Nothing has run, so no range to pick and no window in the greeting; the tour button stays.
     return (
-      <Frame
-        description={copy.firstRun.greeting(now.getHours(), me.username)}
-        actions={<TourButton className="max-md:hidden" />}
-      >
-        <Reveal className="flex flex-col gap-3">
-          <RevealItem>
-            <FirstRunHero />
-          </RevealItem>
-          {FirstRunStrip ? (
-            <RevealItem>
-              <FirstRunStrip />
-            </RevealItem>
-          ) : null}
-          <RevealItem className="mt-3">
-            <SetUpNow harnesses={harnesses} days={days} />
-          </RevealItem>
-          <RevealItem className="mt-5">
-            <FirstRunPreview />
-          </RevealItem>
-        </Reveal>
+      <Frame description={description} actions={actions}>
+        <FirstRunLead />
+        <div className={grid}>
+          {/* From 1100 px Quick actions and Harnesses' one line stack beside the first-run card, so neither stretches
+              to its height; below that each spans the grid. The preview of later cards sits apart, after a wider gap. */}
+          <FirstRun />
+          <div className="contents @[1100px]/overview:flex @[1100px]/overview:flex-col @[1100px]/overview:gap-3">
+            <QuickActions firstRun className={`${FULL_ROW} @[1100px]/overview:flex-1`} />
+            <HarnessesLine data={harnesses} days={days} className={FULL_ROW} />
+          </div>
+          <FirstRunPreview className={`${FULL_ROW} mt-3`} />
+        </div>
       </Frame>
     )
   }
-  const filtered = !!(search.team || search.owner || search.kind || search.tier)
-  const clearFilters = () =>
-    setSearch({ team: undefined, owner: undefined, kind: undefined, tier: undefined })
-  /** The village's own selections (`place:…`) are raw `sel` values the map's parser doesn't know. */
-  const selectRaw = (raw: string) => {
-    const s = parseSel(raw)
-    if (s) select(s)
-    else setSearch({ sel: raw })
-  }
+  const place = budgets ? PLACE.budgets : PLACE.none
   return (
     <Frame description={description} actions={actions}>
-      {/* The summary, or in its place the canvas (OSS): the cards under it stay either way. */}
-      {!canvas ? (
-        <SummaryCard
-          days={days}
-          narrative={narrative}
-          nothing={needs.empty}
-          spend={spend}
-          savings={savings}
-          harnesses={harnesses}
-        />
-      ) : v ? (
-        <div className="flex flex-col gap-3">
-          {filtered ? (
-            <FilterBar v={v} search={search} me={me.sub} onChange={(patch) => setSearch(patch)} />
-          ) : null}
-          <VillageCanvas
-            v={v}
-            sel={search.sel}
-            onSel={(s) => (s ? selectRaw(s) : clear())}
-            view={view === 'map' ? 'map' : 'village'}
-            onView={pickView}
-            panel={{
-              select,
-              back,
-              close: clear,
-              needs: needsYou,
-              actions: problemActions,
-              filtered,
-              clearFilters,
-              now: now.getTime(),
-            }}
-            saved={savings.view?.costSaved ?? null}
-            optimisation={savings.view}
-            spend={spend}
-            now={now.getTime()}
-          />
-        </div>
-      ) : estateQ.isError && !absent ? (
-        <StateCard
-          tone="error"
-          title={estateCopy.error.title}
-          action={
-            <Button size="sm" variant="outline" onClick={() => void estateQ.refetch()}>
-              <RotateCw className="size-3.5" aria-hidden /> {estateCopy.error.retry}
-            </Button>
-          }
-        />
-      ) : (
-        <VillageLoading view={view === 'map' ? 'map' : 'village'} />
-      )}
-      <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-12">
-        <NeedsYou
-          data={needsYou}
-          now={now.getTime()}
-          userId={me.sub}
-          pausedFlows={pausedFlows}
-          className={PLACE.needs}
-        />
-        <FleetHealth fleet={fleet} className={PLACE.health} />
-        {burn.node ? <div className={PLACE.burn}>{burn.node}</div> : null}
-        <Spend spend={spend} now={now.getTime()} className={PLACE.spend} />
+      {/* The summary as one card like TokenOps' SummaryHero: the headline on the left, the KPI tiles 2×2 on the right. */}
+      <Card
+        asChild
+        className="gap-0 overflow-hidden p-0 @[1100px]/overview:grid @[1100px]/overview:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"
+      >
+        <section aria-labelledby="overview-summary-title">
+          <h2 id="overview-summary-title" className="sr-only">
+            {copy.summary}
+          </h2>
+          <div className="flex flex-col justify-center gap-4 p-5">
+            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary-text">
+              {copy.range.item(days)}
+            </Badge>
+            <Headline narrative={narrative} nothing={needs.empty} />
+            <MonthBar spend={spend} />
+            <Savings view={savings.view} isPending={savings.isPending} />
+          </div>
+          {/* The tiles drop their own card chrome here: the hairlines between them are the grid's gap. */}
+          <div className="grid grid-cols-1 gap-px border-t border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-2 @[1100px]/overview:border-t-0 @[1100px]/overview:border-l">
+            <SpendTile spend={spend} />
+            <RunsTile spend={spend} />
+            <AgentsTile fleet={fleet} />
+            <Harnesses data={harnesses} days={days} />
+          </div>
+        </section>
+      </Card>
+      <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-4">
+        <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} className={place.needs} />
+        <Spend spend={spend} now={now.getTime()} className={place.spend} />
+        {/* Budgets hidden: no server support for /api/budgets yet (R-L10). Restore when it lands.
+        {budgets ? (
+          <Budget data={budget} month={fmtMonthYear(now)} className={place.budget} />
+        ) : null}
+        */}
+        <FleetHealth fleet={fleet} className={place.health} />
         <RecentSessions
           sessions={needsYou.sessions}
           displayName={fleet.displayName}
           now={now.getTime()}
-          className={PLACE.sessions}
+          className={place.sessions}
         />
-        <SavedByAgent data={savedByAgent} className={PLACE.saved} />
         <RecentChats
           byId={fleet.byId}
           username={me.username}
           now={now.getTime()}
-          className={PLACE.chats}
+          className={place.chats}
         />
-        <QuickActions className={PLACE.actions} />
+        <QuickActions budgets={budgets} className={place.actions} />
       </div>
     </Frame>
   )

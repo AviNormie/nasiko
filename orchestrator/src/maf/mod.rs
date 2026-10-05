@@ -1,4 +1,5 @@
 // ── MAF (Multi-Agent Flow) orchestrator ──────────────────────────────────────
+pub mod decomposer;
 pub mod executor;
 pub mod llm;
 pub mod planner;
@@ -13,7 +14,7 @@ pub use worker::STREAM_KEY;
 
 use std::sync::Arc;
 
-use nasiko_observability::ObservabilityProvider;
+use nasiko_flow::FlowGuard;
 use sqlx::PgPool;
 
 use llm::LlmClient;
@@ -32,10 +33,12 @@ pub fn start_worker(
     db: PgPool,
     redis: redis::Client,
     http_client: reqwest::Client,
-    observability: Arc<dyn ObservabilityProvider>,
+    // Cascade-limit enforcement for each step's agent call. Received from the
+    // composition root rather than constructed here, so MAF shares the very
+    // same guard instance the A2A dispatch and proxy paths use.
+    flow_guard: Arc<FlowGuard>,
     llm_config: LlmConfig,
     hitl_store: Arc<dyn nasiko_hitl::HitlStore>,
-    outbound: Arc<dyn crate::outbound::OutboundPrefix>,
 ) {
     let llm = LlmClient::new(
         http_client.clone(),
@@ -47,9 +50,8 @@ pub fn start_worker(
         db,
         redis,
         http_client,
-        observability,
+        flow_guard,
         llm,
         hitl_store,
-        outbound,
     ));
 }

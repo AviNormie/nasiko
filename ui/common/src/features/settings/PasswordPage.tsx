@@ -171,7 +171,7 @@ function PasswordForm({ me, onChanged }: { me: Me; onChanged: () => void }) {
   )
 
   return (
-    <form data-tour="password-form" onSubmit={(e) => void submit(e)} noValidate>
+    <form onSubmit={(e) => void submit(e)} noValidate>
       {/* Lets a password manager file the new password under the right account. */}
       <Input type="hidden" autoComplete="username" value={me.username} readOnly />
       <SettingRows

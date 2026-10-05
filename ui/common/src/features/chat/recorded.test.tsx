@@ -315,7 +315,7 @@ describe('a recorded chat (test 12)', () => {
     await userEvent.click(within(third!).getAllByTestId('recorded-chip')[0]!)
     expect(within(third!).getByRole('button', { name: 'Copy full value' })).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: /^Message/ })).toBeNull()
-    expect(screen.getByRole('link', { name: 'View in Coding harnesses →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'View in Harnesses →' })).toHaveAttribute(
       'href',
       '/harnesses',
     )
@@ -327,9 +327,7 @@ describe('a recorded chat (test 12)', () => {
     expect(empty).toHaveTextContent(
       'Only metadata was recorded for this session. Turn on content capture in the harness integration to see messages.',
     )
-    expect(
-      within(empty).getByRole('link', { name: 'View in Coding harnesses →' }),
-    ).toBeInTheDocument()
+    expect(within(empty).getByRole('link', { name: 'View in Harnesses →' })).toBeInTheDocument()
   })
 })
 

@@ -17,7 +17,7 @@ export const copy = {
     skipStep: 'Skip this step',
     getStarted: 'Get started',
     continue: 'Continue',
-    finish: 'Go to Home',
+    finish: 'Go to Overview',
     left: (minutes: number) =>
       minutes
         ? `About ${minutes} min left · skip anytime`
@@ -28,7 +28,7 @@ export const copy = {
     role: { title: 'Your role', sub: 'Tailor the guide' },
     model: { title: 'Connect a model', sub: 'Provider and keys' },
     agent: { title: 'Deploy an agent', sub: 'Zip, GitHub or registry' },
-    optimize: { title: 'Spend less', sub: 'Trim what agents send' },
+    optimise: { title: 'Spend less', sub: 'Trim what agents send' },
     ready: { title: 'Ready', sub: 'Start exploring' },
   } satisfies Record<StepId, { title: string; sub: string }>,
   welcome: {
@@ -121,19 +121,18 @@ export const copy = {
     items: [
       {
         title: 'Smaller prompts',
-        line: 'Trims bulky tool output — logs, JSON, diffs — down to what the model actually needs.',
+        line: 'Trims bulky tool output like logs, JSON and diffs to what the model actually needs.',
         where: 'Agent → Settings → Token optimization',
       },
       {
         title: 'Shorter chat history',
         line: 'Carries a relevant slice of the conversation on each message instead of all of it.',
-        // Chat context moved to the Optimization page (integration 2026-10-05, ledger B11).
-        where: 'Optimization → Your settings (PACMS, Top-K or Last-K)',
+        where: 'Settings → Chat context',
       },
       {
         title: 'Less code written',
         line: 'For coding agents: check for an existing solution before writing new code.',
-        where: 'Agent → Settings → Coding agent behavior → Minimal-code mode',
+        where: 'Agent → Settings → Coding agent behavior',
       },
     ],
     beta: 'All of these are new and still being tuned. Turn one on for a single agent first — every switch is reversible and takes effect on the next message.',
@@ -156,11 +155,11 @@ export const copy = {
     // bill and a much smaller one.
     savings: {
       title: 'Spend less per agent',
-      line: 'Each agent has switches that trim what it sends to the model — bulky tool output, old chat history, long answers. Find them under Agent → Settings → Optimization, and see what they saved on TokenOps.',
+      line: 'Each agent has switches that trim what it sends to the model — bulky tool output, old chat history, long answers. Find them under Agent → Settings → Optimisation, and see what they saved on TokenOps.',
       beta: 'These are new and still being tuned, so try them on one agent first. You can turn any of them off at any time.',
     },
-    home: 'Open Home',
-    homeLine: 'Your agents, their spend and health, and what needs you',
+    overview: 'Open the Overview',
+    overviewLine: 'Spend, sessions and agent health',
     open: (page: string) => `Open ${page}`,
     openLine: 'Your suggested first screen',
   },
@@ -171,6 +170,5 @@ export const copy = {
     resume: 'Resume guide',
     done: 'Done',
     todo: 'Not yet',
-    progress: (done: number, total: number) => `${done} of ${total} done`,
   },
 }

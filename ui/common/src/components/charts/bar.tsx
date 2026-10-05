@@ -1,3 +1,5 @@
+'use client'
+
 import type { scaleBand } from '@visx/scale'
 import type { Transition } from 'motion/react'
 import { motion, useReducedMotion } from 'motion/react'

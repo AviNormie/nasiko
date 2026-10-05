@@ -21,7 +21,7 @@ const traceKeys = {
   span: (traceId: string, hex: string) => ['span', traceId, hex] as const,
 }
 
-export function spanQuery(traceId: string, hex: string) {
+function spanQuery(traceId: string, hex: string) {
   const path = `${OBS}/span/${encodeURIComponent(traceId)}/${encodeURIComponent(hex)}`
   return {
     queryKey: traceKeys.span(traceId, hex),

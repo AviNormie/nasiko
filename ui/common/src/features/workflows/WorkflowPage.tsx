@@ -5,16 +5,13 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { Pencil, Play, RotateCw, Workflow as WorkflowIcon } from 'lucide-react'
+import { ChevronLeft, Pencil, Play, RotateCw, Workflow as WorkflowIcon } from 'lucide-react'
 import { useState } from 'react'
 import { PageLoader } from '@/components/shared/page-loader'
-import { PrevNext } from '@/components/shared/prev-next'
-import { TopBar } from '@/app/shell/TopBar'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Button } from '@/components/ui/button'
 import { isUuid } from '@/features/agents/normalize'
 import { ApiError } from '@/lib/api/client'
-import { useSiblings } from '@/lib/siblings'
 import { dropFromLists, workflowQuery } from './api'
 import { copy, reason } from './copy'
 import { descriptionOf, isDeployed } from './logic'
@@ -32,11 +29,9 @@ export function WorkflowPage({ id, run }: { id: string; run?: string }) {
   return <Detail id={id.toLowerCase()} run={run} />
 }
 
-/** `id`: a workflow stepped to from a list keeps its arrows when it fails to load, so the user can step on. */
-function DeadEnd({ id, title, text }: { id?: string; title: string; text: string }) {
+function DeadEnd({ title, text }: { title: string; text: string }) {
   return (
     <div className={COLUMN}>
-      {id ? <TopBar stepper={<WorkflowSiblings id={id} />} /> : null}
       <EmptyState
         icon={WorkflowIcon}
         title={<h1>{title}</h1>}
@@ -57,11 +52,10 @@ function Detail({ id, run }: { id: string; run?: string }) {
   if (wf.data) return <Loaded key={wf.data.id} wf={wf.data} run={run} />
   if (wf.isError)
     return wf.error instanceof ApiError && (wf.error.status === 404 || wf.error.isForbidden) ? (
-      <DeadEnd id={id} title={copy.notFound} text={copy.notFoundText} />
+      <DeadEnd title={copy.notFound} text={copy.notFoundText} />
     ) : (
       <div className={COLUMN}>
         <h1 className="sr-only">{copy.loadOneFailed}</h1>
-        <TopBar stepper={<WorkflowSiblings id={id} />} />
         <StateCard
           tone="error"
           title={copy.loadOneFailed}
@@ -82,10 +76,9 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const live = isDeployed(wf)
-  // Save & run lands on the Runs tab with the run open, as Run does (`run.ts`). The edits are saved by then, but the
-  // editor's leave guard may not have re-rendered yet.
+  // Save & run lands on the Runs tab with the run open, as Run does (`run.ts`).
   const openRun = (execId: string) =>
-    void navigate({ to: '/workflows/runs', search: { run: execId }, ignoreBlocker: true })
+    void navigate({ to: '/workflows/runs', search: { run: execId } })
   if (run)
     return (
       <RunView
@@ -98,8 +91,6 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
                 to: '/workflows/$workflowId',
                 params: { workflowId: wf.id },
                 search: {},
-                // Keeps the list this workflow was opened from (lib/siblings.ts).
-                state: (s) => ({ siblings: s.siblings }),
                 replace: true,
               })
         }
@@ -107,20 +98,14 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
     )
   return (
     <div className={COLUMN}>
-      <title>{`${wf.name} · Nasiko`}</title>
-      <TopBar
-        trail={
-          live
-            ? [wf.name]
-            : [
-                <Link key="drafts" to="/workflows/drafts">
-                  {copy.crumbDrafts}
-                </Link>,
-                wf.name,
-              ]
-        }
-        stepper={<WorkflowSiblings id={wf.id} />}
-      />
+      <title>{`${wf.name} · OpenRuntime`}</title>
+      <div>
+        <Button asChild variant="ghost" size="sm" className="-ml-2 text-muted-foreground">
+          <Link to={live ? '/workflows' : '/workflows/drafts'}>
+            <ChevronLeft aria-hidden /> {live ? copy.crumbDeployed : copy.crumbDrafts}
+          </Link>
+        </Button>
+      </div>
       {live && !editing ? (
         <ReadOnlyFace wf={wf} onEdit={() => setEditing(true)} />
       ) : (
@@ -130,34 +115,6 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
       )}
       <DangerZone wf={wf} />
     </div>
-  )
-}
-
-/** Previous/Next through the list this workflow was opened from (lib/siblings.ts); nothing on a deep link. */
-function WorkflowSiblings({ id, className }: { id: string; className?: string }) {
-  const navigate = useNavigate()
-  const around = useSiblings(id)
-  if (!around) return null
-  // Replace: Back still returns to the list. A run (`?run=`) never carries over.
-  const go = (workflowId: string | undefined) => {
-    if (workflowId)
-      void navigate({
-        to: '/workflows/$workflowId',
-        params: { workflowId },
-        search: {},
-        state: { siblings: around.siblings },
-        replace: true,
-      })
-  }
-  return (
-    <PrevNext
-      noun="workflow"
-      index={around.index}
-      count={around.count}
-      onPrev={() => go(around.prev)}
-      onNext={() => go(around.next)}
-      className={className}
-    />
   )
 }
 
@@ -188,7 +145,7 @@ function ReadOnlyFace({ wf, onEdit }: { wf: Workflow; onEdit: () => void }) {
           <p className="text-sm text-muted-foreground">{descriptionOf(wf)}</p>
         ) : null}
       </div>
-      <section data-tour="wf-steps" aria-labelledby="steps-title" className="flex flex-col gap-3">
+      <section aria-labelledby="steps-title" className="flex flex-col gap-3">
         <h2 id="steps-title" className="text-base font-medium">
           {copy.stepsTitle}
         </h2>
@@ -209,7 +166,7 @@ function ReadOnlyFace({ wf, onEdit }: { wf: Workflow; onEdit: () => void }) {
         )}
       </section>
       <OutputGuidelines wf={wf} />
-      <div data-tour="wf-run" className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onEdit}>
           <Pencil aria-hidden /> {copy.edit}
         </Button>
@@ -228,7 +185,6 @@ function DangerZone({ wf }: { wf: Workflow }) {
   const live = isDeployed(wf)
   return (
     <section
-      data-tour="wf-danger"
       aria-labelledby="danger-zone"
       className="flex flex-col gap-3 rounded-xl border border-destructive/30 p-4"
     >

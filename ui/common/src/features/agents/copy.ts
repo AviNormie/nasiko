@@ -8,7 +8,6 @@ import { SERVER_TEXT_MAX } from './tuning'
 
 export const copy = {
   catalogTitle: 'Agents',
-  catalogSub: 'Discover, inspect and manage every agent in your workspace',
   mineTitle: 'Your agents',
   // The module's sub-nav (components/bits AgentsNav): Deploy and Builds moved here from the sidebar.
   sections: { label: 'Agents', all: 'All agents', mine: 'Your agents', builds: 'Builds' },
@@ -18,19 +17,14 @@ export const copy = {
   availableToYou: 'Available to you',
   publicChip: 'Public',
   harnessChip: 'Coding harness',
-  harnessesToggle: (n: number) => `Coding harnesses (${n})`,
-  ownerLabel: 'Owner',
-  ownerFilter: 'Filter by owner',
-  anyone: 'Anyone',
-  tagLabel: 'Tag',
-  tagFilter: 'Filter by tag',
-  allTags: 'All',
-  harnessUsage: 'See usage on Coding harnesses',
+  showHarnesses: (n: number) => `Show coding harnesses (${n})`,
+  hideHarnesses: 'Hide coding harnesses',
+  harnessUsage: 'See usage on Harnesses',
   excludesHarnesses: (n: number) => `Excludes ${n} coding harness${n === 1 ? '' : 'es'}`,
   noResults: 'No agents match this search',
   noResultsHint: 'Try another name, tag or skill, or clear the search and filters.',
   clearSearch: 'Clear search',
-  /** The health filter: the home's rating badges link here (overview design 15A; plans/feat-agent-centric.md PR2a). */
+  /** The Overview's Fleet health filter (overview design 15A). */
   healthChip: (rating: string) => `Health: ${rating}`,
   clearHealth: (rating: string) => `Remove the Health: ${rating} filter`,
   healthReason: (reason: string) => `Why: ${reason}`,
@@ -53,7 +47,7 @@ export const copy = {
   deployHint: 'Deploy with',
   needsAttention: 'Needs attention',
   tabAll: 'All',
-  tabHarnesses: 'Coding harnesses',
+  tabHarnesses: 'Harnesses',
   colName: 'Name',
   colStatus: 'Status',
   colVersion: 'Version',
@@ -72,6 +66,7 @@ export const copy = {
   noAgentsInTab: (tab: string) => `No agents in ${tab}`,
   noAgentsInTabHint: 'None of your agents are in this tab right now.',
   showAllAgents: 'Show all your agents',
+  agentsCount: (n: number) => `${n} agent${n === 1 ? '' : 's'}`,
   dismiss: 'Dismiss',
   deletedNotice: (name: string) => `Deleted ${name}.`,
   deletedWithErrors: (name: string, stopped: number) =>
@@ -92,7 +87,6 @@ export const copy = {
   tabMcp: 'MCP',
   tabAccess: 'Access',
   tabSettings: 'Settings',
-  tabDetails: 'Details',
 
   crashTitle: 'This agent crashed',
   crashOss: 'The runtime reports this agent as crashed. Recent error lines:',
@@ -110,9 +104,6 @@ export const copy = {
   noDescription: 'No description.',
   skills: 'Skills',
   noSkills: 'No skills advertised.',
-  showMore: 'Show more',
-  showLess: 'Show less',
-  showAllSkills: (n: number) => `Show all ${n} skills`,
   callThisAgent: 'Call this agent',
   tryIt: 'Try it',
   tryItTitle: (name: string) => `Chat with ${name} in the browser`,
@@ -120,8 +111,6 @@ export const copy = {
   liveCard: 'Live agent card',
   liveCardUnavailable: 'Live card available when running.',
   viewRaw: 'View raw',
-  copyLiveCard: 'Copy the live agent card',
-  copyRaw: 'Copy the raw responses',
   learnMore: 'Learn more',
   version: 'Version',
   ownerLine: (owner: string) => `Owner: ${owner}`,
@@ -142,7 +131,6 @@ export const copy = {
   copyExample: (ex: string) => `Copy example: ${ex}`,
   copyCommand: (cmd: string) => `Copy: ${cmd}`,
 
-  summary: 'Usage and resources',
   stats: 'Last 24 hours',
   turns: 'Turns',
   cost: 'Est. cost',
@@ -152,13 +140,17 @@ export const copy = {
   noResources: 'Resource usage appears when the agent is running.',
   obsOff:
     'Observability is not configured: set OTEL_EXPORTER_OTLP_ENDPOINT, TEMPO_URL and LOKI_URL.',
+  recentSessions: 'Recent sessions',
+  noSessions: (n: number) => `No sessions for this agent in the latest ${n} sessions.`,
+  nameCollision:
+    "Matched by name; may include sessions of another owner's agent, or a deleted one, with the same name.",
   logs: 'Logs',
   noLogs: 'No log lines yet.',
   liveTail: 'Live tail',
   errorsDot: 'Errors in the latest log lines',
   cpu: 'CPU',
   memory: 'Memory',
-  memoryOfLimit: (pct: number) => `Memory: ${pct}% of the limit`,
+  memoryLimit: 'Memory limit',
   level: 'Level',
   allLevels: 'All',
   searchLogs: 'Search logs',
@@ -224,6 +216,10 @@ export const copy = {
   promptCommentsHint:
     'Lets the agent record, prune, and maintain workspace instructions with rationale annotations. Workspaces can opt out with',
   promptCommentsOptOut: '<!-- @prompt-comments disabled -->',
+  tokenOptimization: 'Token optimization',
+  tokenOptimizationIntro:
+    'One switch over the whole stack: shrinks large tool results (JSON, logs and diffs) before they reach the model, trims the reply instruction, and compresses what the Orchestrator keeps between turns. Errors and structure are kept, and a counted note is left wherever something was removed. Turning it off stops every part of it.',
+  tokenOptimizationHint: 'Off by default. Your own messages are never changed.',
   codingBehavior: 'Coding agent behavior',
   minimalCode: 'Minimal-code mode',
   minimalCodeHint:
@@ -232,18 +228,6 @@ export const copy = {
   selfReviewHint:
     'Adds a review turn that catches duplicated or unnecessary code — one extra model call per edit, so it is off until you ask for it. Needs Minimal-code mode. Restart the agent to apply.',
   dangerZone: 'Danger zone',
-  // plans/feat-context-optimization.md eng E1 (D3), E2 (D4): the switch does three things; the label says so. One switch
-  // (TokenOptimization.tsx); main's second copy in the feature flags was folded into it at the integration (2026-10-05).
-  // Named with the program it turns on (plans/feat-optimization-page.md B12).
-  tokenOptimization: 'Token optimization',
-  tokenOptimizationIntro:
-    'One switch over the whole stack: shrinks large tool results (JSON, logs and diffs) before they reach the model, trims the reply instruction, and compresses what the Orchestrator keeps between turns. Errors and structure are kept, and a counted note is left wherever something was removed. Turning it off stops every part of it.',
-  /** The switch's own label, so the section title isn't printed twice (review: design). */
-  tokenOptimizationSwitch: 'On for this agent',
-  tokenOptimizationHint:
-    "Compresses this agent's LLM requests and asks it for concise answers (through the LLM router). History compression also needs it on for all of an owner's agents.",
-  tokenOptimizationHarness: 'For a coding harness this only affects history compression.',
-  tokenOptimizationFailed: (reason: string) => `Couldn't change Token optimization: ${reason}`,
   deleteThisAgent: 'Delete this agent',
   deleteAgent: 'Delete agent',
   deleteTitle: (name: string) => `Delete ${name}?`,

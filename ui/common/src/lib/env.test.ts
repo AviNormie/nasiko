@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { isPreview, MOCKABLE, readEnv } from './env'
+import { MOCKABLE, readEnv } from './env'
 
 describe('env', () => {
   it('waitlist: an http(s) URL gets ref=oss-app (its own query and hash kept); the Nasiko waitlist page by default', () => {
@@ -53,13 +53,7 @@ describe('env', () => {
     warn.mockClear()
     const live = (mock: string) =>
       readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
-    // router brings budgets along (plans/feat-budget-burn.md eng D2).
-    expect(live('router,agents,providers').sort()).toEqual([
-      'agents',
-      'budgets',
-      'providers',
-      'router',
-    ])
+    expect(live('router,agents,providers').sort()).toEqual(['agents', 'providers', 'router'])
     expect(warn).not.toHaveBeenCalled()
     expect(live('router')).toEqual([])
     // providers survives for TokenOps (eng #13); agents survives too.
@@ -69,36 +63,6 @@ describe('env', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('use VITE_NASIKO_MOCK=router,agents,providers'),
     )
-  })
-
-  it('budgets needs agents; router implies budgets, by readEnv and by isPreview (eng D2)', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    warn.mockClear()
-    const live = (mock: string) =>
-      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
-    expect(live('budgets,agents').sort()).toEqual(['agents', 'budgets'])
-    expect(warn).not.toHaveBeenCalled()
-    expect(live('budgets')).toEqual([])
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('use VITE_NASIKO_MOCK=budgets,agents'),
-    )
-    expect(isPreview('budgets', { mode: 'live', partialMocks: ['router'] })).toBe(true)
-    expect(isPreview('budgets', { mode: 'live', partialMocks: ['agents'] })).toBe(false)
-    expect(isPreview('router', { mode: 'live', partialMocks: ['budgets'] })).toBe(false)
-  })
-
-  it('budgets-fill replaces budgets (also when router would add it) and previews budgets', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    warn.mockClear()
-    const live = (mock: string) =>
-      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
-    expect(live('budgets-fill')).toEqual(['budgets-fill'])
-    expect(live('budgets-fill,budgets,agents').sort()).toEqual(['agents', 'budgets-fill'])
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('"budgets-fill" already answers budgets'),
-    )
-    expect(live('router,agents,providers,budgets-fill')).not.toContain('budgets')
-    expect(isPreview('budgets', { mode: 'live', partialMocks: ['budgets-fill'] })).toBe(true)
   })
 
   it('chat is mocked only with agents and observability', () => {
@@ -117,49 +81,5 @@ describe('env', () => {
       readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: 'chat,agents', DEV: true })
         .partialMocks,
     ).not.toContain('chat')
-  })
-  it('the events mock needs the agents mock (its markers sit on seed agents)', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const mocks = (list: string) =>
-      readEnv({
-        VITE_NASIKO_API_MODE: 'live',
-        VITE_NASIKO_MOCK: list,
-        DEV: true,
-      }).partialMocks.sort()
-    expect(mocks('events')).toEqual([])
-    expect(mocks('events,agents')).toEqual(['agents', 'events'])
-  })
-  it('isPreview: full mock mode, or that group partially mocked; never pure live', () => {
-    expect(isPreview('events', { mode: 'mock', partialMocks: [] })).toBe(true)
-    expect(isPreview('events', { mode: 'live', partialMocks: ['events', 'agents'] })).toBe(true)
-    expect(isPreview('events', { mode: 'live', partialMocks: ['agents'] })).toBe(false)
-    expect(isPreview('optimization', { mode: 'live', partialMocks: [] })).toBe(false)
-  })
-  it('the flows mock needs the agents mock (its lanes and links name seed agents)', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(
-      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: 'flows', DEV: true }).partialMocks,
-    ).toEqual([])
-    expect(
-      readEnv({
-        VITE_NASIKO_API_MODE: 'live',
-        VITE_NASIKO_MOCK: 'flows,agents',
-        DEV: true,
-      }).partialMocks.sort(),
-    ).toEqual(['agents', 'flows'])
-  })
-  it('the optimization mock needs the agents mock (its savings describe seed agents)', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(
-      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: 'optimization', DEV: true })
-        .partialMocks,
-    ).toEqual([])
-    expect(
-      readEnv({
-        VITE_NASIKO_API_MODE: 'live',
-        VITE_NASIKO_MOCK: 'optimization,agents',
-        DEV: true,
-      }).partialMocks.sort(),
-    ).toEqual(['agents', 'optimization'])
   })
 })

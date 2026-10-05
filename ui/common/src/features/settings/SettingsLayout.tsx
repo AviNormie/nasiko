@@ -4,15 +4,14 @@
  * rail does: the same nav in a full-height column beside the rail from 1024 px, a sheet opened from above the page
  * below that. The page scrolls in its own column (the shell fills the viewport on /settings, as on /chat). The rows
  * are nasiko-cloud-rs (`origin/development` a4853db4) `ui/oss/navigation.js` `MODULE_NAVS.settings` plus
- * the EE layer's `nav-ext-ee.js`:
- * - Workspace: General, (EE: Orchestrator), Flow limits, Optimization tiers (`/settings/optimization-tiers`), Registry.
- *   `/settings?section=` for the sections of the one form.
- * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`).
- * A layer's rows come from the `settingsSections` slot, placed after the row they name. A member sees Secrets only:
- * the workspace sections are superuser-gated on the API. This is the sidebar's Organization → Settings.
- * With `account`, the same layout holds the account's own settings (the account menu's Settings): Appearance
- * (`/account/appearance`; the lab's, this browser's mode and theme) and Password (`/account/password`; Change
- * password). Optimization moved to /optimization (plans/feat-optimization-page.md P2).
+ * whatever an edition layer appends:
+ * - Workspace: General, (EE: Orchestrator), Flow limits, Registry. `/settings?section=`.
+ * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`), Chat context (`/settings/chat-context`; nasiko-cloud-rs
+ *   `35c749af`, every user's own).
+ * - Account: Appearance (`/settings/appearance`; the lab's, this browser's mode and theme), Password
+ *   (`/settings/password`; Change password).
+ * A layer's rows come from the `settingsSections` slot, placed after the row they name. A member sees Secrets and
+ * Account: the workspace sections are superuser-gated on the API.
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
@@ -22,7 +21,6 @@ import { useSlots } from '@/app/edition-context'
 import type { SettingsSection } from '@/app/edition'
 import { ACTIVE_ROW, ROW } from '@/app/shell/rowStyles'
 import { SidebarPanel } from '@/app/shell/SidebarPanel'
-import { TopBar } from '@/app/shell/TopBar'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import {
@@ -44,10 +42,9 @@ interface Row {
   to:
     | '/settings'
     | '/settings/secrets'
-    | '/settings/optimization-tiers'
-    | '/account/appearance'
-    | '/account/password'
-    | '/account/shortcuts'
+    | '/settings/chat-context'
+    | '/settings/appearance'
+    | '/settings/password'
   section?: string
 }
 
@@ -63,13 +60,7 @@ function withLayer(rows: Row[], layer: readonly SettingsSection[]): Row[] {
   return out
 }
 
-export function SettingsLayout({
-  children,
-  account = false,
-}: {
-  children: ReactNode
-  account?: boolean
-}) {
+export function SettingsLayout({ children }: { children: ReactNode }) {
   const me = useQuery(meQuery)
   // Chat's breakpoint for an inline rail (ChatPage `wide`).
   const wide = useMediaQuery('(min-width: 1024px)')
@@ -78,61 +69,46 @@ export function SettingsLayout({
   const location = useRouterState({ select: (s) => s.location })
   const admin = me.data?.is_superuser === true
   const inGroup = (g: 'workspace' | 'security') => settingsSections.filter((s) => s.group === g)
-  const groups: { key: string; label: string; rows: Row[] }[] = account
-    ? [
-        {
-          key: 'account',
-          label: copy.nav.account,
-          rows: [
-            { key: 'appearance', label: copy.appearance.label, to: '/account/appearance' },
-            { key: 'password', label: copy.password.label, to: '/account/password' },
-            { key: 'shortcuts', label: copy.shortcuts.label, to: '/account/shortcuts' },
-          ],
-        },
-      ]
-    : [
-        ...(admin
-          ? [
-              {
-                key: 'workspace',
-                label: copy.nav.workspace,
-                rows: withLayer(
-                  CORE_SECTIONS.flatMap((k): Row[] => [
-                    {
-                      key: k,
-                      label: copy.sections[k].label,
-                      to: '/settings',
-                      // General is the default: its link carries no section.
-                      section: k === 'general' ? undefined : k,
-                    },
-                    // A sub-page after Flow limits (plans/feat-context-optimization.md F4): its own route and read.
-                    ...(k === 'limits'
-                      ? [
-                          {
-                            key: 'optimization-tiers',
-                            label: copy.optimizationTiers.label,
-                            to: '/settings/optimization-tiers' as const,
-                          },
-                        ]
-                      : []),
-                  ]),
-                  inGroup('workspace'),
-                ),
-              },
-            ]
-          : []),
-        {
-          key: 'security',
-          label: copy.nav.security,
-          rows: [
-            ...withLayer([], admin ? inGroup('security') : []),
-            { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
-          ],
-        },
-      ]
+  const groups: { key: string; label: string; rows: Row[] }[] = [
+    ...(admin
+      ? [
+          {
+            key: 'workspace',
+            label: copy.nav.workspace,
+            rows: withLayer(
+              CORE_SECTIONS.map((k): Row => ({
+                key: k,
+                label: copy.sections[k].label,
+                to: '/settings',
+                // General is the default: its link carries no section.
+                section: k === 'general' ? undefined : k,
+              })),
+              inGroup('workspace'),
+            ),
+          },
+        ]
+      : []),
+    {
+      key: 'security',
+      label: copy.nav.security,
+      rows: [
+        ...withLayer([], admin ? inGroup('security') : []),
+        { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
+        { key: 'chat-context', label: copy.chatContext.label, to: '/settings/chat-context' },
+      ],
+    },
+    {
+      key: 'account',
+      label: copy.nav.account,
+      rows: [
+        { key: 'appearance', label: copy.appearance.label, to: '/settings/appearance' },
+        { key: 'password', label: copy.password.label, to: '/settings/password' },
+      ],
+    },
+  ]
   const known = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)))
   const raw = (location.search as { section?: unknown }).section
-  // A sub-page (Secrets, Tiers, Appearance, Password, Shortcuts) is current by its path; the workspace page by `?section=`.
+  // A sub-page (Secrets, Chat context, Appearance, Password) is current by its path; the workspace page by `?section=`.
   const page = groups
     .flatMap((g) => g.rows)
     .find((r) => r.to === location.pathname && r.to !== '/settings')
@@ -152,58 +128,47 @@ export function SettingsLayout({
       linkProps={linkProps}
       onNavigate={onNavigate}
       framed={framed}
-      title={account ? copy.accountTitle : copy.title}
     />
   )
-  const label = groups.flatMap((g) => g.rows).find((r) => r.key === current)?.label
   return (
-    <>
-      {/* Settings › Secrets; Account settings has no nav item of its own, so it is the first level. */}
-      <TopBar
-        root={account ? <Link to="/account/appearance">{copy.accountTitle}</Link> : undefined}
-        trail={label ? [label] : []}
-      />
-      <SidebarPanel panel={nav()}>
-        {(inSidebar) => (
-          // The page keeps its place in the tree whichever way the sections show, so a collapse never remounts it.
-          <div className="flex h-full min-h-0">
-            {inSidebar ? null : wide ? (
-              <aside className="flex w-60 shrink-0 flex-col border-r border-border">
-                {nav(true)}
-              </aside>
-            ) : (
-              <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-                <SheetContent side="left" className="w-[85vw] max-w-80 p-0">
-                  <SheetTitle className="sr-only">{copy.nav.label}</SheetTitle>
-                  {/* The sheet's close button sits top-right; start the list below it. */}
-                  <div className="flex h-full min-h-0 flex-col pt-4">
-                    {nav(true, () => setSheetOpen(false))}
-                  </div>
-                </SheetContent>
-              </Sheet>
-            )}
-            {/* `relative`: the scroll box is the positioning context, so an absolutely placed child (Radix's hidden form
-              input behind a Switch) scrolls inside it instead of stretching the document and moving the shell. */}
-            <div className="@container relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 @[768px]:pt-6">
-                {inSidebar || wide ? null : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="-ml-2 self-start text-muted-foreground pointer-coarse:min-h-11"
-                    onClick={() => setSheetOpen(true)}
-                  >
-                    <PanelLeft aria-hidden />
-                    {copy.nav.label}
-                  </Button>
-                )}
-                <div className="min-w-0">{children}</div>
-              </div>
+    <SidebarPanel panel={nav()}>
+      {(inSidebar) => (
+        // The page keeps its place in the tree whichever way the sections show, so a collapse never remounts it.
+        <div className="flex h-full min-h-0">
+          {inSidebar ? null : wide ? (
+            <aside className="flex w-60 shrink-0 flex-col border-r border-border">
+              {nav(true)}
+            </aside>
+          ) : (
+            <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+              <SheetContent side="left" className="w-[85vw] max-w-80 p-0">
+                <SheetTitle className="sr-only">{copy.nav.label}</SheetTitle>
+                {/* The sheet's close button sits top-right; start the list below it. */}
+                <div className="flex h-full min-h-0 flex-col pt-4">
+                  {nav(true, () => setSheetOpen(false))}
+                </div>
+              </SheetContent>
+            </Sheet>
+          )}
+          <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 @[768px]:pt-6">
+              {inSidebar || wide ? null : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 self-start text-muted-foreground pointer-coarse:min-h-11"
+                  onClick={() => setSheetOpen(true)}
+                >
+                  <PanelLeft aria-hidden />
+                  {copy.nav.label}
+                </Button>
+              )}
+              <div className="min-w-0">{children}</div>
             </div>
           </div>
-        )}
-      </SidebarPanel>
-    </>
+        </div>
+      )}
+    </SidebarPanel>
   )
 }
 
@@ -218,7 +183,6 @@ interface NavProps {
   }
   /** Closes the sheet after a pick. */
   onNavigate?: () => void
-  title: string
   /** Beside the rail or in the sheet: the title is a 48 px header row, as Chat's rail has (in the sidebar it sits under Back). */
   framed?: boolean
 }
@@ -227,13 +191,9 @@ interface NavProps {
  * The sections: the app nav's own rows and group headers, the same in the sidebar (the drill-in panel), the column
  * beside the collapsed rail and the phone sheet, as Chat's rail is.
  */
-function SectionsNav({ groups, current, linkProps, onNavigate, framed = false, title }: NavProps) {
+function SectionsNav({ groups, current, linkProps, onNavigate, framed = false }: NavProps) {
   return (
-    <nav
-      data-tour="settings-sections"
-      aria-label={copy.nav.label}
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2"
-    >
+    <nav aria-label={copy.nav.label} className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
       <p
         className={cn(
           'flex items-center gap-2 px-5 text-sm font-semibold',
@@ -241,7 +201,7 @@ function SectionsNav({ groups, current, linkProps, onNavigate, framed = false, t
         )}
       >
         <Settings aria-hidden className="size-4 text-muted-foreground" />
-        {title}
+        {copy.title}
       </p>
       {groups.map((g) => (
         <SidebarGroup key={g.key} className="px-3 py-0">

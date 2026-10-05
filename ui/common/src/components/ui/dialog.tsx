@@ -1,7 +1,5 @@
-/**
- * shadcn `dialog`, with local edits to re-apply after any `shadcn add dialog` update:
- * - `DialogContent` takes `overlayClassName` (the onboarding guide blurs the page behind it).
- */
+"use client"
+
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { XIcon } from "lucide-react"
@@ -53,15 +51,13 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
-  overlayClassName,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
-  overlayClassName?: string
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay className={overlayClassName} />
+      <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

@@ -8,8 +8,8 @@ import {
   ArrowRight,
   Check,
   Clock,
-  House,
   Info,
+  LayoutDashboard,
   Play,
   Plug,
   Scissors,
@@ -17,7 +17,6 @@ import {
   Sparkles,
   WandSparkles,
   X,
-  type LucideIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { NAV_ITEMS } from '@/app/shell/nav'
@@ -84,7 +83,6 @@ export function OnboardingDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showCloseButton={false}
-        overlayClassName="backdrop-blur-sm"
         // Start on the step's own action (Get started), not the rail's first button.
         onOpenAutoFocus={(e) => {
           e.preventDefault()
@@ -197,7 +195,7 @@ export function OnboardingDialog({
             {step === 'agent' ? (
               <AgentStep started={agent} onStarted={setAgent} onLeave={onClose} />
             ) : null}
-            {step === 'optimize' ? (
+            {step === 'optimise' ? (
               <OptimiseStep
                 onOpenAgents={() => {
                   onClose()
@@ -255,7 +253,7 @@ export function OnboardingDialog({
             ) : null}
             {/* Informational, so there is nothing to complete: the opt-out is worded as a
                 decision rather than as skipping an unfinished task. */}
-            {step === 'optimize' ? (
+            {step === 'optimise' ? (
               <Button type="button" variant="outline" onClick={next}>
                 {copy.optimise.skip}
               </Button>
@@ -433,9 +431,9 @@ function Ready({
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Choice
-          icon={House}
-          title={copy.ready.home}
-          line={copy.ready.homeLine}
+          icon={LayoutDashboard}
+          title={copy.ready.overview}
+          line={copy.ready.overviewLine}
           onClick={onOverview}
         />
         {opens !== '/' ? (
@@ -457,7 +455,7 @@ function Choice({
   line,
   onClick,
 }: {
-  icon: LucideIcon
+  icon: typeof LayoutDashboard
   title: string
   line: string
   onClick: () => void

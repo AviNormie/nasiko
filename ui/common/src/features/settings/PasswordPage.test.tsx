@@ -37,7 +37,7 @@ async function fill(d: HTMLElement, current: string, next: string, confirm = nex
 describe('Change password (Settings → Account → Password)', () => {
   it("reports the policy's first broken rule on its field before sending", async () => {
     const rec = recordRequests()
-    renderApp('/account/password')
+    renderApp('/settings/password')
     const d = await open()
     expect(within(d).getByText(copy.policy(12, 64))).toBeInTheDocument()
     await fill(d, 'whatever', 'short')
@@ -49,7 +49,7 @@ describe('Change password (Settings → Account → Password)', () => {
   })
 
   it('each field has its own reveal toggle', async () => {
-    renderApp('/account/password')
+    renderApp('/settings/password')
     const d = await open()
     const current = within(d).getByLabelText(copy.current)
     const toggle = within(d).getByRole('button', { name: copy.show(copy.current) })
@@ -62,7 +62,7 @@ describe('Change password (Settings → Account → Password)', () => {
   })
 
   it('changes it, then a wrong current password lands on its field (403, never a sign-out)', async () => {
-    const { router } = renderApp('/account/password')
+    const { router } = renderApp('/settings/password')
     await fill(await open(), 'whatever', STRONG)
     expect(await screen.findByText(copy.changed, {}, T)).toBeInTheDocument()
     // The form remounts after a change: nothing typed before survives.
@@ -71,7 +71,7 @@ describe('Change password (Settings → Account → Password)', () => {
     expect(within(d).getByLabelText(copy.next)).toHaveValue('')
     await fill(d, 'not-it', 'Another-password9')
     expect(await within(d).findByText('Current password is incorrect')).toBeInTheDocument()
-    expect(router.state.location.pathname).toBe('/account/password')
+    expect(router.state.location.pathname).toBe('/settings/password')
   })
 
   it('an SSO account gets the server reason as a toast (409 no_local_password)', async () => {
@@ -86,7 +86,7 @@ describe('Change password (Settings → Account → Password)', () => {
         ),
       ),
     )
-    renderApp('/account/password')
+    renderApp('/settings/password')
     await fill(await open(), 'whatever', STRONG)
     expect(
       await screen.findByText('This account signs in through your identity provider', {}, T),
@@ -100,7 +100,7 @@ describe('Change password (Settings → Account → Password)', () => {
         return new HttpResponse(null, { status: 204 })
       }),
     )
-    const { router } = renderApp('/account/password')
+    const { router } = renderApp('/settings/password')
     await fill(await open(), 'whatever', STRONG)
     await waitFor(() => expect(router.state.location.pathname).toBe('/login'), T)
     expect(router.state.location.search).toMatchObject({ password: 'changed' })

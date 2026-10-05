@@ -19,11 +19,8 @@ import { useEffect, useMemo } from 'react'
 import type { z } from 'zod'
 import { create } from 'zustand'
 import { onCacheReset } from '@/lib/queryClient'
-import { isSignedOutLocally, isSigningOut, signInGeneration } from '@/lib/session'
 import { apiData, apiFetch, ApiError, withQuery } from '@/lib/api/client'
-import { createLimiter } from '@/features/observability/limiter'
-import type { LogLine } from '@/features/observability/types'
-import { isUnauthorized } from '@/lib/api/detect'
+import type { LogLine, SessionListResponse, SessionSummary } from '@/features/observability/types'
 import type { components } from '@/lib/api/schema.gen'
 import {
   grantsBodySchema,
@@ -46,6 +43,8 @@ import {
   LIVE_CARD_STALE_MS,
   LOG_LIMIT,
   POLL_MS,
+  SESSIONS_FALLBACK_MS,
+  SESSIONS_SCAN,
   USER_SEARCH_MAX,
   USER_SEARCH_MIN,
   USERS_LIMIT,
@@ -93,6 +92,7 @@ export const agentKeys = {
   errorLogs: (id: string) => ['agents', 'error-logs', id] as const,
   logs: (id: string, level: string) => ['agents', 'logs', id, level] as const,
   liveCard: (id: string) => ['agents', 'live-card', id] as const,
+  sessions: (name: string, createdAt: string) => ['agents', 'sessions', name, createdAt] as const,
   usage24h: ['agents', 'usage-24h'] as const,
   users: ['agents', 'users'] as const,
   userSearch: (q: string) => ['agents', 'user-search', q] as const,
@@ -293,7 +293,7 @@ export function useAgentStatus(
 }
 
 /** `/deployment`: a row, `{available:false}`, or `null` when there's no live row (404). Shared with the Overview's fleet health. */
-function deploymentQuery(id: string) {
+export function deploymentQuery(id: string) {
   return queryOptions({
     queryKey: agentKeys.deployment(id),
     queryFn: async ({ signal }): Promise<DeploymentRow | Unavailable | null> => {
@@ -489,6 +489,32 @@ export function useLiveCard(id: string, enabled: boolean) {
       apiFetch<unknown>(`/api/agents/${id}/.well-known/agent-card.json`, { signal }),
     enabled,
     staleTime: LIVE_CARD_STALE_MS,
+  })
+}
+
+/**
+ * Recent sessions: the first page of session/list (no agent filter server-side), matched by
+ * the raw agent name and created after the agent was (a deleted namesake's sessions drop).
+ */
+export function useAgentSessions(name: string, createdAt: string, enabled: boolean) {
+  return useQuery({
+    queryKey: agentKeys.sessions(name, createdAt),
+    queryFn: ({ signal }) =>
+      apiFetch<SessionListResponse>(
+        withQuery(`${OBS}/session/list`, {
+          start_time: createdAt || new Date(Date.now() - SESSIONS_FALLBACK_MS).toISOString(),
+          limit: SESSIONS_SCAN,
+          offset: 0,
+        }),
+        { signal },
+      ),
+    enabled: enabled && !!name,
+    select: (r): SessionSummary[] => {
+      const since = createdAt ? Date.parse(createdAt) : 0
+      return (r?.data?.sessions ?? []).filter(
+        (s) => s.agent_id === name && (!s.start_time || Date.parse(s.start_time) >= since),
+      )
+    },
   })
 }
 
@@ -747,114 +773,6 @@ export function useUpdateAgent(id: string) {
       // Pending until the detail is re-read, so a Settings switch never flashes back to its old state.
       return qc.refetchQueries({ queryKey: agentKeys.detail(id) }, { cancelRefetch: false })
     },
-  })
-}
-
-/**
- * The Token optimization switch (plans/feat-context-optimization.md eng E1): `PUT /api/agents/{id}` with only
- * `compress_enabled` (the update is COALESCE per field, catalog/routes.rs `update`).
- */
-export function useSetCompression(id: string, onFailed: (err: Error) => void) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (on: boolean) =>
-      apiFetch<Agent>(`/api/agents/${id}`, { ...json({ compress_enabled: on }), method: 'PUT' }),
-    // Hook-level, so a failure is reported even after the page that flipped it unmounted (the flip was optimistic).
-    onError: onFailed,
-    // The detail and the owned lists (the Optimization page's compression line) are refetched before the switch lets go
-    // of its optimistic value. The directory and catalog follow as after any agent edit (Needs attention's other owners
-    // line reads the directory), and both savings reads (By agent's On/Off, the Mechanisms counts) are re-read.
-    onSettled: () => {
-      invalidateNameLists(qc)
-      void qc.invalidateQueries({ queryKey: ['tokenops', 'savings'] })
-      void qc.invalidateQueries({ queryKey: ['tokenops', 'context-savings'] })
-      return Promise.all([
-        qc.invalidateQueries({ queryKey: agentKeys.detail(id) }),
-        qc.invalidateQueries({ queryKey: ['agents', 'owned'] }),
-        qc.invalidateQueries({ queryKey: ['agents', 'status-page'] }),
-      ])
-    },
-  })
-}
-
-/** Bulk turn-ons in flight; a cache reset (sign-out, another account) stops their queued writes. */
-const bulkBatches = new Set<AbortController>()
-onCacheReset(() => {
-  for (const stop of bulkBatches) stop.abort()
-  bulkBatches.clear()
-})
-
-/** At most this many Token optimization writes in flight for a bulk turn-on (plans/feat-optimization-page.md R2F). */
-const BULK_WRITES = 4
-
-interface TurnOnResult {
-  done: string[]
-  failed: { id: string; error: unknown }[]
-}
-
-/**
- * The Optimization page's bulk turn-on (plans/feat-optimization-page.md R2F, eng C7): `PUT /api/agents/{id}
- * {compress_enabled: true}` for each agent, 4 at a time, as one mutation. Each write settles on its own (a failure is
- * returned, not thrown, so the rest still run); a 401 is rethrown for the app's expiry path. Once per batch it re-reads
- * every agents query (the restart watches are cache-only state and stay) and both savings reads, so the strip, By agent
- * and the Mechanisms counts change together.
- */
-export function useTurnOnCompression() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: async (v: {
-      ids: readonly string[]
-      onProgress?: (settled: number) => void
-    }): Promise<TurnOnResult> => {
-      const run = createLimiter(BULK_WRITES)
-      // A confirmed batch finishes even if the page goes away (each write is one PUT), but never outlives its session:
-      // the first 401, a sign-out (the cache reset) or another sign-in stops the writes not yet started, so a queued PUT
-      // can't run with someone else's cookie (review: adversarial, Codex P1).
-      const stop = new AbortController()
-      const signal = stop.signal
-      const generation = signInGeneration()
-      bulkBatches.add(stop)
-      let settled = 0
-      const out = await Promise.all(
-        v.ids.map((id) =>
-          run(signal, () => {
-            if (isSigningOut() || isSignedOutLocally() || signInGeneration() !== generation) {
-              stop.abort()
-              throw new DOMException('The session changed', 'AbortError')
-            }
-            return apiFetch<Agent>(`/api/agents/${id}`, {
-              ...json({ compress_enabled: true }),
-              method: 'PUT',
-              signal,
-            })
-          })
-            .then(
-              () => ({ id, error: null as unknown }),
-              (error: unknown) => {
-                if (isUnauthorized(error)) stop.abort()
-                return { id, error }
-              },
-            )
-            .finally(() => v.onProgress?.(++settled)),
-        ),
-      )
-      bulkBatches.delete(stop)
-      const expired = out.find((o) => o.error !== null && isUnauthorized(o.error))
-      if (expired) throw expired.error
-      return {
-        done: out.filter((o) => o.error === null).map((o) => o.id),
-        failed: out.filter((o) => o.error !== null),
-      }
-    },
-    onSettled: () =>
-      Promise.all([
-        qc.invalidateQueries({
-          predicate: (q) => q.queryKey[0] === 'agents' && q.queryKey[1] !== 'watch',
-        }),
-        qc.invalidateQueries({ queryKey: ['tokenops', 'context-savings'] }),
-        // The Mechanisms block's agents-on counts (/finops/savings coverage).
-        qc.invalidateQueries({ queryKey: ['tokenops', 'savings'] }),
-      ]),
   })
 }
 

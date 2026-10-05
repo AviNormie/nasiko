@@ -1,3 +1,5 @@
+'use client'
+
 import { scaleLinear, scaleTime } from '@visx/scale'
 import { bisector, extent } from 'd3-array'
 import type { Transition } from 'motion/react'
@@ -47,11 +49,7 @@ import {
 } from './projection-config'
 import { extractReferenceAreaConfigs, type ReferenceAreaConfig } from './reference-area-config'
 import { ReferenceAreaRegistrationContext } from './reference-area-registration-context'
-import {
-  computeSeriesBarEdge,
-  computeSeriesBarRevealClipPadding,
-  computeSeriesBarWidth,
-} from './series-bar-layout'
+import { computeSeriesBarRevealClipPadding, computeSeriesBarWidth } from './series-bar-layout'
 import { useStaticChartPreview } from './static-chart-preview-context'
 import { useAnimatedYDomains } from './use-animated-y-domains'
 import { useChartInteraction } from './use-chart-interaction'
@@ -269,30 +267,6 @@ const TimeSeriesChartCore = memo(function TimeSeriesChartCore({
 
   const projectionConfigs = useMemo(() => extractProjectionLineConfigs(children), [children])
 
-  const barEdge = useMemo(() => {
-    if (xDomain || !composedBarDataKeys?.length) {
-      return undefined
-    }
-    return computeSeriesBarEdge({
-      innerWidth,
-      dataLength: visiblePlotData.length,
-      seriesCount: composedBarDataKeys.length,
-      composedBarSize,
-      composedMaxBarSize,
-      composedBarGap,
-      stacked: composedStacked,
-    })
-  }, [
-    composedBarDataKeys,
-    composedBarGap,
-    composedBarSize,
-    composedMaxBarSize,
-    composedStacked,
-    innerWidth,
-    visiblePlotData.length,
-    xDomain,
-  ])
-
   const xScale = useMemo(() => {
     const minTime = xDomain
       ? xDomain[0].getTime()
@@ -306,12 +280,11 @@ const TimeSeriesChartCore = memo(function TimeSeriesChartCore({
       maxTime = mergeProjectionXDomainMax(maxTime, projectionConfigs)
     }
 
-    const inset = barEdge?.inset ?? 0
     return scaleTime({
-      range: [inset, innerWidth - inset],
+      range: [0, innerWidth],
       domain: [minTime, maxTime],
     })
-  }, [barEdge, innerWidth, plotData, projectionConfigs, xAccessor, xDomain])
+  }, [innerWidth, plotData, projectionConfigs, xAccessor, xDomain])
 
   // When brushing, keep the full series for path rendering so edge fades stay
   // anchored to the viewport while the line pans through them. Y-domain and
@@ -324,16 +297,13 @@ const TimeSeriesChartCore = memo(function TimeSeriesChartCore({
   }, [seriesSourceData, innerWidth, lines])
 
   const columnWidth = useMemo(() => {
-    if (barEdge) {
-      return barEdge.columnWidth
-    }
     const slotCount =
       xDomain && xDomainSlotCount != null ? xDomainSlotCount : visiblePlotData.length
     if (slotCount < 2) {
       return 0
     }
     return innerWidth / (slotCount - 1)
-  }, [barEdge, innerWidth, visiblePlotData.length, xDomain, xDomainSlotCount])
+  }, [innerWidth, visiblePlotData.length, xDomain, xDomainSlotCount])
 
   const yDomainSkeletonByAxis = useMemo(
     () =>

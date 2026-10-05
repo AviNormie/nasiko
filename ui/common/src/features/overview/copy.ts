@@ -5,13 +5,11 @@ import type { Rating, SpikeHit } from './health'
 import type { Severity, SourceId } from './needs'
 
 const pct = (v: number) => `${Math.round(v)}%`
-const hello = (hour: number, name: string) =>
-  `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, ${name}.`
 
 export const copy = {
-  title: 'Home',
+  title: 'Overview',
   loading: 'Loading',
-  loadingPage: 'Loading Home',
+  loadingPage: 'Loading the Overview',
   meFailed: "Couldn't reach OpenRuntime to load your account.",
   checkStatus: 'Check server status',
   retry: 'Retry',
@@ -29,16 +27,7 @@ export const copy = {
     checking: 'Checking your fleet…',
   },
   greeting: (hour: number, name: string, days: number) =>
-    `${hello(hour, name)} Here is your workspace for the last ${days} days.`,
-  /** The header's view switch: the cards, or the estate's canvas in either of its views. */
-  views: {
-    label: 'View',
-    overview: 'Overview',
-    village: 'Village',
-    map: 'Map',
-    loading: (view: 'village' | 'map') =>
-      view === 'map' ? 'Loading the map' : 'Loading the village',
-  },
+    `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, ${name}. Here is your workspace for the last ${days} days.`,
   range: {
     label: 'Range',
     item: (days: number) => `Last ${days} days`,
@@ -47,12 +36,12 @@ export const copy = {
     button: 'Setup guide',
     title: 'Set up OpenRuntime',
     intro:
-      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on Home once it runs.',
+      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on the Overview once it runs.',
   },
   // Overview's token-optimisation band. One figure, one next step, then hand off to TokenOps.
   savings: {
-    eyebrow: 'Token optimization',
-    eyebrowOff: 'Token optimization — not switched on',
+    eyebrow: 'Token optimisation',
+    eyebrowOff: 'Token optimisation — not switched on',
     savedSuffix: 'saved',
     neverSent: (tokens: string) => `${tokens} tokens never sent.`,
     couldSave: (agent: string, spend: string) =>
@@ -63,18 +52,13 @@ export const copy = {
     // Money on the table, not "$0 saved": one is a reason to act, the other reads as a broken feature.
     idleSuffix: 'spent that could be trimmed',
     idleLine:
-      'Your agents re-send tool output and chat history the model does not need. Turning optimization on for one agent shows what it would save.',
+      'Your agents re-send tool output and chat history the model does not need. Turning optimisation on for one agent shows what it would save.',
     idleCta: 'Choose an agent',
   },
   kpi: {
     spend: 'Spend',
     runs: 'Agent runs',
     perDay: (n: string) => `${n} per day`,
-    perRun: (cost: string) => `${cost} per run`,
-    tokens: 'Tokens',
-    tokensInput: (pct: string) => `input ${pct}`,
-    tokensOutput: (pct: string) => `output ${pct}`,
-    running: (n: number, total: number) => `${n} of ${total} running`,
     agents: 'Agents running',
     of: (total: number) => `/ ${total}`,
     agentParts: {
@@ -85,22 +69,10 @@ export const copy = {
     },
     allRunning: 'All running',
     noAgents: 'No agents yet',
-    harnesses: 'Coding harnesses used',
+    harnesses: 'Harnesses used',
     connected: 'connected',
-    est: 'est.',
-    connectedCount: (n: number) => `${n} connected`,
     devs: (n: number) => `${n} developer${n === 1 ? '' : 's'}`,
     yourUsage: 'your usage',
-  },
-  saved: {
-    title: 'Saved tokens by agent',
-    link: 'TokenOps',
-    what: 'savings by agent',
-    subtitle: (basis: string | null) =>
-      basis ? `Largest first · basis: ${basis}` : 'Largest first',
-    capped: 'Agents past the first 200 may have savings too',
-    none: 'No savings reported in this range.',
-    other: (n: number) => `Other (${n})`,
   },
   chats: {
     title: 'Recent chats',
@@ -150,47 +122,21 @@ export const copy = {
     openAgentLabel: (name: string) => `Open ${name}`,
     budgets: 'Budgets',
     budgetsLabel: (name: string) => `Budgets for ${name}`,
-    // An agent budget's row opens the agent's own Budget section (B5).
-    agentBudget: 'Budget',
-    agentBudgetLabel: (name: string) => `Budget for ${name}`,
     anAgent: 'An agent',
     yourBudget: 'Your monthly',
     budget: (label: string, state: 'warning' | 'exceeded', crossed: number | null) =>
       state === 'exceeded'
         ? `${label} budget is over its limit`
         : `${label} budget is at ${crossed ?? 0}%`,
-    // plans/feat-budget-burn.md F8: how much over and whether calls stop; when it reaches its limit ("runs out" only
-    // where calls stop, design 1C).
-    budgetStopped: (label: string) => `${label} budget ran out: calls are stopped`,
-    budgetOverBy: (amount: string, until: string | null) =>
-      until ? `Over by ${amount} · calls stopped until ${until}` : `Over by ${amount} this period`,
-    budgetRunsOut: (label: string, day: string, stops: boolean) =>
-      stops
-        ? `${label} budget runs out around ${day}`
-        : `${label} budget exceeds its limit around ${day}`,
-    budgetProjected: 'Projected from the last 7 days',
-    budgetDetailFor: (
-      period: 'month' | 'quarter' | 'session',
-      covers: 'routed_calls' | 'all_priced',
-    ) =>
-      `${period === 'session' ? 'This session' : `This ${period}`}, ${covers === 'all_priced' ? 'all priced spend' : 'routed calls'}`,
-    aBudget: 'A budget',
-    fleetBudget: 'The fleet',
-    budgetStoppedUntil: (until: string | null) =>
-      until ? `Calls stopped until ${until}` : 'Calls stopped',
-    // An exact count: `session/list?status=failed` counts every match in the
-    // window in SQL. It used to read "N of the M latest sessions checked
-    // failed", because the status of each row was sampled client-side.
-    sessions: (failed: number) =>
-      failed === 1
-        ? '1 session failed in the last 7 days'
-        : `${failed} sessions failed in the last 7 days`,
+    budgetDetail: 'This month, routed calls',
+    sessions: (failed: number, checked: number) =>
+      `${failed} of the ${checked} latest sessions checked failed`,
     seeSessions: 'See sessions',
     unknownAgent: 'Unknown agent',
   },
   harnesses: {
     title: 'Coding harnesses',
-    link: 'Coding harnesses',
+    link: 'Harnesses',
     what: 'harness usage',
     ownOnly: 'Your own usage (this server has no org view).',
     notVisible: 'No harness usage is visible to you.',
@@ -200,7 +146,7 @@ export const copy = {
     connected: (n: number) => `${n} coding harness${n === 1 ? '' : 'es'} connected`,
     lineCost: (cost: string, days: number) =>
       `${cost} est. cost (API list price), last ${days} days`,
-    open: 'Open Coding harnesses',
+    open: 'Open Harnesses',
     unpriced: 'unpriced',
     costNote: (days: number) => `Est. cost (API list price), last ${days} days`,
   },
@@ -215,7 +161,6 @@ export const copy = {
     what: 'recent sessions',
     failed: 'Failed',
     ok: 'Succeeded',
-    running: 'Running',
     unchecked: 'Not checked',
     none: 'No sessions in the last 7 days.',
     traceStore: 'Sessions need the trace store.',
@@ -228,32 +173,16 @@ export const copy = {
     copyDeploy: 'Copy the deploy command',
     adjustBudget: 'Adjust budget',
   },
-  /** The first run's panel of what works before any agent (components/SetUpNow.tsx). */
-  setUpNow: {
-    title: 'Works before your first agent',
-    orchestrator: 'Chat now. Once agents run, it routes each question to the right one.',
-    model: 'Connect a model',
-    models: (n: number) => `${n} model config${n === 1 ? '' : 's'} ready`,
-    noModel: 'No model connected yet',
-    tools: 'Connect an MCP server',
-    serversOn: (n: number) => `${n} tool server${n === 1 ? '' : 's'} connected`,
-    serversOff: (n: number) => `${n} available, none connected yet`,
-    noServers: 'No MCP servers yet',
-    noHarnesses: 'None connected yet',
-    unknown: "Couldn't check. Open the page for details.",
-  },
   firstRun: {
-    greeting: hello,
-    title: 'Get your first agent running',
-    headline:
-      'OpenRuntime hosts it, routes its model calls and records every session. Once it runs, this page shows what it costs, how healthy it is and what needs you.',
+    title: 'Deploy your first agent',
+    link: 'Agents',
+    after: 'Once it is running, cost, health and sessions show up here.',
+    headline: 'Deploy your first agent to see cost, health and sessions here.',
     cli: (n: number) => `Or use the CLI (${n} commands)`,
-    cliTitle: 'Or use the CLI',
   },
   /** The first run's preview of the cards a deploy brings: what each will show, never a number. */
   preview: {
     title: 'After your first deploy',
-    note: 'These fill in once an agent runs.',
     needs: 'Agents that need action, requests waiting for you and failed sessions, worst first.',
     spend:
       "Fleet spend for the range against the previous one, by agent, with this month's forecast.",

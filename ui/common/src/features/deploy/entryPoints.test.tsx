@@ -33,8 +33,7 @@ describe('Deploy an agent entry points', () => {
         const links = await deployLinks()
         expect(links.every((l) => l.getAttribute('href') === '/deploy')).toBe(true)
         const scope = testId ? within(screen.getByTestId(testId)) : screen
-        // The Overview's hero titles the steps without the colon.
-        expect(scope.getByText(/^Or use the CLI/)).toBeInTheDocument()
+        expect(scope.getByText(copy.entry.orCli)).toBeInTheDocument()
         expect(scope.getAllByRole('button', { name: /Copy/ }).length).toBeGreaterThan(0)
         cleanup()
       }
@@ -42,11 +41,14 @@ describe('Deploy an agent entry points', () => {
     },
   )
 
-  it('the home and the Agents headers link to /deploy', async () => {
-    // The home's header carries "Deploy an agent" (the Overview's Quick actions card was retired, PR2a).
+  it('Quick actions and the Agents headers link to /deploy', async () => {
     renderApp('/')
-    const links = await screen.findAllByRole('link', { name: copy.entry.label }, { timeout: 5000 })
-    expect(links.map((l) => l.getAttribute('href'))).toContain('/deploy')
+    expect(
+      within(await screen.findByTestId('overview-actions', {}, { timeout: 5000 })).getByRole(
+        'link',
+        { name: copy.entry.label },
+      ),
+    ).toHaveAttribute('href', '/deploy')
   })
 
   it('a never-deployed agent pre-fills its name', async () => {

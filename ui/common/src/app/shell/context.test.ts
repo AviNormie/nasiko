@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { traceSearchSchema } from '@/features/sessions/search'
-import { openSet, tokenopsSearchSchema } from '@/features/tokenops/search'
+import { openSet, toggleOpen, tokenopsSearchSchema } from '@/features/tokenops/search'
 import { compareOn, pickShared, presenterStep } from './context'
 
 describe('URL contract', () => {
@@ -28,13 +28,14 @@ describe('URL contract', () => {
     expect(traceSearchSchema.parse({ span: 'ABCdef0123' }).span).toBe('ABCdef0123')
 
     expect(tokenopsSearchSchema.parse({ open: 'all' }).open).toBe(
-      'spend,optimize,drivers,perf,month,metrics',
+      'spend,optimise,drivers,perf,month,metrics',
     )
     expect(tokenopsSearchSchema.parse({ open: 'metrics, junk,spend' }).open).toBe('spend,metrics')
     expect(tokenopsSearchSchema.parse({ open: 'junk' }).open).toBeUndefined()
     expect(tokenopsSearchSchema.parse({ compare: '1' }).compare).toBe(true)
     expect(openSet(undefined).size).toBe(0)
-    expect(openSet('metrics,spend,bogus')).toEqual(new Set(['metrics', 'spend']))
+    expect(toggleOpen('spend', 'spend')).toBeUndefined()
+    expect(toggleOpen('metrics', 'spend')).toBe('spend,metrics')
 
     expect(compareOn({})).toBe(true)
     expect(compareOn({ compare: false })).toBe(false)

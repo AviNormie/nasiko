@@ -42,13 +42,13 @@ export function SavingsHighlight({
         </span>
         <div className="min-w-0">
           <h3 id="savings-highlight-title" className="text-sm font-medium">
-            Optimization saved you {fmtMoney(data.costSaved)}
+            Optimisation saved you {fmtMoney(data.costSaved)}
             {pct ? <> · {pct} fewer tokens</> : null}
           </h3>
           <p className="text-xs text-muted-foreground">
             {fmtTokens(data.tokensSaved)} tokens never sent
-            {data.topCategory ? <> — mostly {inSentence(data.topCategory.label)}</> : null}. Across{' '}
-            {data.optimisedCount} of {data.totalAgents} agents.
+            {data.topCategory ? <> — mostly {data.topCategory.label.toLowerCase()}</> : null}.
+            Across {data.optimisedCount} of {data.totalAgents} agents.
           </p>
         </div>
       </div>
@@ -57,9 +57,4 @@ export function SavingsHighlight({
       </Button>
     </section>
   )
-}
-
-/** Lower-cases only the first letter, so a proper name keeps its capital mid-sentence. */
-function inSentence(label: string) {
-  return label.charAt(0).toLowerCase() + label.slice(1)
 }

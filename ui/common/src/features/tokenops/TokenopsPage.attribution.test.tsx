@@ -58,10 +58,6 @@ describe('attribution', () => {
       await user.click(within(attribution).getByRole('button', { name: /CSV/ }))
       const lines = (await blob!.text()).split('\r\n')
       expect(lines[0]).toMatch(/^"Agent","Spend \(USD\)","Share \(%\)",.*"Container hours"$/)
-      // The table shows the top 10 until Show all; the CSV always has every visible row.
-      const capped = within(within(attribution).getByRole('table')).getAllByRole('row')
-      expect(capped).toHaveLength(11)
-      await user.click(within(attribution).getByRole('button', { name: /^Show all \d+$/ }))
       const rows = within(within(attribution).getByRole('table')).getAllByRole('row')
       expect(lines).toHaveLength(rows.length)
 

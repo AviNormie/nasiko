@@ -15,10 +15,10 @@ import { PERSONAS } from './types'
 
 describe('onboarding logic', () => {
   it('has the six steps in order', () => {
-    expect(STEPS).toEqual(['welcome', 'role', 'model', 'agent', 'optimize', 'ready'])
+    expect(STEPS).toEqual(['welcome', 'role', 'model', 'agent', 'optimise', 'ready'])
   })
 
-  it('skips the optimize step when resuming, because it completes nothing', () => {
+  it('skips the optimise step when resuming, because it completes nothing', () => {
     // It configures nothing by itself: stopping a returning user on a page they have already read
     // would be a step backwards, while a first run still walks through it linearly.
     expect(firstOpenStep({ role: true, model: true, agent: true })).toBe('ready')

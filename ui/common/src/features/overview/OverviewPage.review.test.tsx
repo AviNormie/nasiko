@@ -173,12 +173,11 @@ describe('components', () => {
         requests: { state: 'ok', value: { chats: [], outside: 2 } },
         agents: { state: 'ok', value: [] },
         budgets: { state: 'absent' },
-        sessions: { state: 'ok', value: { failed: 0, agents: [] } },
+        sessions: { state: 'ok', value: { failed: 0, checked: 25, agents: [] } },
       }),
       lastChecked: 0,
       retry: retries(),
       sessions: {} as NeedsYouData['sessions'],
-      waiting: {} as NeedsYouData['waiting'],
     }
     renderInRouter(<NeedsYou data={data} now={0} userId="u1" />)
     await userEvent.click(await screen.findByRole('link', { name: copy.needs.openWaiting }))
@@ -204,7 +203,6 @@ describe('components', () => {
       rangeDays: 30,
       totals: { spend: 120, runs: 10, previous: null },
       totalsError: null,
-      tokens: null,
       days: [],
       stack: null,
       stackPending: false,
@@ -213,7 +211,6 @@ describe('components', () => {
       other: null,
       driversError: null,
       unpriced: false,
-      latency: null,
       retry: vi.fn(),
     })
     const { unmount } = renderInRouter(<Spend spend={spend('2026-09-15')} now={at} />)

@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/refs, react-hooks/set-state-in-effect -- Kit animation code (from the React migration's visx kit): it mounts portals after the
    first render and drives motion springs from values tracked across renders. Correct without the React Compiler,
    so the file opts out of it with 'use no memo'. */
+'use client'
 'use no memo'
 
 import { motion } from 'motion/react'

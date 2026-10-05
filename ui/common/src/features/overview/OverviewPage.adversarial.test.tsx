@@ -10,9 +10,10 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router'
-import { bypass, http, HttpResponse } from 'msw'
+import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureMocks } from '@/mocks/handlers'
+import { budgetMockState, configureMocks } from '@/mocks/handlers'
+import { agentsList } from '@/mocks/observability'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { server } from '@/test/setup'
@@ -94,26 +95,55 @@ describe('a failed cost input', () => {
     )
   })
 
-  it('no comparison data: no agent is called Healthy', async () => {
-    // The comparison window used to be a second dashboard request that could
-    // fail on its own. It now rides on the current one (`compare=previous`), so
-    // the live risk is a server that doesn't support the parameter and answers
-    // without `previous` — the ratings must go Unknown, never Healthy.
-    let served = 0
+  it('previous week down: no agent is called Healthy on missing comparisons', async () => {
+    let calls = 0
     server.use(
-      http.get('*/api/observability/finops/dashboard', async ({ request }) => {
-        if (new URL(request.url).searchParams.get('compare') !== 'previous') return undefined
-        served++
-        const res = await fetch(bypass(request))
-        const body = (await res.json()) as { data: { agents: Record<string, unknown>[] } }
-        body.data.agents = body.data.agents.map(({ previous: _previous, ...rest }) => rest)
-        return HttpResponse.json(body)
+      http.get('*/api/observability/finops/dashboard', ({ request }) => {
+        // The previous-week window is the only call with explicit bounds 7 days back; fail every call with start_time.
+        if (new URL(request.url).searchParams.get('start_time')) {
+          calls++
+          return new HttpResponse('boom', { status: 500 })
+        }
+        return undefined
       }),
     )
     renderApp('/')
     const counts = await healthCounts()
-    expect(served).toBeGreaterThan(0)
+    expect(calls).toBeGreaterThan(0)
     expect(counts.healthy).toBe(0)
+    expect(
+      within(await card('overview-health')).getByText(copy.couldntCheck(copy.health.costWhat)),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('a stopped budget on an agent that is not rated', () => {
+  // Budgets hidden (no server support for /api/budgets yet, R-L10): un-skip with the commented budget code.
+  it.skip('still shows the budget in Needs you', async () => {
+    const stopped = budgetMockState().budgets.find((b) => b.agent_id && b.action === 'stop')!
+    server.use(
+      http.get('*/api/agents', ({ request }) => {
+        const u = new URL(request.url)
+        const rows = agentsList(seed, {
+          limit: u.searchParams.get('limit'),
+          offset: u.searchParams.get('offset'),
+        })
+        return HttpResponse.json(
+          rows.map((a) => (a.id === stopped.agent_id ? { ...a, status: 'stopped' } : a)),
+        )
+      }),
+    )
+    renderApp('/')
+    const needs = await card('overview-needs')
+    await waitFor(
+      () =>
+        expect(
+          [...needs.querySelectorAll('[data-kind="budget"]')].some((r) =>
+            /over its limit/.test(r.textContent ?? ''),
+          ),
+        ).toBe(true),
+      { timeout: 5000 },
+    )
   })
 })
 
@@ -147,7 +177,6 @@ describe('Needs you on OSS (budgets absent)', () => {
       lastChecked: 0,
       retry: { requests: vi.fn(), agents: vi.fn(), budgets: vi.fn(), sessions: vi.fn() },
       sessions: {} as NeedsYouData['sessions'],
-      waiting: {} as NeedsYouData['waiting'],
     }
     const router = createRouter({
       routeTree: createRootRoute({ component: () => <NeedsYou data={data} now={0} userId="u1" /> }),

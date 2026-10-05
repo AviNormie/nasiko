@@ -30,24 +30,16 @@ describe('TokenOps page', () => {
   })
 
   it('shows savings per category and per agent, with both reduction percentages', async () => {
-    renderApp('/tokenops?open=optimize')
-    const panel = await section('Token optimization savings')
+    renderApp('/tokenops?open=optimise')
+    const panel = await section('Token optimisation savings')
 
     // Both percentages, always together: the gap between them is real (savings are input-side,
     // input is the cheap side) and showing only one invites the reader to assume they match.
-    // Each appears twice — once in the headline figures, once on the category row that produced it.
-    expect(
-      within(panel).getByText(/^19\.7% of [\d.]+[KMB]? you would have sent$/),
-    ).toBeInTheDocument()
-    expect(within(panel).getByText(/^11\.0% of \$[\d,.]+, in this window$/)).toBeInTheDocument()
-    expect(within(panel).getByRole('cell', { name: '19.7%' })).toBeInTheDocument()
-    expect(within(panel).getByRole('cell', { name: '11.0%' })).toBeInTheDocument()
-    // The two differ, and the panel says which way rather than assuming.
-    expect(
-      within(panel).getByText(/^The cost cut is smaller than the token cut/),
-    ).toBeInTheDocument()
+    // Each appears twice — once in the hero, once on the category row that produced it.
+    expect(within(panel).getAllByText('19.7%')).toHaveLength(2)
+    expect(within(panel).getAllByText('11.0%')).toHaveLength(2)
 
-    // The category split — "what did each program save" — answered directly.
+    // The category split — "what did Caveman save vs Ponytail" — answered directly.
     expect(within(panel).getByText('Smaller prompts')).toBeInTheDocument()
     expect(within(panel).getByText('Less code written')).toBeInTheDocument()
 
@@ -61,23 +53,21 @@ describe('TokenOps page', () => {
     )
   })
 
-  it('lists the sessions the optimizer helped most', async () => {
+  it('lists the sessions the optimiser helped most', async () => {
     // Savings recur per turn, so a long session compounds them in a way the per-call view
     // understates. This table is where that shows, and it links back to the conversation.
-    const user = userEvent.setup()
-    renderApp('/tokenops?open=optimize')
-    const panel = await section('Token optimization savings')
-    await user.click(within(panel).getByRole('tab', { name: 'By session' }))
-    const link = await within(panel).findByRole('link', { name: /ctx-9f3ad21b/ })
+    renderApp('/tokenops?open=optimise')
+    const panel = await section('Token optimisation savings')
+    const link = within(panel).getByRole('link', { name: /ctx-9f3ad21b/ })
     expect(link).toHaveAttribute('href', '/sessions/ctx-9f3ad21b0c74')
     expect(within(panel).getByText('22.4%')).toBeInTheDocument()
   })
 
   it('names the layers underneath a category that has more than one', async () => {
-    // "Smaller prompts saved this much" is the product question; which injection point carried it is the
+    // "Caveman saved this much" is the product question; which injection point carried it is the
     // engineering one, and both belong on the same row.
-    renderApp('/tokenops?open=optimize')
-    const panel = await section('Token optimization savings')
+    renderApp('/tokenops?open=optimise')
+    const panel = await section('Token optimisation savings')
     // Named for what got shorter, not for the injection point the ledger stores. Scoped to the
     // row, because the panel's own intro also talks about tool output in plain words.
     const row = within(panel).getByRole('rowheader', { name: /Smaller prompts/ })
@@ -89,13 +79,13 @@ describe('TokenOps page', () => {
   it('marks a figure that is estimated rather than measured', async () => {
     // The minimal-code row has no observable counterfactual, so its number is a factor applied to
     // counted traffic. That has to be visible rather than blended into the measured total.
-    renderApp('/tokenops?open=optimize')
-    const panel = await section('Token optimization savings')
+    renderApp('/tokenops?open=optimise')
+    const panel = await section('Token optimisation savings')
     expect(within(panel).getAllByLabelText('Estimated').length).toBeGreaterThan(0)
     expect(within(panel).getByText('Measured + estimated')).toBeInTheDocument()
   })
 
-  it('shows one page loader under the header on a cold load; a window change keeps the panels', async () => {
+  it('shows one page loader under the sticky bar on a cold load; a window change keeps the panels', async () => {
     server.use(
       http.get(`*${FINOPS}/dashboard`, async () => {
         await delay(300)
@@ -216,8 +206,7 @@ describe('TokenOps page', () => {
     renderApp('/tokenops?open=all')
     expect(await screen.findByTestId('mtd-spend')).toBeInTheDocument()
     const alerts = await screen.findAllByRole('alert')
-    // The summary and its KPI tiles come from the dashboard, so they fail together, in one panel.
-    expect(alerts.some((a) => /Couldn't load the summary/.test(a.textContent ?? ''))).toBe(true)
+    expect(alerts.some((a) => /Couldn't load KPIs/.test(a.textContent ?? ''))).toBe(true)
     expect(screen.getAllByRole('button', { name: /Retry/ }).length).toBeGreaterThan(0)
   })
 

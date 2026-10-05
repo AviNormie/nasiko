@@ -1,5 +1,4 @@
-import { z } from 'zod/mini'
-import { opt } from '@/lib/search'
+import { z } from 'zod'
 import { CHAT_PAGE_VARIANT_KEYS, CHAT_SCENARIO_KEYS } from './scenarioKeys'
 
 /**
@@ -11,11 +10,14 @@ import { CHAT_PAGE_VARIANT_KEYS, CHAT_SCENARIO_KEYS } from './scenarioKeys'
  * `mock` and `debug` are dev/mock aids; they survive the create and opt-in navigations (DX-A2).
  */
 export const chatSearchSchema = z.object({
-  agent: z.optional(z.unknown()),
-  auto: opt(z.union([z.literal(1), z.literal('1')])),
+  agent: z.unknown().optional(),
+  auto: z
+    .union([z.literal(1), z.literal('1')])
+    .optional()
+    .catch(undefined),
   // Kept raw so an unknown value can be named in the dev banner (DX-7); isChatScenario checks it.
-  mock: opt(z.string().check(z.maxLength(200))),
-  debug: opt(z.literal('turn')),
+  mock: z.string().max(200).optional().catch(undefined),
+  debug: z.literal('turn').optional().catch(undefined),
 })
 export type ChatSearch = z.infer<typeof chatSearchSchema>
 /** The dev aids every chat link carries (DX-A2). */
@@ -25,8 +27,6 @@ declare module '@tanstack/react-router' {
   interface HistoryState {
     /** The Waiting row's request, carried in history state so the opened chat focuses its card (v1c M4). */
     waitingRequest?: string
-    /** How a Previous/Next step opened this chat: a click focuses the composer, J/K leaves focus alone (keys go on). */
-    chatFocus?: 'composer' | 'none'
   }
 }
 
