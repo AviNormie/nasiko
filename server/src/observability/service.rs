@@ -13,8 +13,8 @@ use chrono::{DateTime, Datelike, Duration, SecondsFormat, TimeZone, Utc};
 use futures::stream::{self, StreamExt};
 use nasiko_config::Config;
 use nasiko_observability::{
-    CostBreakdown, ObservabilityError, ObservabilityProvider, TimeBucket,
-    extract_cache_token_attrs, extract_token_attrs,
+    CostBreakdown, ObservabilityError, ObservabilityProvider, TimeBucket, extract_token_attrs,
+    extract_usage_attrs,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -120,7 +120,7 @@ fn parse_iso_param(
     }
 }
 
-fn parse_iso_or_default(iso: Option<&str>, default_days_ago: i64) -> DateTime<Utc> {
+pub(super) fn parse_iso_or_default(iso: Option<&str>, default_days_ago: i64) -> DateTime<Utc> {
     parse_iso(iso).unwrap_or_else(|| Utc::now() - Duration::days(default_days_ago))
 }
 
@@ -315,8 +315,9 @@ fn build_span_tree(
         if !seen.insert(&span.span_id) {
             continue;
         }
-        let (input, output, model) = extract_token_attrs(&span.attributes);
-        let (cache_read, cache_creation) = extract_cache_token_attrs(&span.attributes);
+        let u = extract_usage_attrs(&span.attributes);
+        let (input, output, model) = (u.input, u.output, u.model.clone());
+        let (cache_read, cache_creation) = (u.cache_read, u.cache_creation);
         trace_usage.0 += input;
         trace_usage.1 += output;
         trace_usage.2 += cache_read;
@@ -338,9 +339,8 @@ fn build_span_tree(
                 trace_usage.3,
             )
         } else {
-            let (input, output, model) = extract_token_attrs(&s.attributes);
-            let (cache_read, cache_creation) = extract_cache_token_attrs(&s.attributes);
-            (input, output, model, cache_read, cache_creation)
+            let u = extract_usage_attrs(&s.attributes);
+            (u.input, u.output, u.model, u.cache_read, u.cache_creation)
         };
         SpanNode {
             id: encode_span_id(&s.span_id),
@@ -812,6 +812,10 @@ pub struct FinopsSummary {
     /// silently skips these, so `total_cost` under-reports; this surfaces the gap
     /// as a known number rather than a smaller one.
     pub unpriced_calls: usize,
+    /// Sum of rows explicitly priced using inferred rates or usage evidence.
+    pub estimated_cost: f64,
+    /// Older materializations without recorded pricing confidence.
+    pub unknown_confidence_calls: usize,
 }
 
 #[derive(Serialize, Clone, ToSchema)]
@@ -1349,7 +1353,7 @@ impl ObservabilityService {
             agent_id: agent_name,
             num_traces: Some(details.trace_count as u32),
             start_time: started_at.map(fmt_ts),
-            // Flutter's DateTime.parse requires a non-empty string — fall back
+            // Clients parsing this as a timestamp need a non-empty string — fall back
             // to start_time when no end time is known.
             end_time: ended_at.or(started_at).map(fmt_ts),
             duration_ms,
@@ -1763,14 +1767,18 @@ impl ObservabilityService {
             if !seen_spans.insert(&span.span_id) {
                 continue;
             }
-            let (input, output, model) = extract_token_attrs(&span.attributes);
-            let (cache_read, cache_creation) = extract_cache_token_attrs(&span.attributes);
-            if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
+            let u = extract_usage_attrs(&span.attributes);
+            if u.is_empty() {
                 continue;
             }
             cost.add_assign(
                 self.provider
-                    .cost_with_cache(model.as_deref(), input, output, cache_read, cache_creation)
+                    .cost(nasiko_observability::CostRequest::from_usage(
+                        nasiko_observability::span_provider(span),
+                        u.model.as_deref(),
+                        span.started_at,
+                        &u,
+                    ))
                     .await,
             );
         }
@@ -2209,6 +2217,8 @@ impl ObservabilityService {
             cache_read_tokens: i64,
             cache_creation_tokens: i64,
             total_cost: f64,
+            estimated_cost: f64,
+            unknown_confidence_calls: i64,
             tool_call_count: i64,
             p50_latency: Option<f64>,
             p95_latency: Option<f64>,
@@ -2236,6 +2246,8 @@ impl ObservabilityService {
                       COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
                       COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
                       COALESCE(SUM(cost_usd), 0)::FLOAT8 AS total_cost,
+                      COALESCE(SUM(cost_usd) FILTER (WHERE cost_estimated), 0)::FLOAT8 AS estimated_cost,
+                      COUNT(*) FILTER (WHERE cost_estimated IS NULL)::BIGINT AS unknown_confidence_calls,
                       COALESCE(SUM(tool_call_count), 0)::BIGINT AS tool_call_count,
                       percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms)::FLOAT8 AS p50_latency,
                       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::FLOAT8 AS p95_latency,
@@ -2558,6 +2570,11 @@ impl ObservabilityService {
                     total_agents,
                     total_container_hours,
                     unpriced_calls: unpriced_calls.max(0) as usize,
+                    estimated_cost: current_rows.iter().map(|row| row.estimated_cost).sum(),
+                    unknown_confidence_calls: current_rows
+                        .iter()
+                        .map(|row| row.unknown_confidence_calls.max(0) as usize)
+                        .sum(),
                 },
                 agents: agent_rows,
                 token_usage: FinopsTokenUsage {
@@ -3393,6 +3410,8 @@ fn empty_finops_response(total_container_hours: f64) -> FinopsDashboardResponse 
                 total_agents: 0,
                 total_container_hours,
                 unpriced_calls: 0,
+                estimated_cost: 0.0,
+                unknown_confidence_calls: 0,
             },
             agents: vec![],
             token_usage: FinopsTokenUsage {
@@ -3489,10 +3508,15 @@ mod tests {
         };
 
         let (roots, _) = build_span_tree(&[root, child]);
-        assert_eq!(roots[0].token_count_total, 20);
+        // `input_tokens: 10` is the whole prompt, of which 5 were cached (2 read + 3
+        // written) — the semconv reading, which `extract_usage_attrs` normalizes to a
+        // fresh count of 5. The total is therefore 5 fresh + 5 cached + 5 output = 15,
+        // not 20: summing the raw attribute alongside the cache classes would charge
+        // every cached token twice.
+        assert_eq!(roots[0].token_count_total, 15);
         assert_eq!(roots[0].cache_read_tokens, 2);
         assert_eq!(roots[0].cache_creation_tokens, 3);
-        assert_eq!(roots[0].children[0].token_count_total, 20);
+        assert_eq!(roots[0].children[0].token_count_total, 15);
     }
 
     #[test]
@@ -3548,6 +3572,7 @@ mod tests {
                 cache_read_usd: 0.25,
                 cache_creation_usd: 0.75,
                 total_usd: 4.0,
+                estimated: false,
             },
         };
 
