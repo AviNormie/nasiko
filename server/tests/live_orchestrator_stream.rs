@@ -40,6 +40,7 @@ async fn provider_stream_reports_usage_before_done() {
                 description: "Not available for this greeting; never invoke.".into(),
                 endpoint: "http://127.0.0.1:1".into(),
                 skills: vec![],
+                auth_header: None,
             }]),
         );
         orchestrator.init().await.unwrap();
