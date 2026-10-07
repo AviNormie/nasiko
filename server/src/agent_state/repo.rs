@@ -460,6 +460,12 @@ pub(super) async fn delete(
 /// creators would both conclude they are first. The lock is per entry, so unrelated entries never
 /// wait on each other; a hash collision only makes two entries share one, which costs a little
 /// serialisation and breaks nothing.
+///
+/// The transaction is READ COMMITTED, said explicitly because a database or role default can say
+/// otherwise. Taking turns only helps if each statement sees what the writer before committed:
+/// under REPEATABLE READ or SERIALIZABLE the snapshot is fixed when the lock statement starts,
+/// before the wait, so a writer that waited would read the version from before it and then fail
+/// to serialize on write.
 async fn begin_locked(
     db: &PgPool,
     agent_id: Uuid,
@@ -467,6 +473,9 @@ async fn begin_locked(
     name: &str,
 ) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     let mut tx = db.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
         .bind(ENTRY_LOCK_CLASS)
         .bind(format!("{agent_id}/{}/{name}", store.label()))
