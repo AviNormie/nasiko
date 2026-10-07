@@ -113,7 +113,8 @@ export function RoutingSheet({
         ? document.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(last.id)}"]`)
         : null
     setStepped(false)
-    if (row) {
+    // A disabled row (its routing read failed after the step) can't take focus: return to the opener instead.
+    if (row && !row.matches(':disabled')) {
       e.preventDefault()
       row.focus()
     } else returnFocus(e)
