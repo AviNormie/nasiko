@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::cursor::{KeyCursor, TaskCursor};
 use super::error::StateError;
@@ -37,15 +37,17 @@ pub(super) struct RegisterRequest {
 pub(super) struct PutTaskRequest {
     pub(super) context_id: Option<String>,
     pub(super) state: String,
-    /// The SDK's serialized task. Opaque to the server; any JSON value, `null` included.
-    pub(super) body: Value,
+    /// The SDK's serialized task. Opaque to the server and kept as the raw text received; any
+    /// JSON value, `null` included.
+    pub(super) body: Box<RawValue>,
 }
 
 /// `PUT /kv/{key}`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PutKvRequest {
-    pub(super) value: Value,
+    /// Opaque to the server and kept as the raw text received, like a task's `body`.
+    pub(super) value: Box<RawValue>,
 }
 
 /// Query string of `GET /tasks`.
@@ -133,7 +135,7 @@ impl RegisterRequest {
 }
 
 impl PutTaskRequest {
-    /// Checks the fields around the opaque `body`; the body itself is size-checked once encoded.
+    /// Checks the fields around the opaque `body`; the body itself is only size-checked.
     pub(super) fn check(&self) -> Result<(), StateError> {
         check_name("state", &self.state, MAX_TASK_STATE_BYTES)?;
         if let Some(context_id) = &self.context_id {
@@ -169,7 +171,7 @@ pub(super) struct TaskView {
     task_id: String,
     context_id: Option<String>,
     state: String,
-    body: Value,
+    body: Box<RawValue>,
     version: i64,
     updated_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
@@ -213,7 +215,7 @@ impl KvStamp {
 #[derive(Debug, Serialize)]
 pub(super) struct KvView {
     key: String,
-    value: Value,
+    value: Box<RawValue>,
     version: i64,
     updated_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
@@ -240,12 +242,14 @@ pub(super) struct Page<T> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
+    /// Parses through the JSON text, as a request body is: a raw field cannot be read out of an
+    /// already-built `Value`.
     fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, serde_json::Error> {
-        serde_json::from_value(value)
+        serde_json::from_str(&value.to_string())
     }
 
     #[test]
@@ -253,7 +257,7 @@ mod tests {
         let with_null_body: PutTaskRequest =
             parse(json!({"state": "working", "body": null})).unwrap();
         assert_eq!(with_null_body.context_id, None);
-        assert_eq!(with_null_body.body, Value::Null);
+        assert_eq!(with_null_body.body.get(), "null");
 
         assert!(parse::<PutTaskRequest>(json!({"state": "working"})).is_err());
         assert!(parse::<PutTaskRequest>(json!({"body": {}})).is_err());
@@ -288,9 +292,20 @@ mod tests {
             json!({"a": {}}),
         ] {
             let request: PutKvRequest = parse(json!({ "value": value.clone() })).unwrap();
-            assert_eq!(request.value, value);
+            assert_eq!(request.value.get(), value.to_string());
         }
         assert!(parse::<PutKvRequest>(json!({})).is_err());
+    }
+
+    #[test]
+    fn a_body_is_held_as_the_exact_text_received() {
+        let sent =
+            r#"{"state":"s","body":{"z":1,  "a":123456789012345678901234567890,"e":"\u00e9"}}"#;
+        let request: PutTaskRequest = serde_json::from_str(sent).unwrap();
+        assert_eq!(
+            request.body.get(),
+            r#"{"z":1,  "a":123456789012345678901234567890,"e":"\u00e9"}"#
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use axum::{Json, Router, middleware};
 use super::auth::{AgentAuth, AuthenticatedAgent, authenticate};
 use super::cursor::{KeyCursor, TaskCursor};
 use super::error::StateError;
-use super::payload::{EncodedPayload, PayloadCipher};
+use super::payload::{BoundedPayload, PayloadCipher};
 use super::precondition::Precondition;
 use super::repo::{
     self, DeleteOutcome, KvQuery, KvRow, NewEntry, NewTask, PutOutcome, Rows, Stamp, Store,
@@ -23,9 +23,9 @@ use super::wire::{
 use crate::state::AppState;
 
 /// Room the transport-level body limit leaves beyond the value cap for the JSON around the value
-/// (field names, `state`, `context_id`) and a client's formatting whitespace. The cap on the
-/// value itself is exact and enforced after parsing (`EncodedPayload`); this only bounds how much
-/// of a request is buffered before that can be checked.
+/// (field names, `state`, `context_id`). The cap on the value itself is exact and enforced once
+/// the request is read (`BoundedPayload`); this only bounds how much of a request is buffered
+/// before that can be checked.
 const ENVELOPE_ALLOWANCE_BYTES: usize = 16 * 1024;
 
 /// The agent state API, to be nested under `/api`.
@@ -87,7 +87,7 @@ async fn put_task(
     StateJson(request): StateJson<PutTaskRequest>,
 ) -> Result<Json<TaskStamp>, StateError> {
     request.check()?;
-    let payload = EncodedPayload::new(&request.body, state.config.agent_state_max_body_bytes)?;
+    let payload = BoundedPayload::new(&request.body, state.config.agent_state_max_body_bytes)?;
     let sealed_body = PayloadCipher::for_agent(agent_id)?.seal(&payload);
     let task = NewTask {
         task_id: task_id.as_str(),
@@ -180,7 +180,7 @@ async fn put_kv(
     precondition: Precondition,
     StateJson(request): StateJson<PutKvRequest>,
 ) -> Result<Json<KvStamp>, StateError> {
-    let payload = EncodedPayload::new(&request.value, state.config.agent_state_max_body_bytes)?;
+    let payload = BoundedPayload::new(&request.value, state.config.agent_state_max_body_bytes)?;
     let sealed_value = PayloadCipher::for_agent(agent_id)?.seal(&payload);
     let entry = NewEntry {
         key: key.as_str(),

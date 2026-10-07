@@ -21,7 +21,7 @@ pub(super) enum StateError {
     NotFound { what: &'static str },
     /// The request is well-formed HTTP but unacceptable: bad body, name, query or header.
     BadRequest { code: &'static str, message: String },
-    /// The encoded value, or the request carrying it, is over the configured cap.
+    /// The value as sent, or the request carrying it, is over the configured cap.
     PayloadTooLarge(String),
     /// The `If-Match` precondition did not hold. `current_version` is 0 when the row is absent.
     VersionConflict { current_version: i64 },

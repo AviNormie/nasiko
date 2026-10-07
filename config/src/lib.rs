@@ -145,8 +145,9 @@ pub struct Config {
     /// write, in days. AGENT_STATE_TTL_DAYS, default 7, clamped to 1..=365: zero would expire
     /// every row the instant it is written. Reads never extend it.
     pub agent_state_ttl_days: i32,
-    /// Largest JSON-encoded task `body` or key-value `value` the agent state API accepts.
-    /// AGENT_STATE_MAX_BODY_BYTES, default 1 MiB, floored at 1. Larger writes get a 413.
+    /// Largest task `body` or key-value `value` the agent state API accepts, measured on the
+    /// bytes of that field as sent. AGENT_STATE_MAX_BODY_BYTES, default 1 MiB, floored at 1.
+    /// Larger writes get a 413.
     pub agent_state_max_body_bytes: usize,
     /// Requests per minute one agent may make to the agent state API.
     /// AGENT_STATE_RATE_LIMIT_PER_MINUTE, default 600, floored at 1. Over it gets a 429. Counted

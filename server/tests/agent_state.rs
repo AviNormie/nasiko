@@ -1132,20 +1132,133 @@ async fn a_cap_above_the_frameworks_default_body_limit_is_honoured() {
     server.cleanup().await;
 }
 
+/// A task PUT whose `body` is `raw_body`, sent exactly as given rather than re-serialized.
+async fn put_task_raw(
+    server: &TestServer,
+    agent: &Agent,
+    task_id: &str,
+    raw_body: &str,
+) -> Response {
+    call(
+        server,
+        agent,
+        Method::PUT,
+        &format!("/tasks/{}", enc(task_id)),
+    )
+    .header("Content-Type", "application/json")
+    .body(format!(
+        r#"{{"context_id":null,"state":"working","body":{raw_body}}}"#
+    ))
+    .send()
+    .await
+    .unwrap()
+}
+
+/// A JSON string of `chars` copies of `é`, each sent as the six-byte escape `\u00e9`.
+fn escaped_non_ascii(chars: usize) -> String {
+    format!("\"{}\"", "\\u00e9".repeat(chars))
+}
+
 #[tokio::test]
 #[serial]
-async fn the_cap_applies_to_the_encoding_not_to_the_clients_whitespace() {
-    let server = TestServer::start_with(|c| c.agent_state_max_body_bytes = 64).await;
+async fn the_cap_counts_the_body_as_sent_whitespace_included() {
+    let server = TestServer::start_with(|c| c.agent_state_max_body_bytes = 32).await;
     let agent = new_agent(&server, "whitespace-agent").await;
-    // Compactly `{"a":1,"b":[1,2]}` (17 bytes); sent with a good deal of padding around it.
-    let padded = "{\"context_id\": null, \"state\": \"s\", \"body\": {\n    \"a\": 1,\n    \"b\": [ 1 ,\n 2 ]\n  }\n}";
-    let res = call(&server, &agent, Method::PUT, "/tasks/t")
+    // Both are `{"a":1}` (7 bytes) once compacted; as sent, one is at the cap and one is over it.
+    let padded = |spaces: usize| format!("{{\"a\":{}1}}", " ".repeat(spaces));
+    assert_eq!(padded(25).len(), 32);
+
+    assert_eq!(
+        put_task_raw(&server, &agent, "t", &padded(25))
+            .await
+            .status(),
+        200
+    );
+    expect_error(
+        put_task_raw(&server, &agent, "t", &padded(26)).await,
+        413,
+        "payload_too_large",
+    )
+    .await;
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_body_over_the_cap_as_sent_is_refused_even_when_it_would_compact_under_it() {
+    // Each escaped character is 6 bytes as sent and 2 once decoded and re-encoded, so this body
+    // is just over the 1 MiB cap as sent and about a third of it in any compact form. It is also
+    // within the transport allowance, so it is the cap on the field that has to refuse it.
+    const MIB: usize = 1024 * 1024;
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "escaped-wire-agent").await;
+    let body = escaped_non_ascii((MIB + 4096) / 6);
+    assert!(body.len() > MIB && body.len() < MIB + 8192);
+
+    expect_error(
+        put_task_raw(&server, &agent, "t", &body).await,
+        413,
+        "payload_too_large",
+    )
+    .await;
+    expect_error(get_task(&server, &agent, "t").await, 404, "not_found").await;
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_large_escaped_body_under_the_cap_comes_back_exactly_as_sent() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "escaped-body-agent").await;
+    // 900 KB as sent, under the default 1 MiB cap; the escapes must survive, not turn into UTF-8.
+    let body = escaped_non_ascii(150_000);
+    assert_eq!(body.len(), 900_002);
+
+    assert_eq!(
+        put_task_raw(&server, &agent, "t", &body).await.status(),
+        200
+    );
+    let read = get_task(&server, &agent, "t").await.text().await.unwrap();
+    assert!(
+        read.contains(&format!("\"body\":{body},")),
+        "the body must come back byte for byte"
+    );
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_body_keeps_its_number_precision_key_order_and_formatting() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "opaque-agent").await;
+    // Integers past u64, a float past f64's precision, keys out of order, a duplicate key, and
+    // a client's own spacing: a parsed-and-re-encoded body would lose every one of these.
+    let body = r#"{"zeta": 18446744073709551616123, "alpha":[1.000000000000000000001, -0.0e0],
+  "mid":{"b":2,"a":1}, "dup":1, "dup":2, "s":"\u00e9\/"}"#;
+
+    assert_eq!(put_task_raw(&server, &agent, "t", body).await.status(), 200);
+    let read = get_task(&server, &agent, "t").await.text().await.unwrap();
+    assert!(read.contains(&format!("\"body\":{body},")), "{read}");
+
+    let listed = call(&server, &agent, Method::GET, "/tasks")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(listed.contains(&format!("\"body\":{body},")), "{listed}");
+
+    let kv = call(&server, &agent, Method::PUT, "/kv/k")
         .header("Content-Type", "application/json")
-        .body(padded)
+        .body(format!(r#"{{"value":{body}}}"#))
         .send()
         .await
         .unwrap();
-    assert_eq!(res.status(), 200);
+    assert_eq!(kv.status(), 200);
+    let read = get_kv(&server, &agent, "k").await.text().await.unwrap();
+    assert!(read.contains(&format!("\"value\":{body},")), "{read}");
+
     server.cleanup().await;
 }
 
