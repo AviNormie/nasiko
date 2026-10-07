@@ -4,7 +4,7 @@
  * them back. A deep link has no list, so it shows no arrows. History state survives a reload, not a copied link.
  */
 import { useRouterState, type HistoryState } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 
 declare module '@tanstack/react-router' {
   interface HistoryState {
@@ -19,7 +19,8 @@ declare module '@tanstack/react-router' {
  */
 export function useSiblingState(ids: readonly string[]): () => HistoryState {
   const latest = useRef(ids)
-  useEffect(() => {
+  // Layout effect: a click right after a re-render must not read the previous ids.
+  useLayoutEffect(() => {
     latest.current = ids
   })
   return useCallback(() => ({ siblings: latest.current }), [])
