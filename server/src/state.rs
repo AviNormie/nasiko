@@ -397,9 +397,13 @@ impl AppState {
             ));
         }
 
-        // Reclaims the storage of agent state no one can read any more: expired rows, and rows of
-        // deleted agents. Each process runs one and `SKIP LOCKED` keeps several from colliding.
-        tokio::spawn(crate::agent_state::sweeper::run(state.db.clone()));
+        // Reclaims the storage of agent state no one can read any more: empties expired rows into
+        // tombstones, forgets old tombstones, and removes the rows of deleted agents. Each process
+        // runs one and `SKIP LOCKED` keeps several from colliding.
+        tokio::spawn(crate::agent_state::sweeper::run(
+            state.db.clone(),
+            state.config.agent_state_ttl_days,
+        ));
 
         // Retires the seeded brevity factor once the holdout has enough samples. Cheap (one
         // grouped scan) and idempotent, so it rides the same process as the other workers rather

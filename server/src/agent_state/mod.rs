@@ -33,8 +33,11 @@
 //!   unconditional. Writers of one entry take turns (`repo`), so each sees the version the one
 //!   before it committed and two writers never both claim the same version.
 //! - **Expiring.** Every write sets `expires_at` to now plus `AGENT_STATE_TTL_DAYS`. An expired
-//!   row reads as absent at once, and the [`sweeper`] deletes it later, as it does every row of
+//!   row reads as absent at once, and the [`sweeper`] empties it later; it removes every row of
 //!   an agent that has been deleted.
+//! - **Versions never restart.** A delete or an expiry leaves a tombstone that keeps the version
+//!   for one more TTL, so the next write continues from it and an old `If-Match` cannot match a
+//!   new row (`repo`).
 //! - **Opaque.** A task body or value is stored and returned byte for byte as the agent sent it,
 //!   never parsed into a JSON tree and re-encoded (`payload`).
 //! - **Bounded.** A value over `AGENT_STATE_MAX_BODY_BYTES` as sent is a 413, and an agent

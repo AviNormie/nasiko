@@ -4,9 +4,17 @@
 //! and from nowhere else: that filter is the whole isolation story, so another agent's row is
 //! not forbidden, it is simply never selected.
 //!
-//! Reads ignore a row once `expires_at` has passed, whether or not the sweeper has removed it
-//! yet. Writes to one entry are serialised by an advisory lock and run read, check, write inside
-//! one transaction, which is what makes a version number mean something under concurrency.
+//! Reads ignore a row once `expires_at` has passed, whether or not the sweeper has dealt with it
+//! yet, and ignore a tombstone always. Writes to one entry are serialised by an advisory lock and
+//! run read, check, write inside one transaction, which is what makes a version number mean
+//! something under concurrency.
+//!
+//! Versions never restart. A delete does not remove the row: it empties it into a tombstone
+//! (`deleted_at` set, payload gone) that keeps the version, and the sweeper does the same to a row
+//! that expires. The next write of that entry continues from the kept version, so an `If-Match`
+//! taken before the delete or expiry can never match the new row by accident. A tombstone is
+//! kept for one TTL, then forgotten; a version older than that is beyond any precondition this
+//! API promises to honour.
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -55,24 +63,60 @@ impl Store {
         }
     }
 
-    fn live_version_sql(self) -> &'static str {
+    /// The assignments that empty a row into a tombstone: everything the agent wrote except the
+    /// name and the version. (A task's `state` stays; it is a protocol word, not content.)
+    pub(super) fn emptied_columns(self) -> &'static str {
         match self {
-            Self::Tasks => {
-                "SELECT version FROM agent_tasks
-                 WHERE agent_id = $1 AND task_id = $2 AND expires_at > now()"
-            }
-            Self::Kv => {
-                "SELECT version FROM agent_kv
-                 WHERE agent_id = $1 AND key = $2 AND expires_at > now()"
-            }
+            Self::Tasks => "body = NULL, context_id = NULL",
+            Self::Kv => "value = NULL",
         }
     }
 
-    fn delete_sql(self) -> &'static str {
-        match self {
-            Self::Tasks => "DELETE FROM agent_tasks WHERE agent_id = $1 AND task_id = $2",
-            Self::Kv => "DELETE FROM agent_kv WHERE agent_id = $1 AND key = $2",
+    fn versions_sql(self) -> String {
+        let (table, name) = (self.table(), self.name_column());
+        format!(
+            "SELECT version, deleted_at IS NULL AND expires_at > now() AS live
+             FROM {table} WHERE agent_id = $1 AND {name} = $2"
+        )
+    }
+
+    /// Empties the entry into a tombstone kept for `$3` days.
+    fn tombstone_sql(self) -> String {
+        let (table, name, emptied) = (self.table(), self.name_column(), self.emptied_columns());
+        format!(
+            "UPDATE {table}
+             SET {emptied},
+                 deleted_at = clock_timestamp(),
+                 expires_at = clock_timestamp() + make_interval(days => $3)
+             WHERE agent_id = $1 AND {name} = $2"
+        )
+    }
+}
+
+/// What a writer of one entry needs to know of it before it writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EntryVersions {
+    /// Version of the live row, or 0 when there is none (absent, expired or a tombstone). This is
+    /// what a precondition is checked against.
+    current: i64,
+    /// Highest version the entry has had, live or not, or 0 when nothing of it is kept.
+    latest: i64,
+}
+
+impl EntryVersions {
+    fn from_row(row: Option<(i64, bool)>) -> Self {
+        match row {
+            None => Self::default(),
+            Some((version, live)) => Self {
+                current: if live { version } else { 0 },
+                latest: version,
+            },
         }
+    }
+
+    /// The version the next write gets: one past every version the entry has had.
+    fn next(self) -> i64 {
+        self.latest + 1
     }
 }
 
@@ -164,7 +208,7 @@ pub(super) struct TaskQuery {
 const GET_TASK: &str =
     "SELECT task_id, context_id, state, body AS sealed_body, version, updated_at, expires_at
     FROM agent_tasks
-    WHERE agent_id = $1 AND task_id = $2 AND expires_at > now()";
+    WHERE agent_id = $1 AND task_id = $2 AND deleted_at IS NULL AND expires_at > now()";
 
 /// Newest first. The `COLLATE "C"` on the id makes the tie-break byte order, so the sequence a
 /// caller pages through does not depend on the database's locale.
@@ -172,6 +216,7 @@ const LIST_TASKS: &str =
     "SELECT task_id, context_id, state, body AS sealed_body, version, updated_at, expires_at
     FROM agent_tasks
     WHERE agent_id = $1
+      AND deleted_at IS NULL
       AND expires_at > now()
       AND ($2::text IS NULL OR context_id = $2)
       AND ($3::text IS NULL OR state = $3)
@@ -185,7 +230,7 @@ const LIST_TASKS: &str =
 /// predate the moment this writer won the entry's lock, and a later version must never carry an
 /// earlier `updated_at` than the one before it. The `created_at` expression is the exception, and
 /// deliberately uses `now()` so it agrees with the liveness check made earlier in the same
-/// transaction: it restarts a row that had expired and keeps a live one's original value.
+/// transaction: it restarts a row that had expired or been deleted and keeps a live one's.
 const UPSERT_TASK: &str = "INSERT INTO agent_tasks AS t
         (agent_id, task_id, context_id, state, body, version, updated_at, expires_at)
     VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp(), clock_timestamp() + make_interval(days => $7))
@@ -194,9 +239,11 @@ const UPSERT_TASK: &str = "INSERT INTO agent_tasks AS t
         state      = EXCLUDED.state,
         body       = EXCLUDED.body,
         version    = EXCLUDED.version,
-        created_at = CASE WHEN t.expires_at > now() THEN t.created_at ELSE now() END,
+        created_at = CASE WHEN t.deleted_at IS NULL AND t.expires_at > now()
+                          THEN t.created_at ELSE now() END,
         updated_at = EXCLUDED.updated_at,
-        expires_at = EXCLUDED.expires_at
+        expires_at = EXCLUDED.expires_at,
+        deleted_at = NULL
     RETURNING version, updated_at, expires_at";
 
 pub(super) async fn get_task(
@@ -237,12 +284,12 @@ pub(super) async fn put_task(
     ttl_days: i32,
 ) -> Result<PutOutcome, sqlx::Error> {
     let mut tx = begin_locked(db, agent_id, Store::Tasks, task.task_id).await?;
-    let current_version = live_version(&mut tx, Store::Tasks, agent_id, task.task_id)
-        .await?
-        .unwrap_or(0);
-    if !precondition.holds_for(current_version) {
+    let versions = entry_versions(&mut tx, Store::Tasks, agent_id, task.task_id).await?;
+    if !precondition.holds_for(versions.current) {
         tx.rollback().await?;
-        return Ok(PutOutcome::VersionConflict { current_version });
+        return Ok(PutOutcome::VersionConflict {
+            current_version: versions.current,
+        });
     }
     let stamp = sqlx::query_as(UPSERT_TASK)
         .bind(agent_id)
@@ -250,7 +297,7 @@ pub(super) async fn put_task(
         .bind(task.context_id)
         .bind(task.state)
         .bind(task.sealed_body)
-        .bind(current_version + 1)
+        .bind(versions.next())
         .bind(ttl_days)
         .fetch_one(&mut *tx)
         .await?;
@@ -285,13 +332,14 @@ pub(super) struct KvQuery {
 
 const GET_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, expires_at
     FROM agent_kv
-    WHERE agent_id = $1 AND key = $2 AND expires_at > now()";
+    WHERE agent_id = $1 AND key = $2 AND deleted_at IS NULL AND expires_at > now()";
 
 /// `starts_with`, not `LIKE`: a prefix is a literal, and `%` or `_` in it must not act as
 /// wildcards. Byte-order collation for the same reason as `LIST_TASKS`.
 const LIST_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, expires_at
     FROM agent_kv
     WHERE agent_id = $1
+      AND deleted_at IS NULL
       AND expires_at > now()
       AND ($2::text IS NULL OR starts_with(key, $2))
       AND ($3::text IS NULL OR key COLLATE \"C\" > $3)
@@ -305,9 +353,11 @@ const UPSERT_KV: &str = "INSERT INTO agent_kv AS e
     ON CONFLICT (agent_id, key) DO UPDATE SET
         value      = EXCLUDED.value,
         version    = EXCLUDED.version,
-        created_at = CASE WHEN e.expires_at > now() THEN e.created_at ELSE now() END,
+        created_at = CASE WHEN e.deleted_at IS NULL AND e.expires_at > now()
+                          THEN e.created_at ELSE now() END,
         updated_at = EXCLUDED.updated_at,
-        expires_at = EXCLUDED.expires_at
+        expires_at = EXCLUDED.expires_at,
+        deleted_at = NULL
     RETURNING version, updated_at, expires_at";
 
 pub(super) async fn get_kv(
@@ -346,18 +396,18 @@ pub(super) async fn put_kv(
     ttl_days: i32,
 ) -> Result<PutOutcome, sqlx::Error> {
     let mut tx = begin_locked(db, agent_id, Store::Kv, entry.key).await?;
-    let current_version = live_version(&mut tx, Store::Kv, agent_id, entry.key)
-        .await?
-        .unwrap_or(0);
-    if !precondition.holds_for(current_version) {
+    let versions = entry_versions(&mut tx, Store::Kv, agent_id, entry.key).await?;
+    if !precondition.holds_for(versions.current) {
         tx.rollback().await?;
-        return Ok(PutOutcome::VersionConflict { current_version });
+        return Ok(PutOutcome::VersionConflict {
+            current_version: versions.current,
+        });
     }
     let stamp = sqlx::query_as(UPSERT_KV)
         .bind(agent_id)
         .bind(entry.key)
         .bind(entry.sealed_value)
-        .bind(current_version + 1)
+        .bind(versions.next())
         .bind(ttl_days)
         .fetch_one(&mut *tx)
         .await?;
@@ -367,26 +417,33 @@ pub(super) async fn put_kv(
 
 // ─── Shared by both stores ──────────────────────────────────────────────────
 
-/// Removes a live row. An absent or expired one is `NotFound`, whatever the precondition says.
+/// Empties a live row into a tombstone kept for `ttl_days`, so the entry's next write continues
+/// its version. An absent, expired or already deleted one is `NotFound`, whatever the
+/// precondition says.
 pub(super) async fn delete(
     db: &PgPool,
     agent_id: Uuid,
     store: Store,
     name: &str,
     precondition: Precondition,
+    ttl_days: i32,
 ) -> Result<DeleteOutcome, sqlx::Error> {
     let mut tx = begin_locked(db, agent_id, store, name).await?;
-    let Some(current_version) = live_version(&mut tx, store, agent_id, name).await? else {
+    let current_version = entry_versions(&mut tx, store, agent_id, name)
+        .await?
+        .current;
+    if current_version == 0 {
         tx.rollback().await?;
         return Ok(DeleteOutcome::NotFound);
-    };
+    }
     if !precondition.holds_for(current_version) {
         tx.rollback().await?;
         return Ok(DeleteOutcome::VersionConflict { current_version });
     }
-    sqlx::query(store.delete_sql())
+    sqlx::query(&store.tombstone_sql())
         .bind(agent_id)
         .bind(name)
+        .bind(ttl_days)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -415,23 +472,44 @@ async fn begin_locked(
     Ok(tx)
 }
 
-/// Version of the entry's live row, or `None` when it is absent or has expired.
-async fn live_version(
+async fn entry_versions(
     conn: &mut PgConnection,
     store: Store,
     agent_id: Uuid,
     name: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar(store.live_version_sql())
+) -> Result<EntryVersions, sqlx::Error> {
+    let row = sqlx::query_as(&store.versions_sql())
         .bind(agent_id)
         .bind(name)
         .fetch_optional(conn)
-        .await
+        .await?;
+    Ok(EntryVersions::from_row(row))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_entry_never_written_starts_at_version_one() {
+        let versions = EntryVersions::from_row(None);
+        assert_eq!(versions.current, 0);
+        assert_eq!(versions.next(), 1);
+    }
+
+    #[test]
+    fn a_live_row_is_current_and_the_next_write_follows_it() {
+        let versions = EntryVersions::from_row(Some((4, true)));
+        assert_eq!(versions.current, 4);
+        assert_eq!(versions.next(), 5);
+    }
+
+    #[test]
+    fn a_tombstone_or_expired_row_is_absent_but_its_version_carries_on() {
+        let versions = EntryVersions::from_row(Some((4, false)));
+        assert_eq!(versions.current, 0, "a precondition sees no row");
+        assert_eq!(versions.next(), 5, "the next write does not restart at 1");
+    }
 
     #[test]
     fn a_full_page_with_a_probe_row_reports_more_and_drops_the_probe() {

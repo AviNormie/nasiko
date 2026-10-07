@@ -214,6 +214,16 @@ async fn expire_kv(server: &TestServer, agent: &Agent, key: &str) {
     .unwrap();
 }
 
+/// Rows that hold state, leaving out tombstones.
+async fn count_live_rows(server: &TestServer, table: &str) -> i64 {
+    sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM {table} WHERE deleted_at IS NULL"
+    ))
+    .fetch_one(&server.db)
+    .await
+    .unwrap()
+}
+
 async fn count_rows(server: &TestServer, table: &str) -> i64 {
     sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
         .fetch_one(&server.db)
@@ -1631,26 +1641,150 @@ async fn an_expired_row_reads_as_absent_everywhere_before_it_is_swept() {
     server.cleanup().await;
 }
 
+/// The scenario versions exist to rule out: a writer holding version 1 of an entry that has since
+/// been deleted and created again must not find its stale `If-Match: 1` matching the new row.
 #[tokio::test]
 #[serial]
-async fn writing_over_an_expired_row_starts_it_again_at_version_one() {
+async fn a_stale_if_match_cannot_match_an_entry_deleted_and_created_again() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "aba-agent").await;
+
+    let first: Value = put_task(&server, &agent, "t", json!("first"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["version"], 1);
+    assert_eq!(delete_task(&server, &agent, "t").await.status(), 204);
+    expect_error(get_task(&server, &agent, "t").await, 404, "not_found").await;
+    expect_error(delete_task(&server, &agent, "t").await, 404, "not_found").await;
+
+    // Recreated, "only if absent", it continues the version rather than restarting at 1.
+    let recreated = put_task_if_match(&server, &agent, "t", "0", json!("second"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(recreated.status(), 200);
+    assert_eq!(recreated.json::<Value>().await.unwrap()["version"], 2);
+
+    // The writer still holding version 1 is refused, and the new row is untouched.
+    let stale = put_task_if_match(&server, &agent, "t", "1", json!("stale"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        expect_error(stale, 412, "version_conflict").await["current_version"],
+        2
+    );
+    let read: Value = get_task(&server, &agent, "t").await.json().await.unwrap();
+    assert_eq!(read["body"], "second");
+
+    // The same for a key-value entry.
+    put_kv(&server, &agent, "k", json!("first")).await;
+    assert_eq!(delete_kv(&server, &agent, "k").await.status(), 204);
+    let recreated: Value = put_kv(&server, &agent, "k", json!("second"))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recreated["version"], 2);
+    let stale = put_kv_if_match(&server, &agent, "k", "1", json!("stale"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        expect_error(stale, 412, "version_conflict").await["current_version"],
+        2
+    );
+
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_delete_keeps_the_version_in_a_tombstone_and_nothing_else() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "tombstone-agent").await;
+    put_task_in(
+        &server,
+        &agent,
+        "t",
+        Some("ctx"),
+        "working",
+        json!("secret"),
+    )
+    .await;
+    put_task_in(
+        &server,
+        &agent,
+        "t",
+        Some("ctx"),
+        "completed",
+        json!("secret"),
+    )
+    .await;
+    assert_eq!(delete_task(&server, &agent, "t").await.status(), 204);
+
+    let (version, body, context_id, deleted): (i64, Option<String>, Option<String>, bool) =
+        sqlx::query_as(
+            "SELECT version, body, context_id, deleted_at IS NOT NULL FROM agent_tasks
+             WHERE agent_id = $1 AND task_id = 't'",
+        )
+        .bind(agent.id)
+        .fetch_one(&server.db)
+        .await
+        .unwrap();
+    assert_eq!((version, body, context_id, deleted), (2, None, None, true));
+    assert!(names(&list(&server, &agent, "/tasks").await, "task_id").is_empty());
+    assert!(
+        names(
+            &list(&server, &agent, "/tasks?context_id=ctx").await,
+            "task_id"
+        )
+        .is_empty()
+    );
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn an_expired_entry_continues_its_version_before_and_after_the_sweep() {
     let server = TestServer::start().await;
     let agent = new_agent(&server, "revive-agent").await;
     for _ in 0..3 {
-        put_task(&server, &agent, "t", json!("old")).await;
-        put_kv(&server, &agent, "k", json!("old")).await;
+        for id in ["unswept", "swept"] {
+            put_task(&server, &agent, id, json!("old")).await;
+            put_kv(&server, &agent, id, json!("old")).await;
+        }
     }
-    for table in ["agent_tasks", "agent_kv"] {
-        sqlx::query(&format!(
-            "UPDATE {table} SET expires_at = now() - interval '1 hour', created_at = now() - interval '30 days'"
-        ))
-        .execute(&server.db)
-        .await
-        .unwrap();
-    }
+    let expire_all = |id: &'static str| {
+        let db = server.db.clone();
+        async move {
+            for table in ["agent_tasks", "agent_kv"] {
+                let name = if table == "agent_tasks" {
+                    "task_id"
+                } else {
+                    "key"
+                };
+                sqlx::query(&format!(
+                    "UPDATE {table} SET expires_at = now() - interval '1 hour', \
+                     created_at = now() - interval '30 days' WHERE {name} = $1"
+                ))
+                .bind(id)
+                .execute(&db)
+                .await
+                .unwrap();
+            }
+        }
+    };
+    // `swept` is emptied into a tombstone by the sweeper; `unswept` expires only afterwards, so
+    // the next write finds it still as it was.
+    expire_all("swept").await;
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), expired(1, 1));
+    expire_all("unswept").await;
 
     // The row is gone as far as the API is concerned, so a precondition on it sees version 0.
-    let phantom = put_task_if_match(&server, &agent, "t", "3", json!("x"))
+    let phantom = put_task_if_match(&server, &agent, "unswept", "3", json!("x"))
         .send()
         .await
         .unwrap();
@@ -1659,33 +1793,66 @@ async fn writing_over_an_expired_row_starts_it_again_at_version_one() {
         0
     );
 
-    let revived: Value = put_task(&server, &agent, "t", json!("new"))
-        .await
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(revived["version"], 1);
-    let revived: Value = put_kv(&server, &agent, "k", json!("new"))
-        .await
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(revived["version"], 1);
+    for id in ["unswept", "swept"] {
+        let revived: Value = put_task(&server, &agent, id, json!("new"))
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(revived["version"], 4, "task {id}");
+        let revived: Value = put_kv(&server, &agent, id, json!("new"))
+            .await
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(revived["version"], 4, "key {id}");
+    }
 
     // A revived row is a new row: its creation time restarts.
-    for (table, column) in [("agent_tasks", "task_id"), ("agent_kv", "key")] {
-        let recent: bool = sqlx::query_scalar(&format!(
-            "SELECT created_at > now() - interval '1 minute' FROM {table} WHERE {column} IN ('t', 'k')"
+    for table in ["agent_tasks", "agent_kv"] {
+        let restarted: bool = sqlx::query_scalar(&format!(
+            "SELECT bool_and(created_at > now() - interval '1 minute') FROM {table}"
         ))
         .fetch_one(&server.db)
         .await
         .unwrap();
         assert!(
-            recent,
+            restarted,
             "{table}.created_at must restart when an expired row is revived"
         );
     }
 
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_tombstone_is_kept_for_a_ttl_and_then_forgotten() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "forgetful-agent").await;
+    put_task(&server, &agent, "t", json!(1)).await;
+    put_kv(&server, &agent, "k", json!(1)).await;
+    delete_task(&server, &agent, "t").await;
+    delete_kv(&server, &agent, "k").await;
+
+    // A fresh tombstone outlives a sweep: it is what keeps the version.
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), Swept::default());
+    let kept_for_the_ttl: bool = sqlx::query_scalar(
+        "SELECT expires_at > now() + interval '6 days' FROM agent_tasks WHERE task_id = 't'",
+    )
+    .fetch_one(&server.db)
+    .await
+    .unwrap();
+    assert!(
+        kept_for_the_ttl,
+        "a tombstone is kept for the configured TTL"
+    );
+
+    expire_task(&server, &agent, "t").await;
+    expire_kv(&server, &agent, "k").await;
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), forgotten(1, 1));
+    assert_eq!(count_rows(&server, "agent_tasks").await, 0);
+    assert_eq!(count_rows(&server, "agent_kv").await, 0);
     server.cleanup().await;
 }
 
@@ -1722,10 +1889,21 @@ async fn rewriting_a_live_row_keeps_its_creation_time() {
 
 use nasiko_server::agent_state::sweeper::{StoreCounts, Swept, sweep};
 
+/// The TTL the test server runs with, which is also how long the sweeper keeps a tombstone.
+const TTL_DAYS: i32 = 7;
+
 /// A pass that removed only expired rows.
 fn expired(tasks: u64, kv: u64) -> Swept {
     Swept {
         expired: StoreCounts { tasks, kv },
+        ..Swept::default()
+    }
+}
+
+/// A pass that only forgot tombstones.
+fn forgotten(tasks: u64, kv: u64) -> Swept {
+    Swept {
+        forgotten: StoreCounts { tasks, kv },
         ..Swept::default()
     }
 }
@@ -1740,7 +1918,7 @@ fn orphaned(tasks: u64, kv: u64) -> Swept {
 
 #[tokio::test]
 #[serial]
-async fn the_sweeper_removes_expired_rows_of_every_agent_and_nothing_live() {
+async fn the_sweeper_empties_expired_rows_of_every_agent_and_nothing_live() {
     let server = TestServer::start().await;
     let alice = new_agent(&server, "sweep-alice").await;
     let bob = new_agent(&server, "sweep-bob").await;
@@ -1753,17 +1931,27 @@ async fn the_sweeper_removes_expired_rows_of_every_agent_and_nothing_live() {
         expire_kv(&server, agent, "expired").await;
     }
 
-    let swept = sweep(&server.db).await.unwrap();
+    let swept = sweep(&server.db, TTL_DAYS).await.unwrap();
     assert_eq!(swept, expired(2, 2));
 
     for agent in [&alice, &bob] {
         assert_eq!(get_task(&server, agent, "live").await.status(), 200);
         assert_eq!(get_kv(&server, agent, "live").await.status(), 200);
     }
-    assert_eq!(count_rows(&server, "agent_tasks").await, 2);
-    assert_eq!(count_rows(&server, "agent_kv").await, 2);
+    assert_eq!(count_live_rows(&server, "agent_tasks").await, 2);
+    assert_eq!(count_live_rows(&server, "agent_kv").await, 2);
+    // What expired is kept only as a tombstone: its version, none of its content.
+    let emptied: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agent_tasks
+         WHERE task_id = 'expired' AND deleted_at IS NOT NULL AND body IS NULL
+           AND context_id IS NULL AND version = 1",
+    )
+    .fetch_one(&server.db)
+    .await
+    .unwrap();
+    assert_eq!(emptied, 2);
     assert_eq!(
-        sweep(&server.db).await.unwrap(),
+        sweep(&server.db, TTL_DAYS).await.unwrap(),
         Swept::default(),
         "nothing is left to sweep"
     );
@@ -1798,8 +1986,24 @@ async fn the_sweeper_keeps_going_past_one_batch() {
     put_task(&server, &agent, "live", json!(1)).await;
     put_kv(&server, &agent, "live", json!(1)).await;
 
-    let swept = sweep(&server.db).await.unwrap();
+    let swept = sweep(&server.db, TTL_DAYS).await.unwrap();
     assert_eq!(swept, expired(2300, 1200));
+    assert_eq!(count_live_rows(&server, "agent_tasks").await, 1);
+    assert_eq!(count_live_rows(&server, "agent_kv").await, 1);
+
+    // Once those tombstones' own expiry passes, they are forgotten, again past one batch.
+    for table in ["agent_tasks", "agent_kv"] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET expires_at = now() - interval '1 second' WHERE deleted_at IS NOT NULL"
+        ))
+        .execute(&server.db)
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        sweep(&server.db, TTL_DAYS).await.unwrap(),
+        forgotten(2300, 1200)
+    );
     assert_eq!(count_rows(&server, "agent_tasks").await, 1);
     assert_eq!(count_rows(&server, "agent_kv").await, 1);
 
@@ -1825,17 +2029,17 @@ async fn the_sweeper_leaves_rows_a_writer_holds_instead_of_waiting_for_them() {
         .unwrap();
 
     // The pass must come back, not queue behind the writer, and take only what is free.
-    let swept = tokio::time::timeout(Duration::from_secs(10), sweep(&server.db))
+    let swept = tokio::time::timeout(Duration::from_secs(10), sweep(&server.db, TTL_DAYS))
         .await
         .expect("the sweeper must not wait on a row another transaction holds")
         .unwrap();
     assert_eq!(swept, expired(1, 0));
-    assert_eq!(count_rows(&server, "agent_tasks").await, 1);
+    assert_eq!(count_live_rows(&server, "agent_tasks").await, 1);
 
     // Once the writer lets go, the next pass collects it.
     writer.rollback().await.unwrap();
-    assert_eq!(sweep(&server.db).await.unwrap(), expired(1, 0));
-    assert_eq!(count_rows(&server, "agent_tasks").await, 0);
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), expired(1, 0));
+    assert_eq!(count_live_rows(&server, "agent_tasks").await, 0);
 
     peer.close().await;
     server.cleanup().await;
@@ -2100,11 +2304,11 @@ async fn a_soft_deleted_agent_loses_access_to_its_state_and_the_sweeper_removes_
     .await;
 
     // Nothing has expired, yet the deleted agent's rows go, and only its rows.
-    assert_eq!(sweep(&server.db).await.unwrap(), orphaned(1, 1));
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), orphaned(1, 1));
     assert_eq!(count_rows(&server, "agent_tasks").await, 1);
     assert_eq!(count_rows(&server, "agent_kv").await, 1);
     assert_eq!(get_task(&server, &bystander, "t").await.status(), 200);
-    assert_eq!(sweep(&server.db).await.unwrap(), Swept::default());
+    assert_eq!(sweep(&server.db, TTL_DAYS).await.unwrap(), Swept::default());
 
     server.cleanup().await;
 }
@@ -2129,7 +2333,10 @@ async fn the_sweeper_removes_a_deleted_agents_rows_past_one_batch() {
         .await
         .unwrap();
 
-    assert_eq!(sweep(&server.db).await.unwrap(), orphaned(1500, 0));
+    assert_eq!(
+        sweep(&server.db, TTL_DAYS).await.unwrap(),
+        orphaned(1500, 0)
+    );
     assert_eq!(count_rows(&server, "agent_tasks").await, 0);
     server.cleanup().await;
 }
