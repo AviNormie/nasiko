@@ -6,7 +6,14 @@ import httpx
 import pytest
 from a2a.server.tasks import InMemoryTaskStore
 from fake_state_server import BASE_URL, TOKEN
-from nasiko_state import NasikoStateError, NasikoTaskStore, make_task_store
+from langgraph.checkpoint.memory import MemorySaver
+from nasiko_state import (
+    NasikoCheckpointSaver,
+    NasikoStateError,
+    NasikoTaskStore,
+    make_checkpointer,
+    make_task_store,
+)
 from sdk_compat import call_context, new_task
 
 pytestmark = pytest.mark.anyio
@@ -63,3 +70,20 @@ class TestWithTheStateApi:
 
         with pytest.raises(NasikoStateError, match="credential"):
             make_task_store()
+
+
+class TestCheckpointerFactory:
+    def test_without_the_state_api_it_is_langgraphs_memory_saver(self, no_network):
+        assert type(make_checkpointer()) is MemorySaver
+
+    def test_with_the_state_api_it_is_the_durable_saver(self, monkeypatch, no_network):
+        monkeypatch.setenv("NASIKO_STATE_URL", BASE_URL)
+        monkeypatch.setenv("NASIKO_AGENT_TOKEN", TOKEN)
+
+        assert isinstance(make_checkpointer(), NasikoCheckpointSaver)
+
+    def test_a_url_without_a_credential_fails_at_startup(self, monkeypatch):
+        monkeypatch.setenv("NASIKO_STATE_URL", BASE_URL)
+
+        with pytest.raises(NasikoStateError, match="credential"):
+            make_checkpointer()

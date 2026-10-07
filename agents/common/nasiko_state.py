@@ -37,13 +37,14 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import base64
 import json
 import logging
 import os
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from typing import Any, Callable, Generic, TypeVar
 from urllib.parse import quote, urlsplit
@@ -56,6 +57,20 @@ try:
     from a2a.types import a2a_pb2 as _a2a_pb2  # a2a-sdk 1.x: tasks are protobuf messages
 except ImportError:
     _a2a_pb2 = None  # a2a-sdk 0.3.x: tasks are pydantic models
+
+try:
+    from langgraph.checkpoint.base import (
+        WRITES_IDX_MAP,
+        BaseCheckpointSaver,
+        CheckpointTuple,
+        get_checkpoint_metadata,
+    )
+
+    _LANGGRAPH_AVAILABLE = True
+except ImportError:
+    # langgraph is optional: only agents that checkpoint with it need the package.
+    BaseCheckpointSaver = object  # type: ignore[assignment,misc]
+    _LANGGRAPH_AVAILABLE = False
 
 logger = logging.getLogger("nasiko_state")
 
@@ -188,8 +203,11 @@ class _Operation:
         return kwargs
 
 
-def _segment(value: str) -> str:
-    """Percent-encode one path segment, so ids containing '/' or ':' stay one segment."""
+def _percent_encode(value: str) -> str:
+    """Escape everything but unreserved characters, so '/', ':' and '%' in an id stay inert.
+
+    Used for URL path segments and for the components of composite keys alike.
+    """
     return quote(value, safe="")
 
 
@@ -245,7 +263,7 @@ def _register_op(capabilities: Sequence[str], client_name: str) -> _Operation:
 def _put_task_op(task_id: str, context_id: str | None, state: str, body: Any, if_match: int | None) -> _Operation:
     return _Operation(
         "PUT",
-        f"/tasks/{_segment(task_id)}",
+        f"/tasks/{_percent_encode(task_id)}",
         parse=_record_parser(WriteReceipt),
         json={"context_id": context_id, "state": state, "body": body},
         if_match=if_match,
@@ -255,14 +273,14 @@ def _put_task_op(task_id: str, context_id: str | None, state: str, body: Any, if
 
 def _get_task_op(task_id: str) -> _Operation:
     return _Operation(
-        "GET", f"/tasks/{_segment(task_id)}", parse=_record_parser(TaskRecord), when_missing=None
+        "GET", f"/tasks/{_percent_encode(task_id)}", parse=_record_parser(TaskRecord), when_missing=None
     )
 
 
 def _delete_task_op(task_id: str, if_match: int | None) -> _Operation:
     return _Operation(
         "DELETE",
-        f"/tasks/{_segment(task_id)}",
+        f"/tasks/{_percent_encode(task_id)}",
         parse=lambda response: True,
         ok_status=204,
         if_match=if_match,
@@ -283,7 +301,7 @@ def _list_tasks_op(context_id: str | None, state: str | None, limit: int | None,
 def _put_kv_op(key: str, value: Any, if_match: int | None) -> _Operation:
     return _Operation(
         "PUT",
-        f"/kv/{_segment(key)}",
+        f"/kv/{_percent_encode(key)}",
         parse=_record_parser(WriteReceipt),
         json={"value": value},
         if_match=if_match,
@@ -292,13 +310,13 @@ def _put_kv_op(key: str, value: Any, if_match: int | None) -> _Operation:
 
 
 def _get_kv_op(key: str) -> _Operation:
-    return _Operation("GET", f"/kv/{_segment(key)}", parse=_record_parser(KVRecord), when_missing=None)
+    return _Operation("GET", f"/kv/{_percent_encode(key)}", parse=_record_parser(KVRecord), when_missing=None)
 
 
 def _delete_kv_op(key: str, if_match: int | None) -> _Operation:
     return _Operation(
         "DELETE",
-        f"/kv/{_segment(key)}",
+        f"/kv/{_percent_encode(key)}",
         parse=lambda response: True,
         ok_status=204,
         if_match=if_match,
@@ -910,3 +928,376 @@ def make_task_store() -> TaskStore:
         return InMemoryTaskStore()
     logger.info("task state is kept in the platform state API: %r", client)
     return NasikoTaskStore(client)
+
+
+# --- key-value ----------------------------------------------------------------------------------
+
+
+class NasikoKV:
+    """Key-value access to the platform's state API, scoped to this agent. Values are opaque JSON.
+
+    ``list`` follows the server's cursors, so callers see every key under a prefix. Like the client
+    it wraps, each operation has a sync form and an ``a``-prefixed async form.
+    """
+
+    def __init__(self, client: NasikoStateClient) -> None:
+        self._client = client
+
+    def get(self, key: str) -> KVRecord | None:
+        return self._client.get_kv(key)
+
+    async def aget(self, key: str) -> KVRecord | None:
+        return await self._client.aget_kv(key)
+
+    def put(self, key: str, value: Any, *, if_match: int | None = None) -> WriteReceipt:
+        return self._client.put_kv(key, value, if_match=if_match)
+
+    async def aput(self, key: str, value: Any, *, if_match: int | None = None) -> WriteReceipt:
+        return await self._client.aput_kv(key, value, if_match=if_match)
+
+    def delete(self, key: str, *, if_match: int | None = None) -> bool:
+        """Delete a key. False means there was no such key."""
+        return self._client.delete_kv(key, if_match=if_match)
+
+    async def adelete(self, key: str, *, if_match: int | None = None) -> bool:
+        return await self._client.adelete_kv(key, if_match=if_match)
+
+    def list(self, prefix: str = "") -> Iterator[KVRecord]:
+        """Every record whose key starts with ``prefix``, in the server's order."""
+        cursor: str | None = None
+        while True:
+            page = self._client.list_kv(prefix=prefix or None, limit=MAX_PAGE_SIZE, cursor=cursor)
+            yield from page.items
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+    async def alist(self, prefix: str = "") -> AsyncIterator[KVRecord]:
+        cursor: str | None = None
+        while True:
+            page = await self._client.alist_kv(prefix=prefix or None, limit=MAX_PAGE_SIZE, cursor=cursor)
+            for record in page.items:
+                yield record
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+
+# --- langgraph checkpointer ---------------------------------------------------------------------
+
+CHECKPOINT_FAMILY = "lg"
+HEAD_FAMILY = "lgh"
+WRITES_FAMILY = "lgw"
+
+
+def _key(family: str, *parts: str) -> str:
+    return ":".join([family, *(_percent_encode(part) for part in parts)])
+
+
+def _prefix(family: str, *parts: str) -> str:
+    """Prefix matching every key of `family` that starts with these leading components."""
+    return _key(family, *parts) + ":"
+
+
+def _thread_and_namespace(config: Mapping[str, Any]) -> tuple[str, str]:
+    configurable = config["configurable"]
+    return configurable["thread_id"], configurable.get("checkpoint_ns", "")
+
+
+def _scope(config: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """The leading key components a listing is narrowed to: nothing, a thread, or a thread and namespace."""
+    if not config:
+        return ()
+    configurable = config["configurable"]
+    if configurable.get("checkpoint_ns") is None:
+        return (configurable["thread_id"],)
+    return (configurable["thread_id"], configurable["checkpoint_ns"])
+
+
+@dataclass(frozen=True)
+class _PlannedWrite:
+    key: str
+    record: dict[str, Any]
+    # Regular writes keep the first writer's value; writes to special channels are upserts.
+    insert_only: bool
+
+
+class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
+    """A langgraph checkpointer that keeps checkpoints in the platform's key-value state.
+
+    It implements the sync methods (``graph.stream`` and ``graph.invoke``) and their async twins
+    (``astream``, ``ainvoke``). The optional ``copy_thread``, ``prune`` and ``delete_for_runs``
+    are left to the base class, which refuses them.
+
+    Layout. Every component is percent-encoded, so ':' only ever separates components, and every
+    langgraph object is written by the saver's own serde and carried as a base64 string in a JSON
+    record. Pickle is never written or read.
+
+      lg:{thread}:{ns}:{checkpoint}  the whole checkpoint with its metadata and parent id. Values
+                                     are stored in full rather than shared between checkpoints, so
+                                     one record answers one get_tuple.
+      lgh:{thread}:{ns}              the id of the newest checkpoint. The key-value API has no
+                                     "latest" query, and scanning every checkpoint to find the
+                                     newest would cost a call per hundred of them.
+      lgw:{thread}:{ns}:{checkpoint}:{task}:{idx}
+                                     the writes one task made against a checkpoint. All regular
+                                     writes of one put_writes call share one record, keyed by the
+                                     first one's index, so a crash cannot leave a task with only
+                                     some of its writes; each write to a special channel (error,
+                                     interrupt, resume, scheduled) has its own record at its
+                                     negative index.
+
+    A checkpoint is written before the head that points at it, so a crash can only leave the head
+    one checkpoint behind, which resumes cleanly: that step's tasks have their writes saved and are
+    not run again. State expires with the platform's retention, counted from the last write.
+    """
+
+    def __init__(self, kv: NasikoKV, *, serde: Any = None) -> None:
+        if not _LANGGRAPH_AVAILABLE:
+            raise ImportError("NasikoCheckpointSaver needs the langgraph-checkpoint package")
+        super().__init__(serde=serde)
+        self._kv = kv
+
+    # --- reading ---------------------------------------------------------------------------
+
+    def get_tuple(self, config: Any) -> Any:
+        thread_id, namespace = _thread_and_namespace(config)
+        checkpoint_id = config["configurable"].get("checkpoint_id")
+        if checkpoint_id is None:
+            head = self._kv.get(_key(HEAD_FAMILY, thread_id, namespace))
+            if head is None:
+                return None
+            checkpoint_id = head.value["checkpoint_id"]
+        record = self._kv.get(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
+        if record is None:
+            return None
+        prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
+        writes = [write.value for write in self._kv.list(prefix)]
+        explicit = config if config["configurable"].get("checkpoint_id") else None
+        return self._tuple(record.value, writes, config=explicit)
+
+    async def aget_tuple(self, config: Any) -> Any:
+        thread_id, namespace = _thread_and_namespace(config)
+        checkpoint_id = config["configurable"].get("checkpoint_id")
+        if checkpoint_id is None:
+            head = await self._kv.aget(_key(HEAD_FAMILY, thread_id, namespace))
+            if head is None:
+                return None
+            checkpoint_id = head.value["checkpoint_id"]
+        record = await self._kv.aget(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
+        if record is None:
+            return None
+        prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
+        writes = [write.value async for write in self._kv.alist(prefix)]
+        explicit = config if config["configurable"].get("checkpoint_id") else None
+        return self._tuple(record.value, writes, config=explicit)
+
+    def list(
+        self,
+        config: Any,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: Any = None,
+        limit: int | None = None,
+    ) -> Iterator[Any]:
+        scope = _scope(config)
+        checkpoints = [record.value for record in self._kv.list(_prefix(CHECKPOINT_FAMILY, *scope))]
+        selected = self._select(checkpoints, config, filter, before, limit)
+        writes = self._writes_by_checkpoint(list(self._kv.list(_prefix(WRITES_FAMILY, *scope))))
+        for record in selected:
+            yield self._tuple(record, writes.get(_checkpoint_identity(record), []))
+
+    async def alist(
+        self,
+        config: Any,
+        *,
+        filter: dict[str, Any] | None = None,
+        before: Any = None,
+        limit: int | None = None,
+    ) -> AsyncIterator[Any]:
+        scope = _scope(config)
+        checkpoints = [record.value async for record in self._kv.alist(_prefix(CHECKPOINT_FAMILY, *scope))]
+        selected = self._select(checkpoints, config, filter, before, limit)
+        write_records = [record async for record in self._kv.alist(_prefix(WRITES_FAMILY, *scope))]
+        writes = self._writes_by_checkpoint(write_records)
+        for record in selected:
+            yield self._tuple(record, writes.get(_checkpoint_identity(record), []))
+
+    # --- writing ---------------------------------------------------------------------------
+
+    def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
+        # new_versions is unused: langgraph needs it to share channel blobs between checkpoints,
+        # and this saver stores each checkpoint whole.
+        thread_id, namespace = _thread_and_namespace(config)
+        self._kv.put(
+            _key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]),
+            self._checkpoint_record(config, checkpoint, metadata),
+        )
+        self._kv.put(_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]})
+        return _checkpoint_config(thread_id, namespace, checkpoint["id"])
+
+    async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
+        thread_id, namespace = _thread_and_namespace(config)
+        await self._kv.aput(
+            _key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]),
+            self._checkpoint_record(config, checkpoint, metadata),
+        )
+        await self._kv.aput(_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]})
+        return _checkpoint_config(thread_id, namespace, checkpoint["id"])
+
+    def put_writes(self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = "") -> None:
+        for planned in self._plan_writes(config, writes, task_id, task_path):
+            if planned.insert_only and self._kv.get(planned.key) is not None:
+                continue
+            self._kv.put(planned.key, planned.record)
+
+    async def aput_writes(
+        self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
+    ) -> None:
+        for planned in self._plan_writes(config, writes, task_id, task_path):
+            if planned.insert_only and await self._kv.aget(planned.key) is not None:
+                continue
+            await self._kv.aput(planned.key, planned.record)
+
+    def delete_thread(self, thread_id: str) -> None:
+        # Heads first: a half-deleted thread then reads as empty rather than pointing at nothing.
+        for family in (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY):
+            for record in list(self._kv.list(_prefix(family, thread_id))):
+                self._kv.delete(record.key)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        for family in (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY):
+            records = [record async for record in self._kv.alist(_prefix(family, thread_id))]
+            for record in records:
+                await self._kv.adelete(record.key)
+
+    # --- records ---------------------------------------------------------------------------
+
+    def _encode(self, value: Any) -> dict[str, str]:
+        kind, data = self.serde.dumps_typed(value)
+        if kind == "pickle":
+            raise NasikoStateError("refusing to store a pickled value in the platform state")
+        return {"type": kind, "data": base64.b64encode(data).decode("ascii")}
+
+    def _decode(self, encoded: Mapping[str, str]) -> Any:
+        if encoded["type"] == "pickle":
+            raise NasikoStateError("refusing to load a pickled value from the platform state")
+        return self.serde.loads_typed((encoded["type"], base64.b64decode(encoded["data"])))
+
+    def _checkpoint_record(self, config: Any, checkpoint: Any, metadata: Any) -> dict[str, Any]:
+        thread_id, namespace = _thread_and_namespace(config)
+        return {
+            "thread_id": thread_id,
+            "checkpoint_ns": namespace,
+            "checkpoint_id": checkpoint["id"],
+            "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
+            "checkpoint": self._encode(checkpoint),
+            "metadata": self._encode(get_checkpoint_metadata(config, metadata)),
+        }
+
+    def _tuple(self, record: dict[str, Any], write_records: list[dict[str, Any]], *, config: Any = None) -> Any:
+        thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
+        parent_id = record["parent_checkpoint_id"]
+        return CheckpointTuple(
+            config=config or _checkpoint_config(thread_id, namespace, record["checkpoint_id"]),
+            checkpoint=self._decode(record["checkpoint"]),
+            metadata=self._decode(record["metadata"]),
+            parent_config=_checkpoint_config(thread_id, namespace, parent_id) if parent_id else None,
+            pending_writes=self._pending_writes(write_records),
+        )
+
+    def _pending_writes(self, write_records: list[dict[str, Any]]) -> list[tuple[str, str, Any]]:
+        """Flatten write records into langgraph's (task, channel, value), ordered by task then index."""
+        entries = []
+        for record in write_records:
+            for write in record["writes"]:
+                entries.append((record["task_id"], write["idx"], write["channel"], write["value"]))
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        return [(task_id, channel, self._decode(value)) for task_id, _, channel, value in entries]
+
+    def _plan_writes(
+        self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str
+    ) -> list[_PlannedWrite]:
+        thread_id, namespace = _thread_and_namespace(config)
+        checkpoint_id = config["configurable"]["checkpoint_id"]
+        regular: list[tuple[int, str, Any]] = []
+        special: dict[int, tuple[int, str, Any]] = {}
+        for position, (channel, value) in enumerate(writes):
+            if channel in WRITES_IDX_MAP:
+                special[WRITES_IDX_MAP[channel]] = (WRITES_IDX_MAP[channel], channel, value)
+            else:
+                regular.append((position, channel, value))
+
+        def planned(entries: list[tuple[int, str, Any]], *, insert_only: bool) -> _PlannedWrite:
+            record = {
+                "thread_id": thread_id,
+                "checkpoint_ns": namespace,
+                "checkpoint_id": checkpoint_id,
+                "task_id": task_id,
+                "task_path": task_path,
+                "writes": [
+                    {"idx": idx, "channel": channel, "value": self._encode(value)} for idx, channel, value in entries
+                ],
+            }
+            key = _key(WRITES_FAMILY, thread_id, namespace, checkpoint_id, task_id, str(entries[0][0]))
+            return _PlannedWrite(key, record, insert_only)
+
+        plan = [planned(regular, insert_only=True)] if regular else []
+        return plan + [planned([entry], insert_only=False) for entry in special.values()]
+
+    def _writes_by_checkpoint(
+        self, write_records: list[KVRecord]
+    ) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for item in write_records:
+            grouped.setdefault(_checkpoint_identity(item.value), []).append(item.value)
+        return grouped
+
+    def _select(
+        self,
+        records: list[dict[str, Any]],
+        config: Any,
+        filter: dict[str, Any] | None,
+        before: Any,
+        limit: int | None,
+    ) -> list[dict[str, Any]]:
+        """The checkpoints list() yields: newest first, narrowed by id, `before`, metadata and `limit`."""
+        wanted_id = config["configurable"].get("checkpoint_id") if config else None
+        before_id = before["configurable"].get("checkpoint_id") if before else None
+        selected = []
+        for record in sorted(records, key=lambda r: r["checkpoint_id"], reverse=True):
+            if wanted_id and record["checkpoint_id"] != wanted_id:
+                continue
+            if before_id and record["checkpoint_id"] >= before_id:
+                continue
+            if filter and not self._matches(record, filter):
+                continue
+            selected.append(record)
+        return selected if limit is None else selected[: max(limit, 0)]
+
+    def _matches(self, record: dict[str, Any], filter: dict[str, Any]) -> bool:
+        metadata = self._decode(record["metadata"])
+        return all(metadata.get(key) == value for key, value in filter.items())
+
+
+def _checkpoint_config(thread_id: str, namespace: str, checkpoint_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace, "checkpoint_id": checkpoint_id}}
+
+
+def _checkpoint_identity(record: Mapping[str, Any]) -> tuple[str, str, str]:
+    return record["thread_id"], record["checkpoint_ns"], record["checkpoint_id"]
+
+
+def make_checkpointer() -> Any:
+    """The checkpointer a langgraph agent compiles its graph with.
+
+    The platform's durable one when NASIKO_STATE_URL is set, otherwise langgraph's own
+    ``MemorySaver``, built exactly as an agent would build it by hand.
+    """
+    client = NasikoStateClient.from_env()
+    if client is None:
+        from langgraph.checkpoint.memory import MemorySaver
+
+        return MemorySaver()
+    logger.info("langgraph checkpoints are kept in the platform state API: %r", client)
+    return NasikoCheckpointSaver(NasikoKV(client))
