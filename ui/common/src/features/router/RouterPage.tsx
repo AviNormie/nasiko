@@ -14,6 +14,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { useOwnedAgents } from '@/features/agents/api'
 import { ErrorState } from '@/features/observability/StateCard'
 import { meQuery } from '@/lib/api/auth'
+import { siblingsAround } from '@/lib/siblings'
 import { cn } from '@/lib/utils'
 import { useAnnounce } from './announce'
 import {
@@ -125,6 +126,8 @@ function Page({
 
   const [editor, setEditor] = useState<EditorMode | null>(null)
   const [routingFor, setRoutingFor] = useState<string | null>(null)
+  // The agents table's order when the sheet opened from it, for the sheet's Previous/Next; [] from elsewhere.
+  const [routingOrder, setRoutingOrder] = useState<readonly string[]>([])
   const [customMode, setCustomMode] = useState<CustomMode | null>(null)
   const [deleting, setDeleting] = useState<LlmConfig | null>(null)
   const [updated, setUpdated] = useState<ReadonlyMap<string, number>>(new Map())
@@ -176,6 +179,7 @@ function Page({
     : rows
   const filterLabel = search.source ? copy.filterNames[search.source] : null
   const routingAgent = routingFor ? agentById.get(routingFor) : undefined
+  const routingStep = routingFor ? siblingsAround(routingOrder, routingFor) : null
   const attached = useMemo(
     () =>
       deleting
@@ -354,7 +358,10 @@ function Page({
                 total={rows.length}
                 spend={spend}
                 updated={updated}
-                onChange={(a) => setRoutingFor(a.id)}
+                onChange={(a, order) => {
+                  setRoutingFor(a.id)
+                  setRoutingOrder(order)
+                }}
                 onRetry={retry}
                 onShowConfig={(id) => goTo('configs', () => focusEl(`config-${id}`))}
                 filterLabel={filterLabel}
@@ -423,6 +430,17 @@ function Page({
               }
             : null
         }
+        step={
+          routingStep
+            ? {
+                index: routingStep.index,
+                count: routingStep.count,
+                prev: routingStep.prev,
+                next: routingStep.next,
+                go: setRoutingFor,
+              }
+            : undefined
+        }
         viewer={{ sub: me?.sub, superuser }}
         configs={configs.data}
         catalog={catalog.data}
@@ -450,7 +468,10 @@ function Page({
         reads={reads}
         attached={attached}
         onClose={() => setDeleting(null)}
-        onChangeRouting={(id) => setRoutingFor(id)}
+        onChangeRouting={(id) => {
+          setRoutingFor(id)
+          setRoutingOrder([])
+        }}
       />
     </div>
   )
