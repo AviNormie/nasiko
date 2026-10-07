@@ -21,9 +21,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
 import { ErrorState, StateCard } from '@/features/observability/StateCard'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
+import { useSiblings } from '@/lib/siblings'
 import {
   useAgentDetail,
   useAgentsDirectory,
@@ -66,6 +68,7 @@ function Redirect({ id, tab }: { id: string; tab?: string }) {
       to: '/agents/$agentId',
       params: { agentId: id },
       search: tab ? { tab } : {},
+      state: (s) => ({ siblings: s.siblings }),
       replace: true,
     })
   }, [id, tab, navigate])
@@ -112,6 +115,7 @@ function ResolveByName({ name, tab }: { name: string; tab?: string }) {
         to: '/agents/$agentId',
         params: { agentId: only },
         search: tab ? { tab } : {},
+        state: (s) => ({ siblings: s.siblings }),
         replace: true,
       })
   }, [only, tab, navigate])
@@ -178,7 +182,13 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   const badTab = !!agent && !!tab && current !== tab
   // An unknown or hidden tab falls back to Overview without a history entry.
   useEffect(() => {
-    if (badTab) void navigate({ to: '.', search: {}, replace: true })
+    if (badTab)
+      void navigate({
+        to: '.',
+        search: {},
+        state: (s) => ({ siblings: s.siblings }),
+        replace: true,
+      })
   }, [badTab, navigate])
 
   if (detail.isPending) return <PageLoader label={copy.loadingAgent} />
@@ -196,7 +206,13 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   const mine = agent.ownerId === me?.sub
   const ownerLabel = mine ? copy.you : (users.data?.get(agent.ownerId) ?? agent.ownerId.slice(0, 8))
   const setTab = (t: string) =>
-    void navigate({ to: '.', search: t === 'overview' ? {} : { tab: t }, replace: false })
+    void navigate({
+      to: '.',
+      search: t === 'overview' ? {} : { tab: t },
+      // Keep the list Previous/Next walks.
+      state: (s) => ({ siblings: s.siblings }),
+      replace: false,
+    })
   const hasErrors = !!errors.data?.length
   const labels: Record<DetailTab, string> = {
     overview: copy.tabOverview,
@@ -347,6 +363,7 @@ function Header({
         }
         actions={
           <div className="flex items-start gap-2">
+            <AgentSiblings id={agent.id} />
             <TryItLink
               id={agent.id}
               name={agent.displayName}
@@ -407,5 +424,32 @@ function Header({
       />
       <DeleteAgentDialog agent={agent} open={delOpen} onOpenChange={setDelOpen} />
     </div>
+  )
+}
+
+/** Previous/Next through the list this agent was opened from (lib/siblings.ts); nothing on a deep link. */
+function AgentSiblings({ id }: { id: string }) {
+  const navigate = useNavigate()
+  const around = useSiblings(id)
+  if (!around) return null
+  // Replace: Back still returns to the list. The tab carries over; one the next agent lacks falls back to Overview.
+  const go = (agentId: string | undefined) => {
+    if (agentId)
+      void navigate({
+        to: '/agents/$agentId',
+        params: { agentId },
+        search: true,
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="agent"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+    />
   )
 }

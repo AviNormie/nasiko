@@ -3,7 +3,7 @@
  * components/shared/copy-button), error note, first-run steps, monogram, "Learn more" link,
  * and `Section` (the shared `Panel`, named by its heading).
  */
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { ChevronRight, ExternalLink, MessagesSquare, RotateCw } from 'lucide-react'
 import { useId, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -207,16 +207,20 @@ export function AgentLinkTo({
   id,
   children,
   className,
+  state,
 }: {
   id: string
   children: ReactNode
   className?: string
+  /** A list's `useSiblingState`, for Previous/Next on the agent page. */
+  state?: () => HistoryState
 }) {
   return (
     <Link
       to="/agents/$agentId"
       params={{ agentId: id }}
       search={{}}
+      state={state}
       className={cn('underline-offset-4 hover:underline', className)}
     >
       {children}

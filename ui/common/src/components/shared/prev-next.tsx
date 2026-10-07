@@ -46,6 +46,7 @@ export function PrevNext({
   useEffect(() => {
     const { which, el, at } = refocus
     refocus.which = undefined
+    refocus.el = undefined
     const fell = !document.activeElement || document.activeElement === document.body
     if (which && fell && !el?.isConnected && Date.now() - at < 10_000)
       (which === 'prev' ? prevButton : nextButton).current?.focus()
