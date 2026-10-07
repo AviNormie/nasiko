@@ -1,7 +1,8 @@
 /** An open chat's header (§7.3, §6.10): identity, title (inline rename), totals, View session and the ⋯ menu. */
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { Activity, MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { PrevNext } from '@/components/shared/prev-next'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -14,10 +15,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ApiError } from '@/lib/api/client'
+import { siblingsAround } from '@/lib/siblings'
 import { useRenameChat } from '../api'
 import { copy } from '../copy'
 import { announce } from '../announce'
 import { fmtCostPerOp, fmtTokens } from '@/lib/format'
+import { useRailOrder } from '../railOrder'
 import { chatTotals } from '../format'
 import type { ChatIdentity } from '../identity'
 import type { ChatMessage, ChatSessionRow } from '../types'
@@ -87,6 +90,7 @@ export function SessionHeader({
           <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          <ChatSiblings sessionId={sessionId} />
           <HeaderTotals replies={replies} partial={partial} className="hidden @min-[560px]:flex" />
           <Button
             asChild
@@ -170,6 +174,30 @@ export function SessionHeader({
         </div>
       </div>
     </header>
+  )
+}
+
+/**
+ * Previous/Next through the rail's chats as shown (railOrder.ts). Pushes, like a rail click; dev aids carry over.
+ * Below 480 px of pane width the buttons hide (the rail is the way there), but J/K still work: PrevNext stays mounted.
+ */
+function ChatSiblings({ sessionId }: { sessionId: string }) {
+  const navigate = useNavigate()
+  const ids = useRailOrder((s) => s.ids)
+  const around = siblingsAround(ids, sessionId)
+  if (!around) return null
+  const go = (id: string | undefined) => {
+    if (id) void navigate({ to: '/chat/$sessionId', params: { sessionId: id }, search: true })
+  }
+  return (
+    <PrevNext
+      noun="chat"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+      className="hidden @min-[480px]:flex"
+    />
   )
 }
 
