@@ -120,6 +120,7 @@ pub async fn seed(
             writable_path: None,
             owner_id,
             force_pull: false,
+            health_path: None,
         };
         runtime
             .deploy(&spec)

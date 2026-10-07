@@ -673,6 +673,7 @@ fn build_mcp_server_spec(
         writable_path: None,
         owner_id: Uuid::nil(),
         force_pull: false,
+        health_path: None,
     }
 }
 

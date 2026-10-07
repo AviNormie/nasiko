@@ -2124,6 +2124,7 @@ mod hardening_tests {
             writable_path: None,
             owner_id: uuid::Uuid::nil(),
             force_pull: false,
+            health_path: None,
         }
     }
 
@@ -2179,6 +2180,7 @@ mod writable_tests {
             writable_path: None,
             owner_id: TEST_OWNER,
             force_pull: false,
+            health_path: None,
         }
     }
 

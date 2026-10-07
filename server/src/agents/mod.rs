@@ -233,6 +233,7 @@ pub(crate) fn build_agent_spec(
         writable_path,
         owner_id,
         force_pull: false,
+        health_path: None,
     }
 }
 
