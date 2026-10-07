@@ -1,10 +1,12 @@
 //! Reclaims the storage of agent state no one can read any more.
 //!
-//! Two kinds of row qualify. An expired row already reads as absent (the repository filters on
-//! `expires_at`), so removing it changes no answer. A row of a deleted agent is unreachable too:
+//! Three passes, per store. An expired live row already reads as absent (the repository filters
+//! on `expires_at`), so emptying it into a tombstone changes no answer; the tombstone keeps its
+//! version for one more TTL so the entry's next write continues from it (`repo`). A tombstone
+//! whose own expiry has passed is then forgotten. A row of a deleted agent is unreachable too:
 //! the catalog's delete is a soft delete (`agents.deleted_at`), which never fires the foreign
-//! key's cascade, and the agent's credential stops authenticating the moment it is set. Without
-//! this pass such rows would linger until they expired.
+//! key's cascade, and the agent's credential stops authenticating the moment it is set, so its
+//! rows, tombstones included, are removed outright.
 //!
 //! Every server process runs one sweeper and they do not coordinate: each statement locks the
 //! rows it removes with `SKIP LOCKED`, so a row that a peer sweeper or a writer holds is left for
@@ -23,7 +25,7 @@ pub const SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// Rows removed per statement, so no single statement holds locks on an unbounded number of rows.
 const BATCH_SIZE: i64 = 1000;
 
-/// Rows one pass removed from each store.
+/// Rows one pass dealt with in each store.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct StoreCounts {
     pub tasks: u64,
@@ -39,28 +41,31 @@ impl StoreCounts {
     }
 }
 
-/// What one [`sweep`] pass removed.
+/// What one [`sweep`] pass did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Swept {
-    /// Rows whose `expires_at` had passed.
+    /// Live rows whose `expires_at` had passed, emptied into tombstones.
     pub expired: StoreCounts,
-    /// Rows of agents that have been deleted, whatever their expiry.
+    /// Tombstones whose own `expires_at` had passed, removed.
+    pub forgotten: StoreCounts,
+    /// Rows of agents that have been deleted, whatever their expiry, removed.
     pub orphaned: StoreCounts,
 }
 
-/// Background loop: sweep once per [`SWEEP_INTERVAL`], forever.
+/// Background loop: sweep once per [`SWEEP_INTERVAL`], forever. `ttl_days` is how long a
+/// tombstone made from an expired row is kept (`AGENT_STATE_TTL_DAYS`).
 ///
 /// Spawned from `AppState::from_config_with_db` like the server's other periodic workers; it
 /// never exits on its own and stops when the runtime is dropped. A failed pass is logged and
 /// retried at the next tick.
-pub async fn run(db: PgPool) {
+pub async fn run(db: PgPool, ttl_days: i32) {
     let mut tick = tokio::time::interval(SWEEP_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     // The first tick fires at once; nothing is worth sweeping at boot, as for the other workers.
     tick.tick().await;
     loop {
         tick.tick().await;
-        match sweep(&db).await {
+        match sweep(&db, ttl_days).await {
             Ok(swept) if swept == Swept::default() => {
                 tracing::debug!("agent state sweep: nothing to reclaim");
             }
@@ -72,28 +77,49 @@ pub async fn run(db: PgPool) {
     }
 }
 
-/// Removes every expired row, and every row of a deleted agent, that no one else is holding, a
-/// batch at a time.
-pub async fn sweep(db: &PgPool) -> Result<Swept, sqlx::Error> {
+/// One pass over both stores, of every row no one else is holding, a batch at a time: empties
+/// expired rows into tombstones kept for `ttl_days`, forgets expired tombstones, and removes the
+/// rows of deleted agents.
+pub async fn sweep(db: &PgPool, ttl_days: i32) -> Result<Swept, sqlx::Error> {
     let mut swept = Swept::default();
     for store in Store::ALL {
-        swept
-            .expired
-            .record(store, drain(db, &delete_expired_sql(store)).await?);
-        swept
-            .orphaned
-            .record(store, drain(db, &delete_orphaned_sql(store)).await?);
+        let expired = drain(db, &tombstone_expired_sql(store, ttl_days)).await?;
+        swept.expired.record(store, expired);
+        // A tombstone made just now expires one TTL from now, so this pass never forgets it.
+        let forgotten = drain(db, &delete_expired_tombstones_sql(store)).await?;
+        swept.forgotten.record(store, forgotten);
+        let orphaned = drain(db, &delete_orphaned_sql(store)).await?;
+        swept.orphaned.record(store, orphaned);
     }
     Ok(swept)
 }
 
-fn delete_expired_sql(store: Store) -> String {
+/// `ttl_days` is formatted in rather than bound, so every pass shares [`drain`]'s single
+/// parameter; it is an integer, so it cannot carry anything but a number into the statement.
+fn tombstone_expired_sql(store: Store, ttl_days: i32) -> String {
+    let (table, name, emptied) = (store.table(), store.name_column(), store.emptied_columns());
+    format!(
+        "UPDATE {table}
+         SET {emptied},
+             deleted_at = now(),
+             expires_at = now() + make_interval(days => {ttl_days})
+         WHERE (agent_id, {name}) IN (
+             SELECT agent_id, {name} FROM {table}
+             WHERE deleted_at IS NULL AND expires_at <= now()
+             ORDER BY expires_at
+             LIMIT $1
+             FOR UPDATE SKIP LOCKED
+         )"
+    )
+}
+
+fn delete_expired_tombstones_sql(store: Store) -> String {
     let (table, name) = (store.table(), store.name_column());
     format!(
         "DELETE FROM {table}
          WHERE (agent_id, {name}) IN (
              SELECT agent_id, {name} FROM {table}
-             WHERE expires_at <= now()
+             WHERE deleted_at IS NOT NULL AND expires_at <= now()
              ORDER BY expires_at
              LIMIT $1
              FOR UPDATE SKIP LOCKED
@@ -115,18 +141,19 @@ fn delete_orphaned_sql(store: Store) -> String {
     )
 }
 
-/// Runs a batched delete until a batch removes nothing, and returns the total removed.
-async fn drain(db: &PgPool, delete_batch: &str) -> Result<u64, sqlx::Error> {
-    let mut removed = 0;
+/// Runs a batched statement (`$1` is the batch size) until a batch touches nothing, and returns
+/// the total it touched.
+async fn drain(db: &PgPool, batch_statement: &str) -> Result<u64, sqlx::Error> {
+    let mut touched = 0;
     loop {
-        let batch = sqlx::query(delete_batch)
+        let batch = sqlx::query(batch_statement)
             .bind(BATCH_SIZE)
             .execute(db)
             .await?
             .rows_affected();
         if batch == 0 {
-            return Ok(removed);
+            return Ok(touched);
         }
-        removed += batch;
+        touched += batch;
     }
 }

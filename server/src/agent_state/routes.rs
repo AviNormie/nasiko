@@ -134,6 +134,7 @@ async fn delete_task(
         Store::Tasks,
         task_id.as_str(),
         precondition,
+        state.config.agent_state_ttl_days,
     )
     .await?;
     deleted(outcome, "task")
@@ -197,7 +198,15 @@ async fn delete_kv(
     key: KvKey,
     precondition: Precondition,
 ) -> Result<StatusCode, StateError> {
-    let outcome = repo::delete(&state.db, agent_id, Store::Kv, key.as_str(), precondition).await?;
+    let outcome = repo::delete(
+        &state.db,
+        agent_id,
+        Store::Kv,
+        key.as_str(),
+        precondition,
+        state.config.agent_state_ttl_days,
+    )
+    .await?;
     deleted(outcome, "key")
 }
 
