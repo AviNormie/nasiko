@@ -13,8 +13,10 @@ const OWN_KEYS = '[role="menu"], [role="menubar"], [role="listbox"], [role="comb
 
 /**
  * J (next) and K (previous) for a Previous/Next control: 1, -1, or 0 to ignore. Caps Lock is fine; Shift is a
- * modifier. Ignored with a modifier, on key repeat, while typing, inside a menu or listbox, and inside a dialog the control isn't in: a page's control stays
- * still behind a sheet, while a sheet's own control works inside it.
+ * modifier. Ignored with a modifier, on key repeat, during IME composition, when already handled
+ * (defaultPrevented), while typing, inside a menu, menubar, listbox or combobox (their typeahead), inside a
+ * dialog the control isn't in, and when the control is hidden behind a modal (aria-hidden or inert). So a page's
+ * control stays still behind a sheet, while a sheet's own control works inside it.
  */
 export function stepFromKey(e: KeyboardEvent, control: Element | null): -1 | 0 | 1 {
   const key = e.key.toLowerCase()
