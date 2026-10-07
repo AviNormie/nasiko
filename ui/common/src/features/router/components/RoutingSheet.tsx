@@ -110,9 +110,7 @@ export function RoutingSheet({
   const onCloseAutoFocus = (e: Event) => {
     const row =
       stepped && last
-        ? document.querySelector<HTMLElement>(
-            `[aria-label="${CSS.escape(`${copy.changeRouting}: ${last.displayName}`)}"]`,
-          )
+        ? document.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(last.id)}"]`)
         : null
     setStepped(false)
     if (row) {
@@ -130,9 +128,9 @@ export function RoutingSheet({
       <SheetContent
         className={cn(
           'w-full gap-0 sm:max-w-sheet',
-          // Room for the stepper beside the close button.
+          // Room for the stepper beside the close button (narrower below sm, where it drops its "N of M").
           step &&
-            '[&_[data-slot=sheet-header]]:pr-44 pointer-coarse:[&_[data-slot=sheet-header]]:pr-56',
+            '[&_[data-slot=sheet-header]]:pr-32 sm:[&_[data-slot=sheet-header]]:pr-44 pointer-coarse:[&_[data-slot=sheet-header]]:pr-40 sm:pointer-coarse:[&_[data-slot=sheet-header]]:pr-56',
         )}
         onCloseAutoFocus={onCloseAutoFocus}
         // Radix would focus the first tabbable, the stepper while the routing reads, and open its tooltip (so Escape
@@ -165,7 +163,8 @@ export function RoutingSheet({
             onPrev={() => go(step.prev)}
             onNext={() => go(step.next)}
             blocked={blocked ? copy.saveBeforeStepping : undefined}
-            className="absolute top-2 right-12 pointer-coarse:top-1.5 pointer-coarse:right-14"
+            // Phones hide the visible "N of M" (aria-hidden; the group's name keeps the position).
+            className="absolute top-2 right-12 pointer-coarse:top-1.5 pointer-coarse:right-14 max-sm:[&>span[aria-hidden]]:hidden"
           />
         ) : null}
       </SheetContent>
