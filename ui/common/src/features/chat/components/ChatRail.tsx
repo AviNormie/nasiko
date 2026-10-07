@@ -27,6 +27,7 @@ import { StateCard } from '@/features/observability/StateCard'
 import { cn } from '@/lib/utils'
 import { sessionRows, useChatSessions } from '../api'
 import { announce } from '../announce'
+import { setRailOrder } from '../railOrder'
 import { chatSignals, useSignals } from '../registry'
 import type { ChatCarry } from '../search'
 import { rowOf, type SignalsSnapshot } from '../signals'
@@ -139,6 +140,10 @@ export function ChatRail({
     shown.map((x) => ({ ...x, updated_at: x.row.updated_at, created_at: x.row.created_at })),
     now,
   )
+  // The header's Previous/Next follows this order. Waiting has its own order, so it steps nowhere (v1).
+  const orderKey =
+    view === 'waiting' ? '' : groups.flatMap((g) => g.rows.map((x) => x.row.session_id)).join(' ')
+  useEffect(() => setRailOrder(orderKey ? orderKey.split(' ') : []), [orderKey])
   // Dev aids survive navigation between chats (DX-A2).
   const carry = { mock: search.mock, debug: search.debug }
 
