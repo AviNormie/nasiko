@@ -17,6 +17,8 @@
 //! API promises to honour.
 
 use chrono::{DateTime, Utc};
+use sqlx::postgres::PgArguments;
+use sqlx::query::QueryAs;
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -92,6 +94,17 @@ impl Store {
         )
     }
 }
+
+/// One entry of one agent's store: what a write locks, versions and changes.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Entry<'a> {
+    pub(super) agent_id: Uuid,
+    pub(super) store: Store,
+    pub(super) name: &'a str,
+}
+
+/// A store's upsert, bound to everything but the version, which the write flow supplies.
+type Upsert<'q> = QueryAs<'q, Postgres, Stamp, PgArguments>;
 
 /// What a writer of one entry needs to know of it before it writes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -284,26 +297,22 @@ pub(super) async fn put_task(
     precondition: Precondition,
     ttl_days: i32,
 ) -> Result<PutOutcome, sqlx::Error> {
-    let mut tx = begin_locked(db, agent_id, Store::Tasks, task.task_id).await?;
-    let versions = entry_versions(&mut tx, Store::Tasks, agent_id, task.task_id).await?;
-    if !precondition.holds_for(versions.current) {
-        tx.rollback().await?;
-        return Ok(PutOutcome::VersionConflict {
-            current_version: versions.current,
-        });
-    }
-    let stamp = sqlx::query_as(UPSERT_TASK)
-        .bind(agent_id)
-        .bind(task.task_id)
-        .bind(task.context_id)
-        .bind(task.state)
-        .bind(task.sealed_body)
-        .bind(versions.next())
-        .bind(ttl_days)
-        .fetch_one(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(PutOutcome::Stored(stamp))
+    let entry = Entry {
+        agent_id,
+        store: Store::Tasks,
+        name: task.task_id,
+    };
+    put_versioned(db, entry, precondition, |version| {
+        sqlx::query_as(UPSERT_TASK)
+            .bind(agent_id)
+            .bind(task.task_id)
+            .bind(task.context_id)
+            .bind(task.state)
+            .bind(task.sealed_body)
+            .bind(version)
+            .bind(ttl_days)
+    })
+    .await
 }
 
 // ─── Key-value ──────────────────────────────────────────────────────────────
@@ -398,43 +407,56 @@ pub(super) async fn put_kv(
     precondition: Precondition,
     ttl_days: i32,
 ) -> Result<PutOutcome, sqlx::Error> {
-    let mut tx = begin_locked(db, agent_id, Store::Kv, entry.key).await?;
-    let versions = entry_versions(&mut tx, Store::Kv, agent_id, entry.key).await?;
+    let target = Entry {
+        agent_id,
+        store: Store::Kv,
+        name: entry.key,
+    };
+    put_versioned(db, target, precondition, |version| {
+        sqlx::query_as(UPSERT_KV)
+            .bind(agent_id)
+            .bind(entry.key)
+            .bind(entry.sealed_value)
+            .bind(version)
+            .bind(ttl_days)
+    })
+    .await
+}
+
+// ─── Shared by both stores ──────────────────────────────────────────────────
+
+/// The write flow both stores share: take the entry's turn, check the precondition against its
+/// live version, write it one past every version it has had, commit. `upsert` gets that version.
+async fn put_versioned<'q>(
+    db: &PgPool,
+    entry: Entry<'_>,
+    precondition: Precondition,
+    upsert: impl FnOnce(i64) -> Upsert<'q>,
+) -> Result<PutOutcome, sqlx::Error> {
+    let mut tx = begin_locked(db, entry).await?;
+    let versions = entry_versions(&mut tx, entry).await?;
     if !precondition.holds_for(versions.current) {
         tx.rollback().await?;
         return Ok(PutOutcome::VersionConflict {
             current_version: versions.current,
         });
     }
-    let stamp = sqlx::query_as(UPSERT_KV)
-        .bind(agent_id)
-        .bind(entry.key)
-        .bind(entry.sealed_value)
-        .bind(versions.next())
-        .bind(ttl_days)
-        .fetch_one(&mut *tx)
-        .await?;
+    let stamp = upsert(versions.next()).fetch_one(&mut *tx).await?;
     tx.commit().await?;
     Ok(PutOutcome::Stored(stamp))
 }
-
-// ─── Shared by both stores ──────────────────────────────────────────────────
 
 /// Empties a live row into a tombstone kept for `ttl_days`, so the entry's next write continues
 /// its version. An absent, expired or already deleted one is `NotFound`, whatever the
 /// precondition says.
 pub(super) async fn delete(
     db: &PgPool,
-    agent_id: Uuid,
-    store: Store,
-    name: &str,
+    entry: Entry<'_>,
     precondition: Precondition,
     ttl_days: i32,
 ) -> Result<DeleteOutcome, sqlx::Error> {
-    let mut tx = begin_locked(db, agent_id, store, name).await?;
-    let current_version = entry_versions(&mut tx, store, agent_id, name)
-        .await?
-        .current;
+    let mut tx = begin_locked(db, entry).await?;
+    let current_version = entry_versions(&mut tx, entry).await?.current;
     if current_version == 0 {
         tx.rollback().await?;
         return Ok(DeleteOutcome::NotFound);
@@ -443,9 +465,9 @@ pub(super) async fn delete(
         tx.rollback().await?;
         return Ok(DeleteOutcome::VersionConflict { current_version });
     }
-    sqlx::query(&store.tombstone_sql())
-        .bind(agent_id)
-        .bind(name)
+    sqlx::query(&entry.store.tombstone_sql())
+        .bind(entry.agent_id)
+        .bind(entry.name)
         .bind(ttl_days)
         .execute(&mut *tx)
         .await?;
@@ -468,10 +490,13 @@ pub(super) async fn delete(
 /// to serialize on write.
 async fn begin_locked(
     db: &PgPool,
-    agent_id: Uuid,
-    store: Store,
-    name: &str,
+    entry: Entry<'_>,
 ) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    let Entry {
+        agent_id,
+        store,
+        name,
+    } = entry;
     let mut tx = db.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
         .execute(&mut *tx)
@@ -486,13 +511,11 @@ async fn begin_locked(
 
 async fn entry_versions(
     conn: &mut PgConnection,
-    store: Store,
-    agent_id: Uuid,
-    name: &str,
+    entry: Entry<'_>,
 ) -> Result<EntryVersions, sqlx::Error> {
-    let row = sqlx::query_as(&store.versions_sql())
-        .bind(agent_id)
-        .bind(name)
+    let row = sqlx::query_as(&entry.store.versions_sql())
+        .bind(entry.agent_id)
+        .bind(entry.name)
         .fetch_optional(conn)
         .await?;
     Ok(EntryVersions::from_row(row))
