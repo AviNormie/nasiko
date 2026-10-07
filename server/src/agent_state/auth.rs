@@ -1,4 +1,5 @@
-//! Who is calling: the agent behind a bearer credential, charged against its request budget.
+//! Who is calling: the agent behind a bearer credential, charged against its request budget,
+//! and the issuing of that credential.
 
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use nasiko_mcp_gateway::agent_tokens::{self, TokenScope};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -16,6 +18,21 @@ use crate::rate_limit::RateLimiter;
 /// Length of the fixed window the per-agent request budget is counted over, and so also the
 /// longest a rejected caller can be told to wait.
 const RATE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Mints, or rotates, the agent's state API credential and returns its plaintext, once.
+///
+/// This is the only credential the state API accepts: a state-scoped agent token, meant to be
+/// injected into the agent's environment as `NASIKO_AGENT_TOKEN` at deploy. Never the MCP gateway
+/// credential, which also travels in URL paths and can end up in logs. Rotation keeps the previous
+/// plaintext working for the gateway's grace window (`agent_tokens::ROTATION_GRACE_SECS`), so a
+/// rollout in progress is not cut off. Generic over the executor for the same reason as
+/// `agent_tokens::mint`: a deploy may run inside the transaction that created the agent row.
+pub async fn mint_state_token(
+    db: impl sqlx::PgExecutor<'_>,
+    agent_id: Uuid,
+) -> Result<String, sqlx::Error> {
+    agent_tokens::mint_scoped(db, agent_id, TokenScope::State).await
+}
 
 /// The agent a request was authenticated as. Only [`authenticate`] puts one on a request.
 #[derive(Clone, Copy, Debug)]
@@ -39,11 +56,10 @@ impl AgentAuth {
 
 /// Middleware for every agent state route.
 ///
-/// The credential is the one the MCP gateway issues, so the two doors cannot disagree about who
-/// an agent is: `nasiko_mcp_gateway::agent_tokens::authenticate` also refuses a revoked
-/// credential and one whose agent has been deleted. Authentication comes first, so a caller
-/// without a valid credential is refused before its body is read and never spends anyone's
-/// budget.
+/// Only a state-scoped credential ([`mint_state_token`]) is accepted; the agent's MCP gateway
+/// credential is refused like an unknown one. The lookup also refuses a revoked credential and one
+/// whose agent has been deleted. Authentication comes first, so a caller without a valid
+/// credential is refused before its body is read and never spends anyone's budget.
 pub(super) async fn authenticate(
     State(auth): State<AgentAuth>,
     mut request: Request,
@@ -60,7 +76,7 @@ pub(super) async fn authenticate(
 
 async fn identify(auth: &AgentAuth, headers: &HeaderMap) -> Result<AuthenticatedAgent, StateError> {
     let token = bearer_token(headers).ok_or(StateError::Unauthorized)?;
-    let agent_id = nasiko_mcp_gateway::agent_tokens::authenticate(&auth.db, token)
+    let agent_id = agent_tokens::authenticate_scoped(&auth.db, token, TokenScope::State)
         .await
         .map_err(|e| StateError::Internal(format!("agent token lookup failed: {e}")))?
         .ok_or(StateError::Unauthorized)?;
@@ -72,7 +88,7 @@ async fn identify(auth: &AgentAuth, headers: &HeaderMap) -> Result<Authenticated
     Ok(AuthenticatedAgent(agent_id))
 }
 
-/// `Authorization: Bearer <token>`, read exactly as the MCP gateway reads it.
+/// `Authorization: Bearer <token>`, read exactly as the MCP gateway reads its own.
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)?

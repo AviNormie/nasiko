@@ -2,8 +2,8 @@
 //!
 //! An agent that keeps its task state in memory loses paused work on a restart, or when a resume
 //! lands on another replica. This module gives every agent a platform-held store, reached with
-//! the credential it already carries (`MCP_GATEWAY_TOKEN`), for an SDK-side store to write
-//! through to. Registering a task store marks the agent durable (`agents.state_mode`).
+//! its state-scoped credential (`NASIKO_AGENT_TOKEN`, minted by [`mint_state_token`]), for an
+//! SDK-side store to write through to. Registering a task store marks the agent durable (`agents.state_mode`).
 //!
 //! # Routes, under `/api/agent-state`
 //!
@@ -21,8 +21,9 @@
 //! # What every route guarantees
 //!
 //! - **Authenticated outside the session auth.** Callers are deployed agents, so the router checks
-//!   the bearer credential itself (`auth`) the way the MCP gateway does, and refuses a missing,
-//!   unknown or revoked one with 401.
+//!   the bearer credential itself (`auth`), and refuses a missing, unknown or revoked one with
+//!   401. Only a state-scoped credential counts: the MCP gateway credential travels in URL paths
+//!   and can be logged, so it is refused here like any unknown token.
 //! - **Scoped to the caller.** The agent id comes from the credential and nowhere else, and every
 //!   query filters on it. Another agent's row does not exist as far as the caller can tell: 404,
 //!   never 403.
@@ -54,4 +55,5 @@ pub mod sweeper;
 mod validation;
 mod wire;
 
+pub use auth::mint_state_token;
 pub use routes::router;

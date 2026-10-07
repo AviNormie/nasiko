@@ -1,8 +1,7 @@
 //! `/api/agent-state/*`: per-agent durable tasks and key-value state.
 //!
-//! The routes sit outside the session auth. A deployed agent presents the credential the MCP
-//! gateway issued it (`MCP_GATEWAY_TOKEN`), every row is scoped by the agent behind that
-//! credential, writes carry optimistic versions, rows expire, and what is stored is ciphertext.
+//! The routes sit outside the session auth. A deployed agent presents its state-scoped
+//! credential (`NASIKO_AGENT_TOKEN`), every row is scoped by the agent behind that credential, writes carry optimistic versions, rows expire, and what is stored is ciphertext.
 //! These tests drive the real HTTP surface and look at the raw tables where the claim is about
 //! storage.
 //!
@@ -51,11 +50,17 @@ async fn seed_agent_row(server: &TestServer, owner_id: Uuid, name: &str) -> Uuid
     .expect("seed agent")
 }
 
-/// An agent with its own owner and a freshly minted credential.
+async fn mint_state_token(server: &TestServer, agent_id: Uuid) -> String {
+    nasiko_server::agent_state::mint_state_token(&server.db, agent_id)
+        .await
+        .expect("mint state token")
+}
+
+/// An agent with its own owner and a freshly minted state credential.
 async fn new_agent(server: &TestServer, name: &str) -> Agent {
     let owner = seed_user(server, &format!("{name}-owner")).await;
     let id = seed_agent_row(server, owner, name).await;
-    let token = common::mint_gateway_token(&server.db, id).await;
+    let token = mint_state_token(server, id).await;
     Agent { id, token }
 }
 
@@ -339,15 +344,91 @@ async fn a_revoked_credential_stops_authenticating() {
         .unwrap();
     assert_eq!(ok.status(), 200);
 
-    nasiko_mcp_gateway::agent_tokens::revoke(&server.db, agent.id)
-        .await
-        .unwrap();
+    nasiko_mcp_gateway::agent_tokens::revoke_scoped(
+        &server.db,
+        agent.id,
+        nasiko_mcp_gateway::agent_tokens::TokenScope::State,
+    )
+    .await
+    .unwrap();
 
     let res = call(&server, &agent, Method::GET, "/tasks")
         .send()
         .await
         .unwrap();
     expect_error(res, 401, "unauthorized").await;
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_mcp_gateway_credential_does_not_open_the_state_api() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "gateway-token-agent").await;
+    // The gateway credential also travels in URL paths, so it must not double as this one.
+    let gateway_token = common::mint_gateway_token(&server.db, agent.id).await;
+    for (method, path) in every_route() {
+        let res = server
+            .client
+            .request(method, url(&server, path))
+            .bearer_auth(&gateway_token)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        expect_error(res, 401, "unauthorized").await;
+    }
+    // The agent's own state credential is unaffected by the gateway one existing.
+    let ok = call(&server, &agent, Method::GET, "/tasks")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_state_credential_does_not_open_the_mcp_gateway() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "state-token-agent").await;
+    let res = server
+        .client
+        .post(server.url("/api/mcp"))
+        .bearer_auth(&agent.token)
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn minting_again_rotates_the_state_credential_and_leaves_the_gateway_one_alone() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "rotating-agent").await;
+    let gateway_token = common::mint_gateway_token(&server.db, agent.id).await;
+
+    let rotated = Agent {
+        id: agent.id,
+        token: mint_state_token(&server, agent.id).await,
+    };
+    assert_ne!(rotated.token, agent.token);
+    assert!(rotated.token.starts_with("nst_"), "{}", rotated.token);
+    let res = call(&server, &rotated, Method::GET, "/tasks")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // Rotating the state credential is not a rotation of the gateway one.
+    let agent_id: Option<Uuid> =
+        nasiko_mcp_gateway::agent_tokens::authenticate(&server.db, &gateway_token)
+            .await
+            .unwrap();
+    assert_eq!(agent_id, Some(agent.id));
     server.cleanup().await;
 }
 
@@ -1989,7 +2070,7 @@ async fn a_soft_deleted_agent_loses_access_to_its_state_and_the_sweeper_removes_
     let id = seed_agent_row(&server, admin_id, "soft-deleted-agent").await;
     let agent = Agent {
         id,
-        token: common::mint_gateway_token(&server.db, id).await,
+        token: mint_state_token(&server, id).await,
     };
     let bystander = new_agent(&server, "bystander-of-delete").await;
     for owner in [&agent, &bystander] {
