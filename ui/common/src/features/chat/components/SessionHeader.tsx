@@ -2,7 +2,7 @@
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Activity, MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { PrevNext } from '@/components/shared/prev-next'
+import { PrevNext, type StepVia } from '@/components/shared/prev-next'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -187,13 +187,15 @@ function ChatSiblings({ sessionId }: { sessionId: string }) {
   const ids = useRailOrder((s) => s.ids)
   const around = siblingsAround(ids, sessionId)
   if (!around) return null
-  const go = (id: string | undefined) => {
+  const go = (id: string | undefined, via: StepVia) => {
     if (id)
       void navigate({
         from: '/chat/$sessionId',
         to: '/chat/$sessionId',
         params: { sessionId: id },
         search: (s) => ({ mock: s.mock, debug: s.debug }),
+        // A click lands in the composer; J/K keeps focus out of it, so the next key steps again.
+        state: { chatFocus: via === 'key' ? 'none' : 'composer' },
       })
   }
   return (
@@ -201,8 +203,9 @@ function ChatSiblings({ sessionId }: { sessionId: string }) {
       noun="chat"
       index={around.index}
       count={around.count}
-      onPrev={() => go(around.prev)}
-      onNext={() => go(around.next)}
+      onPrev={(via) => go(around.prev, via)}
+      onNext={(via) => go(around.next, via)}
+      restoreFocus={false}
       className="hidden @min-[480px]:flex"
     />
   )

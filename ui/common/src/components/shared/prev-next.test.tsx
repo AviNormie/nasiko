@@ -38,16 +38,16 @@ describe('PrevNext', () => {
     expect(screen.getByText('2 of 3')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Previous agent' }))
     await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
-    expect(onPrev).toHaveBeenCalledTimes(1)
-    expect(onNext).toHaveBeenCalledTimes(1)
+    expect(onPrev).toHaveBeenCalledExactlyOnceWith('click')
+    expect(onNext).toHaveBeenCalledExactlyOnceWith('click')
   })
 
   it('steps with J and K', async () => {
     const { onPrev, onNext } = setup()
     await userEvent.keyboard('j')
     await userEvent.keyboard('k')
-    expect(onNext).toHaveBeenCalledTimes(1)
-    expect(onPrev).toHaveBeenCalledTimes(1)
+    expect(onNext).toHaveBeenCalledExactlyOnceWith('key')
+    expect(onPrev).toHaveBeenCalledExactlyOnceWith('key')
   })
 
   it('stays focusable but inert at the ends', async () => {
@@ -76,6 +76,13 @@ describe('PrevNext', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
     rerender('b')
     expect(screen.getByRole('button', { name: 'Next agent' })).toHaveFocus()
+  })
+
+  it('leaves focus alone after a remount when restoreFocus is off (the page focuses something better)', async () => {
+    const { rerender } = setup({ restoreFocus: false })
+    await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
+    rerender('b')
+    expect(screen.getByRole('button', { name: 'Next agent' })).not.toHaveFocus()
   })
 
   it('does not steal focus for a click older than 10 s', async () => {
