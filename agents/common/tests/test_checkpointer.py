@@ -6,10 +6,11 @@ import asyncio
 from typing import TypedDict
 
 import pytest
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.serde.types import ERROR, INTERRUPT, RESUME
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import Command, interrupt
 from nasiko_state import NasikoCheckpointSaver, NasikoKV, NasikoStateError
 
@@ -544,6 +545,47 @@ class TestPausedGraphsSurviveARestart:
         done_a = restarted.invoke(Command(resume="the moon"), {"configurable": {"thread_id": "a"}})
 
         assert (done_a["report"], done_b["report"]) == ("tides: the moon", "winds: the sea")
+
+
+def echo_graph(checkpointer):
+    """A chat graph whose state is langchain messages, like the stock langgraph agent's."""
+
+    def reply(state: MessagesState) -> MessagesState:
+        heard = [m.content for m in state["messages"] if isinstance(m, HumanMessage)]
+        return {"messages": [AIMessage(content=f"you said {heard[-1]!r} ({len(heard)} so far)")]}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("reply", reply)
+    builder.add_edge(START, "reply")
+    builder.add_edge("reply", END)
+    return builder.compile(checkpointer=checkpointer)
+
+
+class TestConversationsSurviveARestart:
+    def test_langchain_messages_round_trip_through_the_store(self, client):
+        config = {"configurable": {"thread_id": "chat-1"}}
+        echo_graph(NasikoCheckpointSaver(NasikoKV(client))).invoke({"messages": [HumanMessage("hi")]}, config)
+
+        restarted = echo_graph(NasikoCheckpointSaver(NasikoKV(client)))
+        result = restarted.invoke({"messages": [HumanMessage("again")]}, config)
+
+        assert [(type(m).__name__, m.content) for m in result["messages"]] == [
+            ("HumanMessage", "hi"),
+            ("AIMessage", "you said 'hi' (1 so far)"),
+            ("HumanMessage", "again"),
+            ("AIMessage", "you said 'again' (2 so far)"),
+        ]
+
+    async def test_async(self, client):
+        config = {"configurable": {"thread_id": "chat-2"}}
+        await echo_graph(NasikoCheckpointSaver(NasikoKV(client))).ainvoke(
+            {"messages": [HumanMessage("hi")]}, config
+        )
+
+        restarted = echo_graph(NasikoCheckpointSaver(NasikoKV(client)))
+        state = await restarted.aget_state(config)
+
+        assert [m.content for m in state.values["messages"]] == ["hi", "you said 'hi' (1 so far)"]
 
 
 class TestConstruction:
