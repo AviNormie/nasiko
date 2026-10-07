@@ -397,6 +397,11 @@ impl AppState {
             ));
         }
 
+        // Reclaims the storage of expired agent state (tasks and key-value entries). Expired rows
+        // already read as absent, so this only stops them accumulating; each process runs one and
+        // `SKIP LOCKED` keeps several from colliding.
+        tokio::spawn(crate::agent_state::sweeper::run(state.db.clone()));
+
         // Retires the seeded brevity factor once the holdout has enough samples. Cheap (one
         // grouped scan) and idempotent, so it rides the same process as the other workers rather
         // than needing a scheduler.
