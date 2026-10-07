@@ -4,7 +4,7 @@
  * don't reflow as checks resolve. The columns follow the list's width, not the viewport's (the
  * sidebar takes 240 px): below 672 px the row becomes two lines.
  */
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { m } from 'motion/react'
 import { ChevronDown, ScrollText } from 'lucide-react'
 import { memo, useState } from 'react'
@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AgentLink } from '@/features/agents/components/AgentLink'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
+import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import { copy, STATUS_LABEL } from '@/features/observability/copy'
 import { sessionCost, type Status } from '@/features/observability/sessions'
 import type { SessionSummary } from '@/features/observability/types'
@@ -46,6 +47,7 @@ export const SessionRow = memo(function SessionRow({
   expanded,
   onToggle,
   linkSearch,
+  linkState,
   fresh,
 }: {
   s: SessionSummary
@@ -58,6 +60,7 @@ export const SessionRow = memo(function SessionRow({
   expanded: boolean
   onToggle: (sessionId: string) => void
   linkSearch: Partial<SessionsSearch>
+  linkState: () => HistoryState
   fresh: boolean
 }) {
   const input = s.first_input ?? s.session_id
@@ -82,6 +85,7 @@ export const SessionRow = memo(function SessionRow({
           to="/sessions/$sessionId"
           params={{ sessionId: s.session_id }}
           search={linkSearch}
+          state={linkState}
           className="min-w-0 flex-1 px-2 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring @[672px]:grid @[672px]:grid-cols-[5.5rem_10rem_minmax(0,1fr)_5rem_4.5rem_8.5rem] @[672px]:items-center @[672px]:gap-x-3"
           aria-label={label}
         >
@@ -160,6 +164,7 @@ export const SessionRow = memo(function SessionRow({
 function RowDetail({ s, agentLabel }: { s: SessionSummary; agentLabel: string }) {
   const d = useSessionDetail(s.session_id)
   const [logs, setLogs] = useState(false)
+  const latest = d.data ? latestTrace(d.data.traces) : null
   return (
     <div className="grid gap-2 bg-muted/40 px-3 py-3 text-sm @[672px]:grid-cols-3">
       <div className="@[672px]:col-span-2">
@@ -201,7 +206,27 @@ function RowDetail({ s, agentLabel }: { s: SessionSummary; agentLabel: string })
         ) : null}
         {/* Only while this detail is open (v1c §5.10). */}
         <OpenChatLink sessionId={s.session_id} className="mt-1 w-fit" />
+        {/* The session's latest request, as a flow (plans/feat-flows.md F19). */}
+        {latest ? (
+          <OpenFlowLink
+            flowId={latest}
+            latest={(d.data?.traces.length ?? 0) > 1}
+            className="w-fit"
+          />
+        ) : null}
       </div>
     </div>
   )
+}
+
+/** The newest trace of a session (by its root span's start), or null. */
+function latestTrace(
+  traces: readonly { trace_id: string; root_span: { start_time?: string | null } }[],
+) {
+  let best: { id: string; at: number } | null = null
+  for (const t of traces) {
+    const at = Date.parse(t.root_span.start_time ?? '') || 0
+    if (!best || at > best.at) best = { id: t.trace_id, at }
+  }
+  return best?.id ?? null
 }

@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { compareOn, pickShared } from '@/app/shell/context'
+import { useSiblingState } from '@/lib/siblings'
 import { copy } from '@/features/observability/copy'
 import {
   computeLanes,
@@ -142,6 +143,8 @@ export function SessionsPage({
     if (search.status && status(s) !== search.status) return false
     return true
   })
+  // Previous/Next on the trace walks these rows as shown when one is clicked (loaded rows only: it never pages).
+  const linkState = useSiblingState(shown.map((s) => s.session_id))
 
   // Day mode: an empty first page is not "no sessions" while later pages are still coming.
   const scanning =
@@ -447,6 +450,7 @@ export function SessionsPage({
                     expanded={expanded === s.session_id}
                     onToggle={toggleRow}
                     linkSearch={linkSearch}
+                    linkState={linkState}
                     fresh={live.fresh.has(s.session_id)}
                   />
                 ))}
