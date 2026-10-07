@@ -187,7 +187,13 @@ function ChatSiblings({ sessionId }: { sessionId: string }) {
   const around = siblingsAround(ids, sessionId)
   if (!around) return null
   const go = (id: string | undefined) => {
-    if (id) void navigate({ to: '/chat/$sessionId', params: { sessionId: id }, search: true })
+    if (id)
+      void navigate({
+        from: '/chat/$sessionId',
+        to: '/chat/$sessionId',
+        params: { sessionId: id },
+        search: (s) => ({ mock: s.mock, debug: s.debug }),
+      })
   }
   return (
     <PrevNext
