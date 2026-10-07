@@ -198,14 +198,14 @@ class TestPendingWrites:
 
         assert len(state_server.writes("kv")) == 1  # one PUT, so a crash cannot split the task's writes
 
-    async def test_the_first_writer_wins_for_regular_writes(self, saver, style):
+    async def test_regular_writes_saved_again_replace_the_earlier_ones(self, saver, style):
         saved = await put(saver, style, config_for(), "cp-1")
         await call(saver, style, "put_writes", saved, [("a", "first")], "task-1")
         await call(saver, style, "put_writes", saved, [("a", "second")], "task-1")
 
         loaded = await call(saver, style, "get_tuple", saved)
 
-        assert loaded.pending_writes == [("task-1", "a", "first")]
+        assert loaded.pending_writes == [("task-1", "a", "second")]
 
     async def test_special_channel_writes_are_upserts(self, saver, style):
         saved = await put(saver, style, config_for(), "cp-1")
@@ -412,15 +412,29 @@ class TestCallCounts:
 
         assert [r.method for r in state_server.requests] == ["GET", "GET", "GET"]
 
-    async def test_put_writes_of_regular_writes_checks_once_then_writes_once(
-        self, saver, style, state_server
-    ):
+    async def test_put_writes_of_regular_writes_is_one_write_and_no_read(self, saver, style, state_server):
         saved = await put(saver, style, config_for(), "cp-1")
         state_server.requests.clear()
 
         await call(saver, style, "put_writes", saved, [("a", 1), ("b", 2)], "task-1")
 
-        assert [r.method for r in state_server.requests] == ["GET", "PUT"]
+        assert [r.method for r in state_server.requests] == ["PUT"]
+
+    async def test_an_agent_turn_with_one_tool_call_stays_within_twelve_calls(self, client, state_server):
+        """The stock langgraph agent's turn: a ReAct graph run with durability="exit"."""
+        saver = NasikoCheckpointSaver(NasikoKV(client))
+        config = {"configurable": {"thread_id": "chat"}}
+        calls_per_turn = []
+        for turn in ("first", "second"):  # a new thread, then one with history to load
+            graph = react_agent_with_one_tool_call(saver)
+            state_server.requests.clear()
+            async for _ in graph.astream(
+                {"messages": [("user", turn)]}, config, stream_mode="values", durability="exit"
+            ):
+                pass
+            calls_per_turn.append(len([r for r in state_server.requests if r.path != "/register"]))
+
+        assert all(calls <= 12 for calls in calls_per_turn), calls_per_turn
 
 
 def versioned_checkpoint(checkpoint_id: str, **channels: tuple[int, object]) -> dict:
@@ -510,6 +524,39 @@ class TestChannelBlobs:
         await call(saver, style, "delete_thread", "doomed")
 
         assert not state_server.kv
+
+
+def react_agent_with_one_tool_call(checkpointer):
+    """A prebuilt ReAct agent whose model calls one tool, then answers."""
+    import warnings
+
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.tools import tool
+
+    class ToolCallingFake(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    @tool
+    def exchange_rate(currency: str) -> str:
+        """The exchange rate of a currency."""
+        return "1.1"
+
+    replies = iter(
+        [
+            AIMessage(
+                content="", tool_calls=[{"name": "exchange_rate", "args": {"currency": "EUR"}, "id": "c1"}]
+            ),
+            AIMessage(content="1 EUR is 1.1 USD"),
+        ]
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # create_react_agent is deprecated in favour of langchain's
+        from langgraph.prebuilt import create_react_agent
+
+        return create_react_agent(
+            ToolCallingFake(messages=replies), tools=[exchange_rate], checkpointer=checkpointer
+        )
 
 
 class TestSerialization:
