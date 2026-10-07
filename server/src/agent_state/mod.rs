@@ -21,7 +21,7 @@
 //! # What every route guarantees
 //!
 //! - **Authenticated outside the session auth.** Callers are deployed agents, so the router checks
-//!   the bearer credential itself ([`auth`]) the way the MCP gateway does, and refuses a missing,
+//!   the bearer credential itself (`auth`) the way the MCP gateway does, and refuses a missing,
 //!   unknown or revoked one with 401.
 //! - **Scoped to the caller.** The agent id comes from the credential and nowhere else, and every
 //!   query filters on it. Another agent's row does not exist as far as the caller can tell: 404,
@@ -29,13 +29,14 @@
 //! - **Versioned.** Each row carries a `version`, 1 when created and one higher per write. A write
 //!   or delete with `If-Match: <version>` applies only if that is the current version (412 and
 //!   the current version otherwise); a missing row is version 0. Without the header it is
-//!   unconditional. Writers of one entry are serialised ([`repo`]), so versions are gapless.
+//!   unconditional. Writers of one entry take turns (`repo`), so each sees the version the one
+//!   before it committed and two writers never both claim the same version.
 //! - **Expiring.** Every write sets `expires_at` to now plus `AGENT_STATE_TTL_DAYS`. An expired
 //!   row reads as absent at once, and the [`sweeper`] deletes it later.
 //! - **Bounded.** An encoded value over `AGENT_STATE_MAX_BODY_BYTES` is a 413, and an agent
 //!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429.
 //! - **Encrypted at rest.** Task bodies and values are stored as AES-256-GCM ciphertext under the
-//!   agent's own derived key ([`payload`]); the database never holds them in the clear.
+//!   agent's own derived key (`payload`); the database never holds them in the clear.
 
 mod auth;
 mod cursor;
