@@ -1639,7 +1639,23 @@ async fn rewriting_a_live_row_keeps_its_creation_time() {
 
 // ─── The sweeper ────────────────────────────────────────────────────────────
 
-use nasiko_server::agent_state::sweeper::{Swept, sweep_expired};
+use nasiko_server::agent_state::sweeper::{StoreCounts, Swept, sweep};
+
+/// A pass that removed only expired rows.
+fn expired(tasks: u64, kv: u64) -> Swept {
+    Swept {
+        expired: StoreCounts { tasks, kv },
+        ..Swept::default()
+    }
+}
+
+/// A pass that removed only rows of deleted agents.
+fn orphaned(tasks: u64, kv: u64) -> Swept {
+    Swept {
+        orphaned: StoreCounts { tasks, kv },
+        ..Swept::default()
+    }
+}
 
 #[tokio::test]
 #[serial]
@@ -1656,8 +1672,8 @@ async fn the_sweeper_removes_expired_rows_of_every_agent_and_nothing_live() {
         expire_kv(&server, agent, "expired").await;
     }
 
-    let swept = sweep_expired(&server.db).await.unwrap();
-    assert_eq!(swept, Swept { tasks: 2, kv: 2 });
+    let swept = sweep(&server.db).await.unwrap();
+    assert_eq!(swept, expired(2, 2));
 
     for agent in [&alice, &bob] {
         assert_eq!(get_task(&server, agent, "live").await.status(), 200);
@@ -1666,7 +1682,7 @@ async fn the_sweeper_removes_expired_rows_of_every_agent_and_nothing_live() {
     assert_eq!(count_rows(&server, "agent_tasks").await, 2);
     assert_eq!(count_rows(&server, "agent_kv").await, 2);
     assert_eq!(
-        sweep_expired(&server.db).await.unwrap(),
+        sweep(&server.db).await.unwrap(),
         Swept::default(),
         "nothing is left to sweep"
     );
@@ -1701,14 +1717,8 @@ async fn the_sweeper_keeps_going_past_one_batch() {
     put_task(&server, &agent, "live", json!(1)).await;
     put_kv(&server, &agent, "live", json!(1)).await;
 
-    let swept = sweep_expired(&server.db).await.unwrap();
-    assert_eq!(
-        swept,
-        Swept {
-            tasks: 2300,
-            kv: 1200
-        }
-    );
+    let swept = sweep(&server.db).await.unwrap();
+    assert_eq!(swept, expired(2300, 1200));
     assert_eq!(count_rows(&server, "agent_tasks").await, 1);
     assert_eq!(count_rows(&server, "agent_kv").await, 1);
 
@@ -1734,19 +1744,16 @@ async fn the_sweeper_leaves_rows_a_writer_holds_instead_of_waiting_for_them() {
         .unwrap();
 
     // The pass must come back, not queue behind the writer, and take only what is free.
-    let swept = tokio::time::timeout(Duration::from_secs(10), sweep_expired(&server.db))
+    let swept = tokio::time::timeout(Duration::from_secs(10), sweep(&server.db))
         .await
         .expect("the sweeper must not wait on a row another transaction holds")
         .unwrap();
-    assert_eq!(swept, Swept { tasks: 1, kv: 0 });
+    assert_eq!(swept, expired(1, 0));
     assert_eq!(count_rows(&server, "agent_tasks").await, 1);
 
     // Once the writer lets go, the next pass collects it.
     writer.rollback().await.unwrap();
-    assert_eq!(
-        sweep_expired(&server.db).await.unwrap(),
-        Swept { tasks: 1, kv: 0 }
-    );
+    assert_eq!(sweep(&server.db).await.unwrap(), expired(1, 0));
     assert_eq!(count_rows(&server, "agent_tasks").await, 0);
 
     peer.close().await;
@@ -1962,12 +1969,11 @@ async fn removing_an_agent_row_removes_its_state_and_only_its_state() {
     server.cleanup().await;
 }
 
-/// `DELETE /api/agents/{id}` soft-deletes: the row stays, so the foreign keys never fire and the
-/// agent's state is not removed on the spot. What protects it meanwhile is that the credential
-/// stops working, and the sweeper reclaims it once it expires.
+/// `DELETE /api/agents/{id}` soft-deletes: the row stays, so the foreign keys never fire. The
+/// credential stops working at once, and the sweeper's next pass removes the state, live or not.
 #[tokio::test]
 #[serial]
-async fn a_soft_deleted_agent_loses_access_to_its_state_which_expiry_then_reclaims() {
+async fn a_soft_deleted_agent_loses_access_to_its_state_and_the_sweeper_removes_it() {
     let server = TestServer::start().await;
     let admin: Value = server
         .client
@@ -1981,10 +1987,15 @@ async fn a_soft_deleted_agent_loses_access_to_its_state_which_expiry_then_reclai
         .unwrap();
     let admin_id: Uuid = admin["user_id"].as_str().unwrap().parse().unwrap();
     let id = seed_agent_row(&server, admin_id, "soft-deleted-agent").await;
-    let token = common::mint_gateway_token(&server.db, id).await;
-    let agent = Agent { id, token };
-    put_task(&server, &agent, "t", json!(1)).await;
-    put_kv(&server, &agent, "k", json!(1)).await;
+    let agent = Agent {
+        id,
+        token: common::mint_gateway_token(&server.db, id).await,
+    };
+    let bystander = new_agent(&server, "bystander-of-delete").await;
+    for owner in [&agent, &bystander] {
+        put_task(&server, owner, "t", json!(1)).await;
+        put_kv(&server, owner, "k", json!(1)).await;
+    }
 
     let deleted = common::as_superuser(
         server
@@ -2006,25 +2017,39 @@ async fn a_soft_deleted_agent_loses_access_to_its_state_which_expiry_then_reclai
         "unauthorized",
     )
     .await;
-    assert_eq!(
-        count_rows(&server, "agent_tasks").await,
-        1,
-        "the rows wait for expiry"
-    );
 
-    sqlx::query("UPDATE agent_tasks SET expires_at = now() - interval '1 second'")
+    // Nothing has expired, yet the deleted agent's rows go, and only its rows.
+    assert_eq!(sweep(&server.db).await.unwrap(), orphaned(1, 1));
+    assert_eq!(count_rows(&server, "agent_tasks").await, 1);
+    assert_eq!(count_rows(&server, "agent_kv").await, 1);
+    assert_eq!(get_task(&server, &bystander, "t").await.status(), 200);
+    assert_eq!(sweep(&server.db).await.unwrap(), Swept::default());
+
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_sweeper_removes_a_deleted_agents_rows_past_one_batch() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "bulk-deleted-agent").await;
+    sqlx::query(
+        "INSERT INTO agent_tasks (agent_id, task_id, state, body, version, expires_at)
+         SELECT $1, 'task-' || g, 'working', 'x', 1, now() + interval '1 day'
+         FROM generate_series(1, 1500) g",
+    )
+    .bind(agent.id)
+    .execute(&server.db)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE agents SET deleted_at = now() WHERE id = $1")
+        .bind(agent.id)
         .execute(&server.db)
         .await
         .unwrap();
-    sqlx::query("UPDATE agent_kv SET expires_at = now() - interval '1 second'")
-        .execute(&server.db)
-        .await
-        .unwrap();
-    assert_eq!(
-        sweep_expired(&server.db).await.unwrap(),
-        Swept { tasks: 1, kv: 1 }
-    );
 
+    assert_eq!(sweep(&server.db).await.unwrap(), orphaned(1500, 0));
+    assert_eq!(count_rows(&server, "agent_tasks").await, 0);
     server.cleanup().await;
 }
 
