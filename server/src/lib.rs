@@ -355,7 +355,7 @@ where
 
     // Agent state API (`/api/agent-state/*`): mounted OUTSIDE `require_auth` for the same
     // reason as the MCP gateway above: its callers are deployed agents holding their own
-    // gateway credential, never a user session. The router authenticates that credential and
+    // state-scoped credential, never a user session. The router authenticates that credential and
     // rate-limits per agent itself, and the CORS layer below covers it like every other mount.
     let agent_state_routes = Router::new()
         .nest("/api", agent_state::router(&state))
