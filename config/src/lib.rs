@@ -136,6 +136,11 @@ pub struct Config {
     pub hitl_resume_lease_minutes: i64,
     pub hitl_resume_max_attempts: u32,
     pub hitl_resume_retry_delay_secs: u64,
+    /// How many times the `direct_chat`/`agent_proxy`/`orchestrator` resume dispatcher re-sends a
+    /// resume the agent answered with "task not found" before it concludes the agent lost the
+    /// paused task (`agent_lost_task`). A round-robin Service can send the first attempt to a
+    /// replica that never saw the task, so one such answer proves nothing. Total POSTs = this + 1.
+    pub hitl_lost_task_retries: u32,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     /// Multi-tenant mode (per-CP): when on, this control plane runs behind the
@@ -555,6 +560,7 @@ impl Config {
             hitl_resume_lease_minutes: env_parse("HITL_RESUME_LEASE_MINUTES", 16),
             hitl_resume_max_attempts: env_parse("HITL_RESUME_MAX_ATTEMPTS", 3),
             hitl_resume_retry_delay_secs: env_parse("HITL_RESUME_RETRY_DELAY_SECS", 2),
+            hitl_lost_task_retries: env_parse("HITL_LOST_TASK_RETRIES", 3),
             github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
             multi_tenant_mode: std::env::var("MULTI_TENANT_MODE")

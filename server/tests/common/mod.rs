@@ -448,6 +448,7 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         hitl_resume_lease_minutes: 2,
         hitl_resume_max_attempts: 3,
         hitl_resume_retry_delay_secs: 2,
+        hitl_lost_task_retries: 3,
         github_client_id: None,
         github_client_secret: None,
         router_shortlist_threshold: 15,

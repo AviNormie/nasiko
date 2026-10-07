@@ -6,11 +6,13 @@
 //! (`oss/server/src/hitl/mod.rs`) must record that as the terminal `agent_lost_task` outcome,
 //! not as a delivered answer (`completed`) and not as a retryable failure.
 //!
-//! Agents report "no such task" two ways, and both are covered here:
-//!   * a JSON-RPC `error` with code -32001, in an SSE frame or a JSON body, at HTTP 200
-//!     (what the Python a2a-sdk sends), and
-//!   * HTTP 404 (the status the Rust a2a-server maps `TaskNotFoundError` to,
-//!     `oss/docs/A2A_PROTOCOL.md`, "HTTP Status Code Mapping").
+//! Agents report "no such task" with a JSON-RPC `error` of code -32001, in an SSE frame or a JSON
+//! body at HTTP 200 (what the Python a2a-sdk sends), or as the body of an HTTP 404 (the status the
+//! Rust a2a-server maps `TaskNotFoundError` to, `oss/docs/A2A_PROTOCOL.md`, "HTTP Status Code
+//! Mapping"). A 404 whose body is not that error (a proxy's HTML page) is an ordinary retryable
+//! failure. One such answer does not conclude anything: the resume is re-sent
+//! `HITL_LOST_TASK_RETRIES` times first, so the row is lost only after every one of the N+1 POSTs
+//! was answered "task not found".
 //!
 //! The metric tests install a process-wide OTel meter provider backed by a `ManualReader` before
 //! any server starts, so the real instruments (`nasiko.cp` meter) can be read back. Every test
@@ -54,6 +56,11 @@ enum ResumeReply {
     TaskNotFoundJsonBody,
     /// The same error with HTTP 404 (Rust a2a-server).
     TaskNotFoundHttp404,
+    /// HTTP 404 with an HTML body, as a proxy or ingress answers: says nothing about the task.
+    Html404,
+    /// "Task not found" (SSE frame) for the first `n` resume POSTs, then the task completes: a
+    /// round-robin Service that reached a replica without the task, then one with it.
+    LostThenCompleted(usize),
     /// A JSON-RPC error that is not "task not found": must keep today's handling.
     OtherJsonRpcError,
     /// The task continues and completes.
@@ -118,6 +125,19 @@ async fn fake_agent_handler(State(agent): State<FakeAgent>, body: Bytes) -> Resp
 
     let request_id = &request["id"];
     match agent.resume_reply {
+        ResumeReply::LostThenCompleted(lost_posts) if call_index < lost_posts => {
+            sse_response(&task_not_found_error(request_id))
+        }
+        ResumeReply::LostThenCompleted(_) => sse_response(&status_frame(
+            nasiko_types::a2a::completed(&task_id, &context_id),
+        )),
+        ResumeReply::Html404 => Response::builder()
+            .status(404)
+            .header("content-type", "text/html")
+            .body(axum::body::Body::from(
+                "<html><h1>404 Not Found</h1></html>",
+            ))
+            .unwrap(),
         ResumeReply::TaskNotFoundFrame => sse_response(&task_not_found_error(request_id)),
         ResumeReply::TaskNotFoundJsonBody => json_response(200, &task_not_found_error(request_id)),
         ResumeReply::TaskNotFoundHttp404 => json_response(404, &task_not_found_error(request_id)),
@@ -387,19 +407,75 @@ async fn resume_with(
 
 // ─── The outcome ─────────────────────────────────────────────────────────────
 
+/// `HITL_LOST_TASK_RETRIES` in the test config (`common::test_config`) plus the first POST.
+const LOST_TASK_POSTS: usize = 4;
+
+/// Re-delivery: the agent that said "no such task" twice has the task on the third try.
+#[tokio::test]
+#[serial]
+async fn a_task_found_on_a_later_delivery_completes_the_resume() {
+    let (row, _, calls, server) = resume_with(ResumeReply::LostThenCompleted(2)).await;
+
+    assert_eq!(row.resume_status, "completed");
+    assert_eq!(row.resume_last_error, None);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+    server.cleanup().await;
+}
+
+/// A bare 404 (an HTML page from a proxy) is not the agent reporting anything about the task:
+/// the row keeps the old retryable-failure handling and is never concluded lost.
+#[tokio::test]
+#[serial]
+async fn an_html_404_is_retried_as_an_ordinary_failure_not_concluded_lost() {
+    let server = start_server().await;
+    let user_id = seed_user(&server).await;
+    let (agent_url, calls) = start_fake_agent(ResumeReply::Html404, false).await;
+    let agent_id = seed_running_agent(&server, user_id, &agent_url).await;
+    let hitl_id = seed_pending_request(&server, agent_id, user_id).await;
+
+    answer(&server, user_id, hitl_id).await;
+    // The dispatcher's next tick claims the row again after a retryable failure.
+    wait_for("the HTML 404 to be retried", || {
+        (calls.load(Ordering::SeqCst) >= 2).then_some(())
+    })
+    .await;
+
+    let row = fetch_resume_row(&server, hitl_id).await;
+    assert_ne!(row.resume_status, "agent_lost_task");
+    assert!(
+        calls.load(Ordering::SeqCst) <= row.resume_dispatch_attempts as usize,
+        "at most one POST per claim: no re-delivery loop for a 404 that is not task-not-found"
+    );
+    assert!(
+        row.resume_last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("agent HTTP 404")),
+        "{:?}",
+        row.resume_last_error
+    );
+
+    server.cleanup().await;
+}
+
 #[tokio::test]
 #[serial]
 async fn a_task_not_found_stream_frame_is_recorded_as_agent_lost_task() {
-    let (row, _, _, server) = resume_with(ResumeReply::TaskNotFoundFrame).await;
+    let (row, _, calls, server) = resume_with(ResumeReply::TaskNotFoundFrame).await;
 
     assert_eq!(row.resume_status, "agent_lost_task");
     assert!(!row.leased, "a terminal row must not keep its lease");
     assert!(
         row.resume_last_error
             .as_deref()
-            .is_some_and(|e| e.contains("-32001")),
-        "the signal that classified the row should be recorded: {:?}",
+            .is_some_and(|e| e.contains("-32001") && e.contains("4 delivery attempts")),
+        "the signal and the attempt count should be recorded: {:?}",
         row.resume_last_error
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        LOST_TASK_POSTS,
+        "lost only after the initial POST plus every re-delivery was answered task-not-found"
     );
 
     server.cleanup().await;
@@ -408,32 +484,29 @@ async fn a_task_not_found_stream_frame_is_recorded_as_agent_lost_task() {
 #[tokio::test]
 #[serial]
 async fn a_task_not_found_json_body_is_recorded_as_agent_lost_task() {
-    let (row, _, _, server) = resume_with(ResumeReply::TaskNotFoundJsonBody).await;
+    let (row, _, calls, server) = resume_with(ResumeReply::TaskNotFoundJsonBody).await;
 
     assert_eq!(row.resume_status, "agent_lost_task");
     assert!(!row.leased);
+    // Exactly one POST per attempt: the first -32001 body must not be answered with the
+    // `message/send` retry (a different request that could fail differently and mask it).
+    assert_eq!(calls.load(Ordering::SeqCst), LOST_TASK_POSTS);
 
     server.cleanup().await;
 }
 
 #[tokio::test]
 #[serial]
-async fn an_http_404_is_recorded_as_agent_lost_task_and_never_retried() {
+async fn an_http_404_carrying_task_not_found_is_recorded_as_agent_lost_task_and_not_reclaimed() {
     let (row, hitl_id, calls, server) = resume_with(ResumeReply::TaskNotFoundHttp404).await;
 
     assert_eq!(row.resume_status, "agent_lost_task");
     assert!(!row.leased);
     assert_eq!(
         row.resume_dispatch_attempts, 1,
-        "the answer reached no task, so there is nothing to retry"
+        "the re-deliveries happen inside one claim; the row is never claimed again"
     );
-    assert!(
-        row.resume_last_error
-            .as_deref()
-            .is_some_and(|e| e.contains("404")),
-        "the signal that classified the row should be recorded: {:?}",
-        row.resume_last_error
-    );
+    assert_eq!(calls.load(Ordering::SeqCst), LOST_TASK_POSTS);
 
     // Let the dispatcher tick past where a retry would have happened: the row stays put and the
     // agent is not asked again.
@@ -553,7 +626,8 @@ async fn an_orchestrator_resume_that_lost_its_task_starts_no_follow_up_turn() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(step_status().await, "resumed");
+    // `failed`, not `resumed`: the answer reached no task, so the step never ran on.
+    assert_eq!(step_status().await, "failed");
 
     // The only transcript row is the human's own answer, which `resolve` saves. A follow-up turn
     // would have added its note (role `system`) before doing anything else.
