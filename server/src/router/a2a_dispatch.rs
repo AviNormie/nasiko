@@ -29,6 +29,7 @@ use crate::acl::CpCallGuard;
 use crate::auth::Claims;
 use crate::orchestrator_policy::TurnKind;
 use crate::state::AppState;
+use crate::telemetry::agent_request::RequestOutcome;
 
 /// Doc-only stand-in for the real request type (`nasiko_types::a2a::JsonRpcRequest`,
 /// re-exported from the external `a2a-lf` crate, which has no `ToSchema` impl and
@@ -1478,6 +1479,12 @@ async fn agent_stream(
             ))
     };
 
+    // In flight until the agent's reply is complete. Starts as `Error`, so the early returns
+    // below count as failures.
+    let mut request_guard = state
+        .genai_metrics
+        .begin_agent_request(&agent.id.to_string());
+
     let response = build_agent_req()
         .json(&req_body)
         .send()
@@ -1513,6 +1520,9 @@ async fn agent_stream(
     if content_type.contains("text/event-stream") {
         let byte_stream = response.bytes_stream();
         let flow_id_cleanup = flow_id;
+        // Dropping the generator (client disconnect) skips the code after the relay loop, which
+        // is the only place the outcome is settled.
+        request_guard.set_outcome(RequestOutcome::Cancelled);
 
         let stream = async_stream::stream! {
             // Hold the dispatch span for the life of the stream so its duration
@@ -1549,7 +1559,11 @@ async fn agent_stream(
                         };
                         let chunk = match chunk_result {
                             Ok(c) => c,
-                            Err(_) => { agent_done = true; continue; }
+                            Err(_) => {
+                                request_guard.set_outcome(RequestOutcome::Error);
+                                agent_done = true;
+                                continue;
+                            }
                         };
                         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -1591,6 +1605,10 @@ async fn agent_stream(
                     }
                 }
             }
+
+            // The agent's part is over; what follows is bookkeeping, not in-flight agent load.
+            request_guard.settle(RequestOutcome::from_success(agent_error.is_none()));
+            drop(request_guard);
 
             if final_disposition == a2a::StreamDisposition::Paused {
                 // §8 (HITL plan): a Paused disposition is not "the task is done" — persist the
@@ -1692,6 +1710,9 @@ async fn agent_stream(
         // `message/send`, or whose `message/stream` fell back here) — §8 applies here just as
         // much as it does to the streaming branch; without this check the pause was silently
         // flattened into `extract_text`'s ordinary-reply fallback and lost entirely.
+        // Any failure above (including the retry) returned early with the guard still `Error`.
+        request_guard.set_outcome(RequestOutcome::Ok);
+
         let raw_body = resp_body.to_string();
         if a2a::classify_stream_disposition(&raw_body) == a2a::StreamDisposition::Paused {
             let question_text = build_pause_question(&raw_body)["message"]
