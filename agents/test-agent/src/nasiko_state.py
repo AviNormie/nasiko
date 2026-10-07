@@ -19,8 +19,8 @@ Configuration comes from the environment the platform injects into the container
     NASIKO_STATE_URL     base URL of the state API (ends in /api/agent-state). Unset means the
                          platform provides no store, and every factory here returns the
                          in-memory implementation the SDK ships, so the same code runs locally.
-    NASIKO_AGENT_TOKEN   this agent's credential. Falls back to MCP_GATEWAY_TOKEN, which holds
-                         the same value.
+    NASIKO_AGENT_TOKEN   this agent's state credential. It is the only one accepted: the MCP
+                         gateway token is a different credential and is never used here.
 
 Write guarantee (see NasikoTaskStore): a save that changes ``task.status.state`` is on the
 server before ``save()`` returns. Other saves are coalesced to at most one write per
@@ -84,7 +84,6 @@ logger = logging.getLogger("nasiko_state")
 
 STATE_URL_ENV = "NASIKO_STATE_URL"
 AGENT_TOKEN_ENV = "NASIKO_AGENT_TOKEN"
-LEGACY_AGENT_TOKEN_ENV = "MCP_GATEWAY_TOKEN"
 
 CLIENT_NAME = "nasiko_state.py/1"
 
@@ -474,11 +473,11 @@ class NasikoStateClient:
         url = env.get(STATE_URL_ENV, "").strip()
         if not url:
             return None
-        token = (env.get(AGENT_TOKEN_ENV) or env.get(LEGACY_AGENT_TOKEN_ENV) or "").strip()
+        token = env.get(AGENT_TOKEN_ENV, "").strip()
         if not token:
             raise NasikoStateError(
-                f"{STATE_URL_ENV} is set but neither {AGENT_TOKEN_ENV} nor {LEGACY_AGENT_TOKEN_ENV} "
-                "holds the agent credential"
+                f"{STATE_URL_ENV} is set but {AGENT_TOKEN_ENV} is empty or missing: the state API needs "
+                f"this agent's state credential, which the platform injects as {AGENT_TOKEN_ENV}"
             )
         return cls(url, token)
 
