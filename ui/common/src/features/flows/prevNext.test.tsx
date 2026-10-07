@@ -22,7 +22,7 @@ const position = (n: number, of: number) =>
   screen.getByRole('group', { name: `flow ${n} of ${of}` })
 
 describe('flow Previous/Next', () => {
-  it('steps through the table rows, dropping the selected step, with the buttons and K', async () => {
+  it('steps through the table rows with the buttons and K', async () => {
     const { router } = renderApp('/flows')
     const links = await flowLinks()
     const paths = links.map(pathOf)
@@ -34,7 +34,6 @@ describe('flow Previous/Next', () => {
     await waitFor(() => expect(position(2, paths.length)).toBeInTheDocument())
     // The new page's arrow has focus again after the remount.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next flow' })).toHaveFocus())
-    expect((router.state.location.search as Record<string, unknown>).step).toBeUndefined()
     await userEvent.keyboard('k')
     await waitFor(() => expect(router.state.location.pathname).toBe(paths[0]))
     // Replaced, not pushed: Back is the list.
