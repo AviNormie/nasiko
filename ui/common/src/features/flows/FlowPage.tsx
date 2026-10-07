@@ -194,7 +194,13 @@ function FlowBody({
   return (
     <Frame>
       <PageHeader
-        breadcrumb={<BackToFlows />}
+        // The arrows sit at the right of the breadcrumb row, so the varying actions can't move them.
+        breadcrumb={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <BackToFlows />
+            <FlowSiblings flowId={flow.flow_id} />
+          </div>
+        }
         title={title}
         description={
           <span className="inline-flex flex-wrap items-center gap-x-2">
@@ -208,7 +214,6 @@ function FlowBody({
         }
         actions={
           <>
-            <FlowSiblings flowId={flow.flow_id} />
             {session ? (
               <>
                 {tempo ? (
