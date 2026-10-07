@@ -10,7 +10,7 @@ import time
 import nasiko_state
 import pytest
 from fake_state_server import FakeStateServer
-from nasiko_state import RETRY_ATTEMPTS, NasikoTaskStore
+from nasiko_state import RETRY_ATTEMPTS, NasikoStateError, NasikoTaskStore
 from sdk_compat import artifact_text, new_task, with_artifact_text, with_state
 
 pytestmark = pytest.mark.anyio
@@ -173,12 +173,14 @@ class TestTerminalStates:
         assert state_server.tasks["t1"].value["state"] == "completed"
         assert written_texts(state_server) == ["1", "3"]  # nothing stale is written afterwards
 
-    async def test_a_finished_task_leaves_no_bookkeeping_behind(self, patient_store, state_server):
+    async def test_a_finished_task_owes_nothing_and_its_slot_can_be_evicted(
+        self, patient_store, state_server
+    ):
         task = new_task("t1", "working")
         await patient_store.save(task)
         await patient_store.save(with_state(task, "completed"))
 
-        assert "t1" not in patient_store._slots
+        assert patient_store._slots["t1"].is_idle()
 
     async def test_a_finished_task_still_reads_back(self, patient_store):
         task = new_task("t1", "working", artifact_text="done")
@@ -254,8 +256,6 @@ class TestShutdown:
     async def test_aclose_with_a_failing_server_raises_instead_of_dropping_silently(
         self, client, state_server
     ):
-        from nasiko_state import NasikoStateError
-
         store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
         task = new_task("t1", "working", artifact_text="1")
         await store.save(task)
@@ -338,7 +338,7 @@ class TestShutdown:
 
 
 class TestDeferredFailures:
-    async def test_a_failed_deferred_write_is_logged_and_retried_by_the_next_save(
+    async def test_a_failed_deferred_write_is_logged_and_retried_without_another_save(
         self, store, state_server, caplog
     ):
         task = new_task("t1", "working", artifact_text="0")
@@ -346,10 +346,59 @@ class TestDeferredFailures:
         state_server.fail(500, times=RETRY_ATTEMPTS, when=lambda r: r.method == "PUT")
         with caplog.at_level(logging.ERROR, logger="nasiko_state"):
             await store.save(with_artifact_text(task, "1"))
-            await eventually(lambda: "deferred task write failed" in caplog.text)
+            await eventually(lambda: "deferred write of task t1 failed (will retry)" in caplog.text)
 
-        await store.save(with_artifact_text(task, "2"))
-        await eventually(lambda: written_texts(state_server)[-1] == "2")
+        await eventually(lambda: written_texts(state_server)[-1] == "1")
+
+    async def test_a_failed_state_change_is_retried_in_the_background(self, store, state_server):
+        task = new_task("t1", "working")
+        await store.save(task)
+        state_server.fail(503, times=RETRY_ATTEMPTS, when=lambda r: r.method == "PUT")
+        with pytest.raises(NasikoStateError):
+            await store.save(with_state(task, "input-required"))
+
+        await eventually(lambda: state_server.tasks["t1"].value["state"] == "input-required")
+
+    async def test_background_retries_back_off(self, client, state_server):
+        store = NasikoTaskStore(client, coalesce_window_seconds=WINDOW)
+        task = new_task("t1", "working", artifact_text="0")
+        await store.save(task)
+        state_server.fail(500, times=10_000, when=lambda r: r.method == "PUT")
+        await store.save(with_artifact_text(task, "1"))
+
+        await asyncio.sleep(WINDOW * 8)
+
+        # A retry every window would be 8 deferred writes by now; doubling (0.2, 0.4, 0.8 s) is 3.
+        assert len(task_writes(state_server)) - 1 <= 3 * RETRY_ATTEMPTS
+        with pytest.raises(NasikoStateError):
+            await store.aclose()
+
+    async def test_retrying_stops_once_the_update_is_too_old_to_trust(
+        self, store, state_server, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(nasiko_state, "PENDING_MAX_AGE_SECONDS", WINDOW * 3)
+        task = new_task("t1", "working", artifact_text="0")
+        await store.save(task)
+        state_server.fail(500, times=10_000, when=lambda r: r.method == "PUT")
+        with caplog.at_level(logging.ERROR, logger="nasiko_state"):
+            await store.save(with_artifact_text(task, "1"))
+            await eventually(lambda: "discarding an update" in caplog.text)
+
+        await eventually(lambda: store._slots["t1"].is_idle())
+        requests_when_discarded = len(state_server.requests)
+        await asyncio.sleep(WINDOW * 3)
+        assert len(state_server.requests) == requests_when_discarded  # no retry after the discard
+
+    async def test_a_rejected_deferred_write_is_dropped_not_retried(self, store, state_server, caplog):
+        task = new_task("t1", "working", artifact_text="0")
+        await store.save(task)
+        state_server.fail(413, when=lambda r: r.method == "PUT")
+        with caplog.at_level(logging.ERROR, logger="nasiko_state"):
+            await store.save(with_artifact_text(task, "x" * 10))
+            await eventually(lambda: "(dropped)" in caplog.text)
+
+        await asyncio.sleep(WINDOW * 3)
+        assert len(task_writes(state_server)) == 2  # the first save and the one refused write
 
     async def test_delete_discards_a_pending_update_so_it_cannot_resurrect_the_task(
         self, patient_store, state_server
