@@ -2177,7 +2177,51 @@ async fn a_delete_waits_for_a_concurrent_writer_of_the_same_entry() {
 async fn a_write_that_waited_for_the_lock_continues_the_version_and_is_stamped_after_it() {
     let server = TestServer::start().await;
     let agent = new_agent(&server, "lock-order-agent").await;
+    assert_a_waiting_write_continues_the_version(&server, &agent).await;
+    server.cleanup().await;
+}
+
+/// The same, on a database whose sessions default to SERIALIZABLE: the write flow states its own
+/// isolation, so a default it did not choose cannot turn the wait into a serialization failure.
+#[tokio::test]
+#[serial]
+async fn a_waiting_write_continues_the_version_whatever_the_default_isolation() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "serializable-agent").await;
+    sqlx::query(
+        "DO $$ BEGIN EXECUTE format(
+             'ALTER DATABASE %I SET default_transaction_isolation = serializable',
+             current_database());
+         END $$",
+    )
+    .execute(&server.db)
+    .await
+    .unwrap();
+    // Sessions read the default when they connect, so end the server's open one; its pool
+    // reconnects on the next request, under the new default.
     let peer = peer_pool(&server).await;
+    sqlx::query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+         WHERE datname = current_database() AND pid <> pg_backend_pid()",
+    )
+    .execute(&peer)
+    .await
+    .unwrap();
+    peer.close().await;
+    let isolation: String = sqlx::query_scalar("SHOW default_transaction_isolation")
+        .fetch_one(&server.db)
+        .await
+        .unwrap();
+    assert_eq!(isolation, "serializable");
+
+    assert_a_waiting_write_continues_the_version(&server, &agent).await;
+    server.cleanup().await;
+}
+
+/// A first writer holds an entry's lock and commits version 1 while a second write, already
+/// started, waits; the second must then write version 2, stamped after the first.
+async fn assert_a_waiting_write_continues_the_version(server: &TestServer, agent: &Agent) {
+    let peer = peer_pool(server).await;
 
     // A first writer holds the entry's lock, and the second begins while it does.
     let mut first = peer.begin().await.unwrap();
@@ -2187,7 +2231,7 @@ async fn a_write_that_waited_for_the_lock_continues_the_version_and_is_stamped_a
         .execute(&mut *first)
         .await
         .unwrap();
-    let request = call(&server, &agent, Method::PUT, "/tasks/ordered")
+    let request = call(server, agent, Method::PUT, "/tasks/ordered")
         .json(&json!({"context_id": null, "state": "working", "body": "second"}));
     let second = tokio::spawn(async move { request.send().await.unwrap() });
     wait_for_a_blocked_writer(&peer).await;
@@ -2220,7 +2264,6 @@ async fn a_write_that_waited_for_the_lock_continues_the_version_and_is_stamped_a
     );
 
     peer.close().await;
-    server.cleanup().await;
 }
 
 // ─── When an agent goes away ────────────────────────────────────────────────
