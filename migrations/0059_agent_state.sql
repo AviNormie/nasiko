@@ -28,7 +28,7 @@ ALTER TABLE agents
 -- agents on its next pass.
 CREATE TABLE agent_tasks (
     agent_id    UUID        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    task_id     TEXT        NOT NULL,
+    task_id     TEXT        COLLATE "C" NOT NULL,
     context_id  TEXT,
     state       TEXT        NOT NULL,
     body        TEXT,
@@ -40,6 +40,10 @@ CREATE TABLE agent_tasks (
     PRIMARY KEY (agent_id, task_id),
     CHECK ((deleted_at IS NULL) = (body IS NOT NULL))
 );
+-- Names are compared as bytes ("C"), so listings order the same under any locale
+-- and the primary key, like the index below, serves that order and its ranges.
+-- Serves `GET /tasks`: newest first, then by id, from a cursor.
+CREATE INDEX idx_agent_tasks_listing ON agent_tasks (agent_id, updated_at DESC, task_id);
 CREATE INDEX idx_agent_tasks_context ON agent_tasks (agent_id, context_id);
 -- Serves the sweeper's `WHERE expires_at <= now() ... LIMIT` scans.
 CREATE INDEX idx_agent_tasks_expires ON agent_tasks (expires_at);
@@ -48,7 +52,7 @@ CREATE INDEX idx_agent_tasks_expires ON agent_tasks (expires_at);
 -- `agent_tasks.body` is, and a deleted or expired entry is a tombstone the same way.
 CREATE TABLE agent_kv (
     agent_id    UUID        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    key         TEXT        NOT NULL,
+    key         TEXT        COLLATE "C" NOT NULL,
     value       TEXT,
     version     BIGINT      NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -58,4 +62,6 @@ CREATE TABLE agent_kv (
     PRIMARY KEY (agent_id, key),
     CHECK ((deleted_at IS NULL) = (value IS NOT NULL))
 );
+-- The primary key serves `GET /kv`: key order, cursor range and prefix, because
+-- `key` is a "C" column.
 CREATE INDEX idx_agent_kv_expires ON agent_kv (expires_at);
