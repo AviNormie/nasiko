@@ -248,8 +248,15 @@ impl AppState {
         let (build_tx, build_rx) = mpsc::channel(64);
         let (hitl_resume_tx, hitl_resume_rx) = mpsc::channel(64);
         let continuation_events = crate::hitl::continuation::ContinuationRegistry::new();
+        // Every conversational and MAF pause is created through this store, so counting them is
+        // its hook's job rather than each call site's (the MAF worker, in another crate, creates
+        // them too).
         let hitl_store: Arc<dyn nasiko_hitl::HitlStore> = Arc::new(
-            nasiko_hitl::PgHitlStore::with_ttl_days(db.clone(), config.hitl_request_ttl_days),
+            nasiko_hitl::PgHitlStore::with_ttl_days(db.clone(), config.hitl_request_ttl_days)
+                .with_pause_hook({
+                    let metrics = genai_metrics.clone();
+                    Arc::new(move |row| metrics.record_hitl_pause(row))
+                }),
         );
 
         // MCP gateway state: reuses the same pool, redis client, and pooled

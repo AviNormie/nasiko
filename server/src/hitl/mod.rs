@@ -5,8 +5,10 @@
 //!
 //! A claimed delivery either releases the claim for a retry or ends in a terminal `resume_status`:
 //! `completed`, `failed`, `delivery_outcome_unknown`, or `agent_lost_task` when the agent no longer
-//! holds the paused task (see `lost_task`). `mcp_tool` rows resume through `nasiko-hitl`'s own
-//! dispatcher, not this one.
+//! holds the paused task (see `lost_task`). `deliver_and_meter` reads that terminal outcome back
+//! from the row and records it on the `nasiko.hitl.*` metrics (`telemetry/genai.rs`); pauses are
+//! counted by the store when it creates the row. `mcp_tool` rows resume through `nasiko-hitl`'s
+//! own dispatcher, not this one.
 
 pub mod continuation;
 mod lost_task;
@@ -17,7 +19,7 @@ use futures::StreamExt;
 use nasiko_flow::FlowContext;
 use nasiko_hitl::{
     AUTH_OUTCOME_CONFIRMED, AUTH_OUTCOME_DENIED, AUTH_REPLY_AUTHORIZED, FailureKind, HitlOrigin,
-    HitlRequest, NewHitlRequest,
+    HitlRequest, NewHitlRequest, ResumeStatus,
 };
 use nasiko_types::a2a::StreamDisposition;
 use tokio::sync::mpsc;
@@ -136,7 +138,7 @@ pub async fn run(state: AppState, mut notify: mpsc::Receiver<()>) {
             };
 
             let state_clone = state.clone();
-            deliveries.spawn(async move { deliver(state_clone, claimed).await });
+            deliveries.spawn(async move { deliver_and_meter(state_clone, claimed).await });
         }
 
         // Reap whatever has finished without blocking this tick — a still-running delivery is
@@ -151,6 +153,48 @@ pub async fn run(state: AppState, mut notify: mpsc::Receiver<()>) {
             }
         }
     }
+}
+
+/// One claimed delivery attempt, then the metering of whatever terminal outcome it reached.
+///
+/// The outcome is read back from the row rather than reported by each of `deliver`'s many exits:
+/// the row is the source of truth (a retryable failure leaves it `not_started`, which is not an
+/// outcome yet), and an exit added to `deliver` later is metered without anyone having to
+/// remember to.
+async fn deliver_and_meter(state: AppState, claimed: HitlRequest) {
+    let (id, attempt) = (claimed.id, claimed.resume_dispatch_attempts);
+    deliver(state.clone(), claimed).await;
+    meter_resume_outcome(&state, id, attempt).await;
+}
+
+/// Records the terminal outcome `deliver` left on row `id`, if claim number `attempt` is the one
+/// that left it.
+async fn meter_resume_outcome(state: &AppState, id: Uuid, attempt: i32) {
+    let row = match state.hitl_store.get(id).await {
+        Ok(Some(row)) => row,
+        // Deleted since (its agent was removed): nothing left to attribute an outcome to.
+        Ok(None) => return,
+        Err(e) => {
+            // Telemetry only. The outcome itself is already durable, so a failed read-back must
+            // not touch delivery; it just leaves this one outcome unmetered.
+            tracing::warn!(
+                %id, %e,
+                "hitl dispatcher: could not read the row back to meter its resume outcome"
+            );
+            return;
+        }
+    };
+    if outcome_recorded_by_attempt(&row, attempt) {
+        state.genai_metrics.record_hitl_resume_finished(&row);
+    }
+}
+
+/// Whether `row` holds a terminal outcome written by claim number `attempt`. `not_started` means a
+/// retryable failure released the claim, so there is no outcome yet; a different attempt count
+/// means a later claim took the row over (a lease lapsed on a slow delivery), and that claim
+/// reports the outcome, not this one.
+fn outcome_recorded_by_attempt(row: &HitlRequest, attempt: i32) -> bool {
+    row.resume_status != ResumeStatus::NotStarted && row.resume_dispatch_attempts == attempt
 }
 
 async fn deliver(state: AppState, row: HitlRequest) {
@@ -1422,7 +1466,7 @@ mod answer_text_tests {
     use super::*;
     use nasiko_hitl::{HitlKind, HitlOrigin, HitlStatus, ResumeStatus};
 
-    fn row_with_response(human_response: Option<serde_json::Value>) -> HitlRequest {
+    pub(super) fn row_with_response(human_response: Option<serde_json::Value>) -> HitlRequest {
         let now = chrono::Utc::now();
         HitlRequest {
             id: Uuid::new_v4(),
@@ -1542,5 +1586,55 @@ mod answer_text_tests {
     fn no_human_response_fails_closed_to_denied() {
         let row = row_with_response(None);
         assert_eq!(answer_text(&row), "denied");
+    }
+}
+
+#[cfg(test)]
+mod outcome_metering_tests {
+    use super::answer_text_tests::row_with_response;
+    use super::*;
+
+    const ATTEMPT: i32 = 2;
+
+    fn row_after(resume_status: ResumeStatus, attempts: i32) -> HitlRequest {
+        HitlRequest {
+            resume_status,
+            resume_dispatch_attempts: attempts,
+            ..row_with_response(None)
+        }
+    }
+
+    #[test]
+    fn an_attempt_that_only_released_the_claim_has_no_outcome_to_meter() {
+        // A retryable failure leaves the row `not_started` for the next claim to retry.
+        assert!(!outcome_recorded_by_attempt(
+            &row_after(ResumeStatus::NotStarted, ATTEMPT),
+            ATTEMPT
+        ));
+    }
+
+    #[test]
+    fn every_terminal_status_the_attempt_wrote_is_metered() {
+        for status in [
+            ResumeStatus::Completed,
+            ResumeStatus::Failed,
+            ResumeStatus::DeliveryOutcomeUnknown,
+            ResumeStatus::Skipped,
+            ResumeStatus::AgentLostTask,
+        ] {
+            assert!(
+                outcome_recorded_by_attempt(&row_after(status, ATTEMPT), ATTEMPT),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_outcome_written_by_a_later_claim_is_left_to_that_claim() {
+        // This attempt outlived its lease; a second claim took the row over and finished it.
+        assert!(!outcome_recorded_by_attempt(
+            &row_after(ResumeStatus::Completed, ATTEMPT + 1),
+            ATTEMPT
+        ));
     }
 }
