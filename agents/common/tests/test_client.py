@@ -11,6 +11,7 @@ from nasiko_state import (
     NasikoStateClient,
     NasikoStateConflict,
     NasikoStateError,
+    NasikoStateTooLarge,
 )
 
 pytestmark = pytest.mark.anyio
@@ -202,10 +203,10 @@ class TestConflicts:
 
 
 class TestFailures:
-    async def test_oversized_body_raises_with_status_and_body(self, client, state_server, style):
+    async def test_oversized_body_raises_too_large_with_status_and_body(self, client, state_server, style):
         state_server.max_body_bytes = 10
 
-        with pytest.raises(NasikoStateError) as raised:
+        with pytest.raises(NasikoStateTooLarge) as raised:
             await put_task(client, style, body={"big": "x" * 100})
 
         assert raised.value.status == 413

@@ -12,7 +12,13 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.serde.types import ERROR, INTERRUPT, RESUME
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import Command, interrupt
-from nasiko_state import NasikoCheckpointSaver, NasikoKV, NasikoStateError
+from nasiko_state import (
+    NasikoCheckpointSaver,
+    NasikoKV,
+    NasikoStateError,
+    NasikoStateMalformedRow,
+    NasikoStateTooLarge,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -417,6 +423,95 @@ class TestCallCounts:
         assert [r.method for r in state_server.requests] == ["GET", "PUT"]
 
 
+def versioned_checkpoint(checkpoint_id: str, **channels: tuple[int, object]) -> dict:
+    """A checkpoint whose channels each carry their own version: name=(version, value)."""
+    return {
+        **checkpoint(checkpoint_id),
+        "channel_values": {name: value for name, (_, value) in channels.items()},
+        "channel_versions": {name: version for name, (version, _) in channels.items()},
+    }
+
+
+METADATA = {"source": "loop", "step": 0, "parents": {}}
+
+
+class TestChannelBlobs:
+    async def test_scalars_stay_inline_and_other_values_get_a_blob_per_channel_version(
+        self, saver, style, state_server
+    ):
+        await put(saver, style, config_for(), "cp-1", messages=["hi"], count=7, label="x")
+
+        assert sorted(key for key in state_server.kv if key.startswith("lgb:")) == [
+            "lgb:thread-1::messages:1"
+        ]
+
+    async def test_an_unchanged_channel_is_not_written_again(self, saver, style, state_server):
+        first = versioned_checkpoint("cp-1", log=(1, ["a"]), notes=(1, {"big": "x" * 50}))
+        saved = await call(saver, style, "put", config_for(), first, METADATA, {"log": 1, "notes": 1})
+        state_server.requests.clear()
+
+        second = versioned_checkpoint("cp-2", log=(2, ["a", "b"]), notes=(1, {"big": "x" * 50}))
+        await call(saver, style, "put", saved, second, METADATA, {"log": 2})
+        loaded = await call(saver, style, "get_tuple", config_for())
+
+        written = [r.path for r in state_server.writes("kv")]
+        assert written == [
+            "/kv/lgb%3Athread-1%3A%3Alog%3A2",
+            "/kv/lg%3Athread-1%3A%3Acp-2",
+            "/kv/lgh%3Athread-1%3A",
+        ]
+        assert loaded.checkpoint["channel_values"] == {"log": ["a", "b"], "notes": {"big": "x" * 50}}
+
+    async def test_the_size_limit_applies_to_each_value_not_to_the_whole_state(
+        self, saver, style, state_server
+    ):
+        state_server.max_body_bytes = 600
+        halves = {"left": ["l" * 300], "right": ["r" * 300]}  # together over the limit, each under it
+
+        saved = await put(saver, style, config_for(), "cp-1", **halves)
+
+        assert (await call(saver, style, "get_tuple", saved)).checkpoint["channel_values"] == halves
+
+    async def test_a_value_over_the_limit_raises_a_typed_error(self, saver, style, state_server):
+        state_server.max_body_bytes = 600
+
+        with pytest.raises(NasikoStateTooLarge) as raised:
+            await put(saver, style, config_for(), "cp-1", messages=["m" * 1000])
+
+        assert raised.value.status == 413
+        assert isinstance(raised.value, NasikoStateError)
+
+    async def test_a_checkpoint_whose_blob_expired_is_an_error_not_a_missing_channel(
+        self, saver, style, state_server
+    ):
+        await put(saver, style, config_for(), "cp-1", messages=["hi"])
+        del state_server.kv["lgb:thread-1::messages:1"]
+
+        with pytest.raises(NasikoStateMalformedRow, match="messages"):
+            await call(saver, style, "get_tuple", config_for())
+
+    async def test_listing_reads_a_shared_value_once(self, saver, style, state_server):
+        config = config_for()
+        for step in (1, 2, 3):
+            snapshot = versioned_checkpoint(f"cp-{step}", log=(step, ["x"] * step), notes=(1, {"n": 1}))
+            config = await call(saver, style, "put", config, snapshot, METADATA, {"log": step, "notes": 1})
+        state_server.requests.clear()
+
+        items = await listing(saver, style, config_for())
+
+        blob_reads = [r.path for r in state_server.calls("GET", "/kv/lgb")]
+        assert len(items) == 3
+        assert len(blob_reads) == 4  # three versions of log, one notes value shared by all three
+        assert all(item.checkpoint["channel_values"]["notes"] == {"n": 1} for item in items)
+
+    async def test_delete_thread_removes_its_blobs(self, saver, style, state_server):
+        await put(saver, style, config_for("doomed"), "cp-1", messages=["hi"])
+
+        await call(saver, style, "delete_thread", "doomed")
+
+        assert not state_server.kv
+
+
 class TestSerialization:
     async def test_pickle_is_never_written(self, client, style):
         saver = NasikoCheckpointSaver(NasikoKV(client), serde=JsonPlusSerializer(pickle_fallback=True))
@@ -447,6 +542,7 @@ class TestSerialization:
             "parent_checkpoint_id",
             "checkpoint",
             "metadata",
+            "blobs",
         }
         assert set(record["checkpoint"]) == {"type", "data"}
         assert record["checkpoint"]["type"] == "msgpack"
