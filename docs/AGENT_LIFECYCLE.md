@@ -274,11 +274,13 @@ implementation is `oss/agents/weather` (`mcp.go`).
 
 ### Durable state
 
-Any A2A agent runs on the platform, whatever it does with its state. An agent that keeps its
-tasks in the platform's state store also survives restarts (a task paused for human input is
-still there afterwards) and can run more than one replica. An agent that keeps tasks in process
-memory, as the SDK's `InMemoryTaskStore` does, loses paused work on every restart and has to
-stay at one replica.
+Any A2A agent runs on the platform, whatever it does with its state. An agent that keeps tasks
+in process memory, as the SDK's `InMemoryTaskStore` does, loses paused work on every restart and
+has to stay at one replica. Keeping tasks in the platform's state store is necessary for
+surviving restarts and running more than one replica, but not sufficient: every other piece of
+state the agent keeps between requests must be durable too. For example `oss/agents/google-adk`
+keeps its sessions in ADK's `InMemorySessionService` and `oss/agents/crewai` keeps data in its
+own `InMemoryCache`, so neither is replica-safe even though both use the durable task store.
 
 The platform injects the store's address and your credential into every deployment:
 
@@ -305,7 +307,8 @@ install_shutdown_hooks(app)  # flushes pending writes when the server stops
 
 `make_task_store()` returns the SDK's in-memory store when `NASIKO_STATE_URL` is unset, so the
 same code runs unchanged on your laptop. A LangGraph agent swaps `MemorySaver()` for
-`make_checkpointer()` the same way. The agents in `oss/agents` already do both, and
+`make_checkpointer()` the same way; running the graph with `durability="exit"` writes one
+checkpoint per run instead of one per step, which keeps a turn well inside the rate limit.
 `oss/agents/common/check_vendored.py` fails CI when a copy drifts from the original.
 
 **What is written, and when.** The store never pretends a write happened:
@@ -319,10 +322,13 @@ same code runs unchanged on your laptop. A LangGraph agent swaps `MemorySaver()`
   is lost. A state change that `save()` returned for always survives.
 
 Failures raise `NasikoStateError` with the HTTP status and body; there is no silent fallback to
-memory once `NASIKO_STATE_URL` is set. Design around three limits: a task is handled by one
-replica at a time (concurrent writers to the same task are last-writer-wins), a single task or
-checkpoint above the platform's body limit (1 MiB by default) is rejected, and stored state
-expires after the platform's retention window (7 days by default) counted from its last write.
+memory once `NASIKO_STATE_URL` is set. Every task write is conditional on the version the replica
+last saw, so a replica never overwrites a newer write: a state change that loses raises
+`NasikoStateConflict`, and a coalesced update that loses (or waited over 60 s) is dropped. Design
+around two limits: a task, or one LangGraph channel value, above the platform's body limit (1 MiB
+by default) raises `NasikoStateTooLarge`, which is why `oss/agents/doc-reader` keeps its
+document-carrying tasks in memory; and stored state expires after the platform's retention
+window (7 days by default) counted from its last write.
 
 ---
 
