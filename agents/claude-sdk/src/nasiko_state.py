@@ -118,6 +118,14 @@ class NasikoStateError(Exception):
         self.body = body
 
 
+class NasikoStateMalformedRow(NasikoStateError):
+    """A stored row cannot be read back as what it claims to be.
+
+    Raised for a task written by the other a2a-sdk major (or not by this module at all), and for a
+    damaged record. Never answered with a half-decoded object.
+    """
+
+
 class NasikoStateConflict(NasikoStateError):
     """An ``If-Match`` precondition failed: another writer changed the row first.
 
@@ -657,9 +665,17 @@ def _timeout() -> httpx.Timeout:
 # --- a2a-sdk major-version adapter --------------------------------------------------------------
 #
 # 0.3.x tasks are pydantic models; 1.x tasks are protobuf messages with no model_dump. Everything
-# the store needs from a task goes through these four names, so the store itself is version-blind.
+# the store needs from a task goes through these names, so the store itself is version-blind.
+#
+# The two majors serialize a task differently, and a body written by one can parse under the other
+# into a task with silently wrong fields (protobuf drops what it does not know). Every stored body
+# is therefore tagged with the format that wrote it, and a foreign tag is refused outright.
+
+TASK_FORMAT_A2A_0_3 = "a2a-0.3"
+TASK_FORMAT_A2A_1 = "a2a-1"
 
 if _a2a_pb2 is None:
+    TASK_FORMAT = TASK_FORMAT_A2A_0_3
     _DECODE_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError)
 
     def _encode_task(task: Task) -> dict[str, Any]:
@@ -675,14 +691,16 @@ else:
     from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
     from a2a.utils.errors import UnsupportedOperationError
 
+    TASK_FORMAT = TASK_FORMAT_A2A_1
     _DECODE_ERRORS = (ParseError, ValueError, TypeError, AttributeError)
 
     def _encode_task(task: Task) -> dict[str, Any]:
         return MessageToDict(task)
 
     def _decode_task(body: Any) -> Task:
-        # Unknown fields are ignored so rows written by a newer SDK still load after a rollback.
-        return ParseDict(body, Task(), ignore_unknown_fields=True)
+        # Strict: an unknown field means the body is not what its tag claims, and protobuf would
+        # otherwise drop it (and any unknown enum value) without a word.
+        return ParseDict(body, Task())
 
     def _state_name(task: Task) -> str:
         return _proto_state_name(task.status.state)
@@ -712,16 +730,27 @@ else:
         )
 
 
+def _stored_body(task: Task) -> dict[str, Any]:
+    """The body written to the state API: the serialized task, tagged with its format."""
+    return {"format": TASK_FORMAT, "task": _encode_task(task)}
+
+
 def _decode_stored_task(body: Any, task_id: str) -> Task:
+    stored_format = body.get("format") if isinstance(body, dict) else None
+    if stored_format != TASK_FORMAT or "task" not in body:
+        raise NasikoStateMalformedRow(
+            f"stored task {task_id!r} is in format {stored_format!r}, and the installed a2a-sdk reads "
+            f"{TASK_FORMAT!r} only"
+        )
     try:
-        task = _decode_task(body)
+        task = _decode_task(body["task"])
     except _DECODE_ERRORS as exc:
-        raise NasikoStateError(
+        raise NasikoStateMalformedRow(
             f"stored task {task_id!r} cannot be decoded by the installed a2a-sdk: {exc}"
         ) from exc
     # protobuf parsing turns {} into an empty Task rather than failing, so check the identity too.
     if task.id != task_id:
-        raise NasikoStateError(f"stored task {task_id!r} holds a body for task {task.id!r}")
+        raise NasikoStateMalformedRow(f"stored task {task_id!r} holds a body for task {task.id!r}")
     return task
 
 
@@ -743,7 +772,7 @@ class _Snapshot:
 
 
 def _snapshot(task: Task) -> _Snapshot:
-    return _Snapshot(task.id, task.context_id or None, _state_name(task), _encode_task(task))
+    return _Snapshot(task.id, task.context_id or None, _state_name(task), _stored_body(task))
 
 
 class _TaskSlot:
