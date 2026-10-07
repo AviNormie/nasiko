@@ -339,8 +339,12 @@ export function SessionTracePage({
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
+        // The arrows sit at the right of the breadcrumb row: the long title pushes the actions onto their own line.
         breadcrumb={
-          <Crumbs back={back} day={search.day} title={session.data?.title ?? sessionId} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Crumbs back={back} day={search.day} title={session.data?.title ?? sessionId} />
+            <SessionSiblings sessionId={sessionId} back={back} />
+          </div>
         }
         title={
           <span className="inline-block">
@@ -379,7 +383,6 @@ export function SessionTracePage({
         }
         actions={
           <>
-            <SessionSiblings sessionId={sessionId} back={back} />
             <OpenChatLink sessionId={sessionId} />
             {/* The selected trace's flow: a flow's id is its trace id (plans/feat-flows.md F19). */}
             {traceId ? <OpenFlowLink flowId={traceId} /> : null}
