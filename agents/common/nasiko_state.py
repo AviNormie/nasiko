@@ -36,17 +36,26 @@ oss/agents/common/check_vendored.py fails when a copy drifts.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 from typing import Any, Callable, Generic, TypeVar
 from urllib.parse import quote, urlsplit
 
 import httpx
+from a2a.server.tasks import InMemoryTaskStore, TaskStore
+from a2a.types import Task
+
+try:
+    from a2a.types import a2a_pb2 as _a2a_pb2  # a2a-sdk 1.x: tasks are protobuf messages
+except ImportError:
+    _a2a_pb2 = None  # a2a-sdk 0.3.x: tasks are pydantic models
 
 logger = logging.getLogger("nasiko_state")
 
@@ -61,6 +70,17 @@ READ_TIMEOUT_SECONDS = 10.0
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 0.2
 MAX_PAGE_SIZE = 100
+DEFAULT_PAGE_SIZE = 50
+
+# Saves that do not change a task's state are written at most once per window per task.
+COALESCE_WINDOW_SECONDS = 0.5
+# Exiting with the platform unreachable must not hang for every pending task.
+EXIT_FLUSH_BUDGET_SECONDS = 10.0
+# Bound on tasks whose write state is remembered; forgetting one only costs it one extra write.
+MAX_TRACKED_TASKS = 4096
+
+# The state vocabulary stored with each task, identical under both SDK majors.
+TERMINAL_STATES = frozenset({"completed", "canceled", "failed", "rejected"})
 
 # The order the registration contract spells its capability lists in.
 CAPABILITY_ORDER = ("tasks", "kv")
@@ -607,3 +627,286 @@ def _timeout() -> httpx.Timeout:
         write=READ_TIMEOUT_SECONDS,
         pool=CONNECT_TIMEOUT_SECONDS,
     )
+
+
+# --- a2a-sdk major-version adapter --------------------------------------------------------------
+#
+# 0.3.x tasks are pydantic models; 1.x tasks are protobuf messages with no model_dump. Everything
+# the store needs from a task goes through these four names, so the store itself is version-blind.
+
+if _a2a_pb2 is None:
+    _DECODE_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError)
+
+    def _encode_task(task: Task) -> dict[str, Any]:
+        return task.model_dump(mode="json", exclude_none=True)
+
+    def _decode_task(body: Any) -> Task:
+        return Task.model_validate(body)
+
+    def _state_name(task: Task) -> str:
+        return task.status.state.value
+
+else:
+    from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
+    from a2a.utils.errors import UnsupportedOperationError
+
+    _DECODE_ERRORS = (ParseError, ValueError, TypeError, AttributeError)
+
+    def _encode_task(task: Task) -> dict[str, Any]:
+        return MessageToDict(task)
+
+    def _decode_task(body: Any) -> Task:
+        # Unknown fields are ignored so rows written by a newer SDK still load after a rollback.
+        return ParseDict(body, Task(), ignore_unknown_fields=True)
+
+    def _state_name(task: Task) -> str:
+        return _proto_state_name(task.status.state)
+
+    def _proto_state_name(state: int) -> str:
+        """'TASK_STATE_INPUT_REQUIRED' -> 'input-required', the 0.3 wire spelling."""
+        name = _a2a_pb2.TaskState.Name(state).removeprefix("TASK_STATE_").lower().replace("_", "-")
+        return "unknown" if name == "unspecified" else name
+
+    def _list_arguments(params: Any) -> dict[str, Any]:
+        """Map a ListTasksRequest onto the state API's listing filters."""
+        if params.HasField("status_timestamp_after"):
+            raise UnsupportedOperationError(
+                message="tasks/list cannot filter by status_timestamp_after on the platform state store"
+            )
+        return {
+            "context_id": params.context_id or None,
+            "state": _proto_state_name(params.status) if params.status else None,
+            "limit": params.page_size or DEFAULT_PAGE_SIZE,
+            "cursor": params.page_token or None,
+        }
+
+    def _list_response(tasks: list[Task], page: Page[TaskRecord], limit: int) -> Any:
+        # The state API reports no totals, so total_size is the size of this page.
+        return _a2a_pb2.ListTasksResponse(
+            tasks=tasks, next_page_token=page.next_cursor or "", page_size=limit, total_size=len(tasks)
+        )
+
+
+def _decode_stored_task(body: Any, task_id: str) -> Task:
+    try:
+        task = _decode_task(body)
+    except _DECODE_ERRORS as exc:
+        raise NasikoStateError(f"stored task {task_id!r} cannot be decoded by the installed a2a-sdk: {exc}") from exc
+    # protobuf parsing turns {} into an empty Task rather than failing, so check the identity too.
+    if task.id != task_id:
+        raise NasikoStateError(f"stored task {task_id!r} holds a body for task {task.id!r}")
+    return task
+
+
+# --- task store ---------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    """A task as it stood when save() was called.
+
+    The SDK mutates its Task in place after saving it, so the store keeps this serialized copy
+    and never the live object.
+    """
+
+    task_id: str
+    context_id: str | None
+    state: str
+    body: dict[str, Any]
+
+
+def _snapshot(task: Task) -> _Snapshot:
+    return _Snapshot(task.id, task.context_id or None, _state_name(task), _encode_task(task))
+
+
+class _TaskSlot:
+    """Write-coalescing bookkeeping for one task."""
+
+    def __init__(self) -> None:
+        # The newest snapshot the server has not confirmed yet.
+        self.pending: _Snapshot | None = None
+        # State of the last snapshot the server confirmed; None until the first write lands.
+        self.written_state: str | None = None
+        self.last_write_started = float("-inf")
+        self.flusher: asyncio.Task[None] | None = None
+        # One write per task at a time, so an older snapshot cannot land after a newer one.
+        self.lock = asyncio.Lock()
+
+    def is_idle(self) -> bool:
+        return self.pending is None and self.flusher is None and not self.lock.locked()
+
+
+class NasikoTaskStore(TaskStore):
+    """An a2a-sdk TaskStore that keeps tasks in the platform's state API.
+
+    Writes, by what changed:
+      - A save that changes ``task.status.state`` (the first save of a task, input-required,
+        every terminal state) is on the server before ``save()`` returns.
+      - Any other save (artifact chunks, message history) is coalesced: the newest snapshot is
+        written at most once per ``coalesce_window_seconds`` per task, and always flushed when the
+        task changes state, on ``aclose()`` and at interpreter exit.
+      - Guarantee boundary: a hard crash (SIGKILL, power loss) can lose at most one window,
+        0.5 s by default, of non-status updates. State changes are never lost once save() returned.
+
+    Reads see this process's own unwritten snapshot, so a task is never older than the last save
+    that was made here. ``list`` is served by the server and can lag by one window.
+
+    Tasks are scoped to the agent, not to an end user: the SDK's per-user owner resolution does
+    not apply. A task is expected to be handled by one replica at a time; concurrent writers to
+    the same task are last-writer-wins.
+    """
+
+    def __init__(self, client: NasikoStateClient, *, coalesce_window_seconds: float = COALESCE_WINDOW_SECONDS) -> None:
+        self._client = client
+        self._window = coalesce_window_seconds
+        self._slots: OrderedDict[str, _TaskSlot] = OrderedDict()
+        atexit.register(self.flush_sync)
+
+    async def save(self, task: Task, context: Any = None) -> None:
+        snapshot = _snapshot(task)
+        slot = self._slot(snapshot.task_id)
+        slot.pending = snapshot
+        if snapshot.state != slot.written_state:
+            await self._write_pending(slot)
+        else:
+            self._schedule_flush(slot)
+
+    async def get(self, task_id: str, context: Any = None) -> Task | None:
+        slot = self._slots.get(task_id)
+        if slot is not None and slot.pending is not None:
+            return _decode_stored_task(slot.pending.body, task_id)
+        record = await self._client.aget_task(task_id)
+        return None if record is None else _decode_stored_task(record.body, task_id)
+
+    async def delete(self, task_id: str, context: Any = None) -> None:
+        slot = self._slot(task_id)
+        async with slot.lock:
+            slot.pending = None  # an unwritten snapshot must not bring the task back
+            await self._client.adelete_task(task_id)
+        self._forget(task_id, slot)
+
+    if _a2a_pb2 is not None:
+        # a2a-sdk 1.x added tasks/list to the TaskStore interface; 0.3.x has no such method.
+
+        async def list(self, params: Any, context: Any = None) -> Any:
+            arguments = _list_arguments(params)
+            page = await self._client.alist_tasks(**arguments)
+            tasks = [_decode_stored_task(record.body, record.task_id) for record in page.items]
+            return _list_response(tasks, page, arguments["limit"])
+
+    async def aclose(self) -> None:
+        """Write everything pending, stop the background flushers and close the HTTP client."""
+        atexit.unregister(self.flush_sync)
+        flushers = [slot.flusher for slot in self._slots.values() if slot.flusher is not None]
+        for flusher in flushers:
+            flusher.cancel()
+        await asyncio.gather(*flushers, return_exceptions=True)
+        pending = [slot for slot in list(self._slots.values()) if slot.pending is not None]
+        outcomes = await asyncio.gather(*(self._write_pending(slot) for slot in pending), return_exceptions=True)
+        await self._client.aclose()
+        failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+        for failure in failures[1:]:
+            logger.error("a pending task write could not be flushed on close: %s", failure)
+        if failures:
+            raise failures[0]
+
+    def flush_sync(self) -> None:
+        """Write every pending snapshot, blocking. Registered with atexit, when no event loop is left."""
+        deadline = time.monotonic() + EXIT_FLUSH_BUDGET_SECONDS
+        for slot in list(self._slots.values()):
+            snapshot = slot.pending
+            if snapshot is None:
+                continue
+            if time.monotonic() >= deadline:
+                logger.error("exit flush budget spent; task %s and any after it were not written", snapshot.task_id)
+                return
+            try:
+                self._client.put_task(
+                    snapshot.task_id, context_id=snapshot.context_id, state=snapshot.state, body=snapshot.body
+                )
+            except NasikoStateError as exc:
+                logger.error("exit flush of task %s failed: %s", snapshot.task_id, exc)
+            else:
+                self._confirm(slot, snapshot)
+
+    # --- coalescing ------------------------------------------------------------------------
+
+    async def _write_pending(self, slot: _TaskSlot) -> None:
+        async with slot.lock:
+            snapshot = slot.pending
+            if snapshot is None:
+                return  # a newer write already carried it
+            slot.last_write_started = time.monotonic()
+            await self._client.aput_task(
+                snapshot.task_id, context_id=snapshot.context_id, state=snapshot.state, body=snapshot.body
+            )
+            self._confirm(slot, snapshot)
+
+    def _confirm(self, slot: _TaskSlot, snapshot: _Snapshot) -> None:
+        slot.written_state = snapshot.state
+        if slot.pending is not snapshot:
+            return  # a newer snapshot arrived while this one was in flight; it is still owed
+        slot.pending = None
+        if snapshot.state in TERMINAL_STATES:
+            self._forget(snapshot.task_id, slot)
+
+    def _schedule_flush(self, slot: _TaskSlot) -> None:
+        if slot.flusher is None:
+            slot.flusher = asyncio.get_running_loop().create_task(self._flush_when_due(slot))
+
+    async def _flush_when_due(self, slot: _TaskSlot) -> None:
+        try:
+            while slot.pending is not None:
+                await asyncio.sleep(self._seconds_until_due(slot))
+                await self._write_pending(slot)
+        except NasikoStateError as exc:
+            # No caller awaits this task to hand the error to. The snapshot stays pending, so the
+            # next save, aclose() or the exit flush retries it.
+            logger.error("deferred task write failed, will retry on the next save or at exit: %s", exc)
+        finally:
+            slot.flusher = None
+
+    def _seconds_until_due(self, slot: _TaskSlot) -> float:
+        return max(0.0, slot.last_write_started + self._window - time.monotonic())
+
+    # --- slot bookkeeping ------------------------------------------------------------------
+
+    def _slot(self, task_id: str) -> _TaskSlot:
+        slot = self._slots.get(task_id)
+        if slot is not None:
+            self._slots.move_to_end(task_id)
+            return slot
+        slot = self._slots[task_id] = _TaskSlot()
+        self._evict_idle_slots()
+        return slot
+
+    def _forget(self, task_id: str, slot: _TaskSlot) -> None:
+        if self._slots.get(task_id) is slot:
+            del self._slots[task_id]
+
+    def _evict_idle_slots(self) -> None:
+        """Keep memory bounded: drop the least recently used slots that owe the server nothing.
+
+        The newest slot is the caller's and is never a candidate.
+        """
+        excess = len(self._slots) - MAX_TRACKED_TASKS
+        for task_id in list(self._slots)[:-1]:
+            if excess <= 0:
+                return
+            if self._slots[task_id].is_idle():
+                del self._slots[task_id]
+                excess -= 1
+
+
+def make_task_store() -> TaskStore:
+    """The task store an agent hands to its request handler.
+
+    The platform's durable store when NASIKO_STATE_URL is set, otherwise the SDK's in-memory
+    store, built exactly as an agent would build it by hand. Nothing contacts the platform
+    until the first task is saved.
+    """
+    client = NasikoStateClient.from_env()
+    if client is None:
+        return InMemoryTaskStore()
+    logger.info("task state is kept in the platform state API: %r", client)
+    return NasikoTaskStore(client)
