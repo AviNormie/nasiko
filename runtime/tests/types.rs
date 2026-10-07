@@ -216,7 +216,6 @@ fn minimal_spec() -> DeploymentSpec {
         writable_path: None,
         owner_id: uuid::Uuid::nil(),
         force_pull: false,
-        health_path: None,
     }
 }
 
@@ -260,7 +259,6 @@ fn deployment_spec_with_all_fields() {
         writable_path: None,
         owner_id: uuid::Uuid::nil(),
         force_pull: false,
-        health_path: None,
     };
 
     assert_eq!(spec.min_replicas, 2);
@@ -357,26 +355,6 @@ fn deployment_spec_serialization_roundtrip() {
     assert_eq!(back.container_id, spec.container_id);
     assert_eq!(back.image, spec.image);
     assert_eq!(back.ports, spec.ports);
-}
-
-#[test]
-fn deployment_spec_health_path_survives_serialization_roundtrip() {
-    let spec = DeploymentSpec {
-        health_path: Some("/healthz".to_owned()),
-        ..minimal_spec()
-    };
-    let json = serde_json::to_string(&spec).unwrap();
-    let back: DeploymentSpec = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.health_path.as_deref(), Some("/healthz"));
-}
-
-#[test]
-fn deployment_spec_without_health_path_deserializes_to_none() {
-    // A spec serialized before `health_path` existed carries no such key.
-    let mut json = serde_json::to_value(minimal_spec()).unwrap();
-    json.as_object_mut().unwrap().remove("health_path");
-    let back: DeploymentSpec = serde_json::from_value(json).unwrap();
-    assert!(back.health_path.is_none());
 }
 
 // ─── DeploymentStatus ────────────────────────────────────────────────────────

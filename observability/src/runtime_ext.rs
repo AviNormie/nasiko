@@ -292,7 +292,6 @@ mod tests {
             writable_path: None,
             owner_id: uuid::Uuid::nil(),
             force_pull: false,
-            health_path: None,
         }
     }
 
