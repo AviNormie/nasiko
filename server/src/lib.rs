@@ -9,6 +9,7 @@ pub mod admin;
 pub mod admission;
 pub mod agent_lifecycle;
 pub mod agent_proxy;
+pub mod agent_state;
 pub mod agents;
 pub mod auth;
 pub mod build;
@@ -352,6 +353,14 @@ where
         )
         .with_state(state.clone());
 
+    // Agent state API (`/api/agent-state/*`): mounted OUTSIDE `require_auth` for the same
+    // reason as the MCP gateway above: its callers are deployed agents holding their own
+    // gateway credential, never a user session. The router authenticates that credential and
+    // rate-limits per agent itself, and the CORS layer below covers it like every other mount.
+    let agent_state_routes = Router::new()
+        .nest("/api", agent_state::router(&state))
+        .with_state(state.clone());
+
     let oci_state = nasiko_oci::OciState::new(state.db.clone(), state.oci_storage.clone());
     // Blob deletes commit a reclaim tombstone and then remove the bytes, so a
     // crash or storage outage between the two leaves work queued. Drain it in the
@@ -458,6 +467,7 @@ where
         .merge(oci_routes)
         .merge(llm_routes)
         .merge(mcp_agent_gateway)
+        .merge(agent_state_routes)
         .fallback_service(ui_pages)
         .layer(cors)
         // Default span-making records the full request URI, which would publish
