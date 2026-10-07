@@ -20,7 +20,9 @@ except ImportError:
     A2A_V1 = False
 
 
-def new_task(task_id: str, state: str, *, context_id: str = "ctx-1", artifact_text: str | None = None) -> Task:
+def new_task(
+    task_id: str, state: str, *, context_id: str = "ctx-1", artifact_text: str | None = None
+) -> Task:
     status = _status(state)
     artifacts = [_artifact(artifact_text)] if artifact_text is not None else None
     if A2A_V1:

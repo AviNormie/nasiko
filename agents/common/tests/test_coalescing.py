@@ -80,7 +80,9 @@ class TestWriteThrough:
     @pytest.mark.parametrize(
         "state", ["working", "input-required", "auth-required", "completed", "failed", "canceled", "rejected"]
     )
-    async def test_every_state_change_is_written_before_save_returns(self, patient_store, state_server, state):
+    async def test_every_state_change_is_written_before_save_returns(
+        self, patient_store, state_server, state
+    ):
         task = new_task("t1", "submitted")
         await patient_store.save(task)
 
@@ -248,7 +250,9 @@ class TestShutdown:
 
         assert written_texts(state_server) == ["1", "2"]
 
-    async def test_aclose_with_a_failing_server_raises_instead_of_dropping_silently(self, client, state_server):
+    async def test_aclose_with_a_failing_server_raises_instead_of_dropping_silently(
+        self, client, state_server
+    ):
         from nasiko_state import NasikoStateError
 
         store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
@@ -285,7 +289,9 @@ class TestShutdown:
 
         assert unregistered == [store.flush_sync]
 
-    async def test_the_exit_flush_gives_up_when_its_budget_is_spent(self, client, state_server, monkeypatch, caplog):
+    async def test_the_exit_flush_gives_up_when_its_budget_is_spent(
+        self, client, state_server, monkeypatch, caplog
+    ):
         store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
         task = new_task("t1", "working", artifact_text="1")
         await store.save(task)
@@ -300,7 +306,9 @@ class TestShutdown:
         atexit.unregister(store.flush_sync)
         await store.aclose()
 
-    async def test_a_failed_exit_flush_is_logged_and_the_rest_still_written(self, client, state_server, caplog):
+    async def test_a_failed_exit_flush_is_logged_and_the_rest_still_written(
+        self, client, state_server, caplog
+    ):
         store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
         for task_id in ("a", "b"):
             task = new_task(task_id, "working", artifact_text="1")
@@ -329,7 +337,9 @@ class TestShutdown:
 
 
 class TestDeferredFailures:
-    async def test_a_failed_deferred_write_is_logged_and_retried_by_the_next_save(self, store, state_server, caplog):
+    async def test_a_failed_deferred_write_is_logged_and_retried_by_the_next_save(
+        self, store, state_server, caplog
+    ):
         task = new_task("t1", "working", artifact_text="0")
         await store.save(task)
         state_server.fail(500, times=RETRY_ATTEMPTS, when=lambda r: r.method == "PUT")
@@ -340,7 +350,9 @@ class TestDeferredFailures:
         await store.save(with_artifact_text(task, "2"))
         await eventually(lambda: written_texts(state_server)[-1] == "2")
 
-    async def test_delete_discards_a_pending_update_so_it_cannot_resurrect_the_task(self, patient_store, state_server):
+    async def test_delete_discards_a_pending_update_so_it_cannot_resurrect_the_task(
+        self, patient_store, state_server
+    ):
         task = new_task("t1", "working", artifact_text="1")
         await patient_store.save(task)
         await patient_store.save(with_artifact_text(task, "2"))
@@ -362,7 +374,9 @@ class TestBoundedMemory:
         assert list(store._slots) == ["t3", "t4", "t5"]  # the least recently used went first
         await store.aclose()
 
-    async def test_a_forgotten_task_costs_one_extra_write_not_correctness(self, client, state_server, monkeypatch):
+    async def test_a_forgotten_task_costs_one_extra_write_not_correctness(
+        self, client, state_server, monkeypatch
+    ):
         monkeypatch.setattr(nasiko_state, "MAX_TRACKED_TASKS", 1)
         store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
         first = new_task("t1", "working", artifact_text="1")

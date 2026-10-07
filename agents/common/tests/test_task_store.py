@@ -96,7 +96,9 @@ class TestFailures:
         assert raised.value.status == 413
         assert "t1" in state_server.tasks
 
-    async def test_a_state_change_that_failed_is_written_through_again_by_the_next_save(self, store, state_server):
+    async def test_a_state_change_that_failed_is_written_through_again_by_the_next_save(
+        self, store, state_server
+    ):
         await store.save(new_task("t1", "working"))
         state_server.fail(500, times=3, when=lambda r: r.method == "PUT" and r.path.startswith("/tasks"))
         with pytest.raises(NasikoStateError):
@@ -122,7 +124,9 @@ class TestFailures:
         other = new_task("someone-else", "working")
         await store.save(other)
         state_server.tasks["t1"] = Row(
-            {"task_id": "t1", "state": "working", "body": state_server.tasks["someone-else"].value["body"]}, 1, 1
+            {"task_id": "t1", "state": "working", "body": state_server.tasks["someone-else"].value["body"]},
+            1,
+            1,
         )
 
         with pytest.raises(NasikoStateError, match="someone-else"):

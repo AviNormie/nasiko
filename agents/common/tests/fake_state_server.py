@@ -172,7 +172,14 @@ class FakeStateServer:
         return self._put(self.kv, key, "key", body, payload=body["value"], recorded=recorded)
 
     def _put(
-        self, table: dict[str, Row], row_id: str, id_name: str, body: dict[str, Any], *, payload: Any, recorded: Recorded
+        self,
+        table: dict[str, Row],
+        row_id: str,
+        id_name: str,
+        body: dict[str, Any],
+        *,
+        payload: Any,
+        recorded: Recorded,
     ) -> httpx.Response:
         if len(json.dumps(payload).encode()) > self.max_body_bytes:
             return _error(413, "body too large")

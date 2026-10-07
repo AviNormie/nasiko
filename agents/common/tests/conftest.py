@@ -28,9 +28,7 @@ def state_server() -> FakeStateServer:
 @pytest.fixture
 def client(state_server: FakeStateServer) -> NasikoStateClient:
     # Backoff 0: retries are asserted by counting requests, not by waiting.
-    return NasikoStateClient(
-        BASE_URL, TOKEN, transport=state_server.transport, retry_backoff_seconds=0
-    )
+    return NasikoStateClient(BASE_URL, TOKEN, transport=state_server.transport, retry_backoff_seconds=0)
 
 
 @pytest.fixture(autouse=True)

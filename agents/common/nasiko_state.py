@@ -44,9 +44,9 @@ import os
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -94,7 +94,9 @@ EXIT_FLUSH_BUDGET_SECONDS = 10.0
 # Bound on tasks whose write state is remembered; forgetting one only costs it one extra write.
 MAX_TRACKED_TASKS = 4096
 
-# The state vocabulary stored with each task, identical under both SDK majors.
+# The state column stored with each task uses one vocabulary under both SDK majors, the A2A 0.3
+# wire spelling: submitted, working, input-required, auth-required, completed, canceled, failed,
+# rejected, unknown. 1.x names (TASK_STATE_INPUT_REQUIRED) are mapped onto it.
 TERMINAL_STATES = frozenset({"completed", "canceled", "failed", "rejected"})
 
 # The order the registration contract spells its capability lists in.
@@ -243,7 +245,8 @@ def _page_parser(record_type: type[T]) -> Callable[[httpx.Response], Page[T]]:
 
 def _record_from_json(record_type: type[T], data: Any) -> T:
     try:
-        return record_type(**{field.name: data[field.name] for field in fields(record_type)})  # type: ignore[call-arg]
+        values = {field.name: data[field.name] for field in fields(record_type)}
+        return record_type(**values)  # type: ignore[call-arg]
     except (KeyError, TypeError) as exc:
         raise NasikoStateError(
             f"unexpected {record_type.__name__} payload from the state API: {data!r:.200}"
@@ -260,7 +263,9 @@ def _register_op(capabilities: Sequence[str], client_name: str) -> _Operation:
     )
 
 
-def _put_task_op(task_id: str, context_id: str | None, state: str, body: Any, if_match: int | None) -> _Operation:
+def _put_task_op(
+    task_id: str, context_id: str | None, state: str, body: Any, if_match: int | None
+) -> _Operation:
     return _Operation(
         "PUT",
         f"/tasks/{_percent_encode(task_id)}",
@@ -289,7 +294,9 @@ def _delete_task_op(task_id: str, if_match: int | None) -> _Operation:
     )
 
 
-def _list_tasks_op(context_id: str | None, state: str | None, limit: int | None, cursor: str | None) -> _Operation:
+def _list_tasks_op(
+    context_id: str | None, state: str | None, limit: int | None, cursor: str | None
+) -> _Operation:
     return _Operation(
         "GET",
         "/tasks",
@@ -709,7 +716,9 @@ def _decode_stored_task(body: Any, task_id: str) -> Task:
     try:
         task = _decode_task(body)
     except _DECODE_ERRORS as exc:
-        raise NasikoStateError(f"stored task {task_id!r} cannot be decoded by the installed a2a-sdk: {exc}") from exc
+        raise NasikoStateError(
+            f"stored task {task_id!r} cannot be decoded by the installed a2a-sdk: {exc}"
+        ) from exc
     # protobuf parsing turns {} into an empty Task rather than failing, so check the identity too.
     if task.id != task_id:
         raise NasikoStateError(f"stored task {task_id!r} holds a body for task {task.id!r}")
@@ -774,7 +783,9 @@ class NasikoTaskStore(TaskStore):
     the same task are last-writer-wins.
     """
 
-    def __init__(self, client: NasikoStateClient, *, coalesce_window_seconds: float = COALESCE_WINDOW_SECONDS) -> None:
+    def __init__(
+        self, client: NasikoStateClient, *, coalesce_window_seconds: float = COALESCE_WINDOW_SECONDS
+    ) -> None:
         self._client = client
         self._window = coalesce_window_seconds
         self._slots: OrderedDict[str, _TaskSlot] = OrderedDict()
@@ -820,7 +831,9 @@ class NasikoTaskStore(TaskStore):
             flusher.cancel()
         await asyncio.gather(*flushers, return_exceptions=True)
         pending = [slot for slot in list(self._slots.values()) if slot.pending is not None]
-        outcomes = await asyncio.gather(*(self._write_pending(slot) for slot in pending), return_exceptions=True)
+        outcomes = await asyncio.gather(
+            *(self._write_pending(slot) for slot in pending), return_exceptions=True
+        )
         await self._client.aclose()
         failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
         for failure in failures[1:]:
@@ -836,7 +849,9 @@ class NasikoTaskStore(TaskStore):
             if snapshot is None:
                 continue
             if time.monotonic() >= deadline:
-                logger.error("exit flush budget spent; task %s and any after it were not written", snapshot.task_id)
+                logger.error(
+                    "exit flush budget spent; task %s and any after it were not written", snapshot.task_id
+                )
                 return
             try:
                 self._client.put_task(
@@ -1145,7 +1160,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         await self._kv.aput(_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]})
         return _checkpoint_config(thread_id, namespace, checkpoint["id"])
 
-    def put_writes(self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = "") -> None:
+    def put_writes(
+        self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
+    ) -> None:
         for planned in self._plan_writes(config, writes, task_id, task_path):
             if planned.insert_only and self._kv.get(planned.key) is not None:
                 continue
@@ -1195,7 +1212,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             "metadata": self._encode(get_checkpoint_metadata(config, metadata)),
         }
 
-    def _tuple(self, record: dict[str, Any], write_records: list[dict[str, Any]], *, config: Any = None) -> Any:
+    def _tuple(
+        self, record: dict[str, Any], write_records: list[dict[str, Any]], *, config: Any = None
+    ) -> Any:
         thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
         parent_id = record["parent_checkpoint_id"]
         return CheckpointTuple(
@@ -1236,7 +1255,8 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
                 "task_id": task_id,
                 "task_path": task_path,
                 "writes": [
-                    {"idx": idx, "channel": channel, "value": self._encode(value)} for idx, channel, value in entries
+                    {"idx": idx, "channel": channel, "value": self._encode(value)}
+                    for idx, channel, value in entries
                 ],
             }
             key = _key(WRITES_FAMILY, thread_id, namespace, checkpoint_id, task_id, str(entries[0][0]))
@@ -1281,7 +1301,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
 
 
 def _checkpoint_config(thread_id: str, namespace: str, checkpoint_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace, "checkpoint_id": checkpoint_id}}
+    return {
+        "configurable": {"thread_id": thread_id, "checkpoint_ns": namespace, "checkpoint_id": checkpoint_id}
+    }
 
 
 def _checkpoint_identity(record: Mapping[str, Any]) -> tuple[str, str, str]:
