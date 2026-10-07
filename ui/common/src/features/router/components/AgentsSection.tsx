@@ -71,7 +71,8 @@ export function AgentsSection({
   onShowConfig: (configId: string) => void
   spend: SpendState
   updated: ReadonlyMap<string, number>
-  onChange: (a: Agent) => void
+  /** Opens the routing sheet; `order` is the rows that can be changed, as shown, for its Previous/Next. */
+  onChange: (a: Agent, order: readonly string[]) => void
   onRetry: (id: string) => void
   filterLabel: string | null
   onClearFilter: () => void
@@ -90,13 +91,18 @@ export function AgentsSection({
     setOpen(!open)
     writeOpen(PREF_DEFAULTS, !open)
   }
+  // The sheet steps through the rows as shown: the visible group, then the folded one when open; rows whose
+  // routing didn't read can't be changed, so they're skipped.
+  const order = [...shown, ...(open ? folded : [])]
+    .filter((r) => r.read.state === 'ok')
+    .map((r) => r.agent.id)
   const row = (r: AgentRow) => (
     <Row
       key={r.agent.id}
       row={r}
       spend={spend}
       updatedAt={updated.get(r.agent.id)}
-      onChange={() => onChange(r.agent)}
+      onChange={() => onChange(r.agent, order)}
       onRetry={() => onRetry(r.agent.id)}
       onShowConfig={onShowConfig}
     />
