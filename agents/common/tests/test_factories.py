@@ -61,7 +61,7 @@ class TestWithTheStateApi:
 
     def test_construction_does_not_register_or_contact_the_platform(self, monkeypatch, no_network):
         monkeypatch.setenv("NASIKO_STATE_URL", BASE_URL)
-        monkeypatch.setenv("MCP_GATEWAY_TOKEN", TOKEN)
+        monkeypatch.setenv("NASIKO_AGENT_TOKEN", TOKEN)
 
         make_task_store()  # no_network fails the test if anything is sent
 
@@ -69,6 +69,13 @@ class TestWithTheStateApi:
         monkeypatch.setenv("NASIKO_STATE_URL", BASE_URL)
 
         with pytest.raises(NasikoStateError, match="credential"):
+            make_task_store()
+
+    def test_the_gateway_token_alone_is_not_a_state_credential(self, monkeypatch):
+        monkeypatch.setenv("NASIKO_STATE_URL", BASE_URL)
+        monkeypatch.setenv("MCP_GATEWAY_TOKEN", TOKEN)
+
+        with pytest.raises(NasikoStateError, match="NASIKO_AGENT_TOKEN"):
             make_task_store()
 
 

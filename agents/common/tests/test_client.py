@@ -365,17 +365,20 @@ class TestFromEnv:
         assert NasikoStateClient.from_env({}) is None
         assert NasikoStateClient.from_env({"NASIKO_STATE_URL": "  "}) is None
 
-    def test_agent_token_wins_over_the_gateway_token(self):
+    def test_the_agent_token_is_the_credential(self):
         client = NasikoStateClient.from_env(
             {"NASIKO_STATE_URL": BASE_URL, "NASIKO_AGENT_TOKEN": "agent", "MCP_GATEWAY_TOKEN": "gateway"}
         )
 
         assert client._headers["Authorization"] == "Bearer agent"
 
-    def test_falls_back_to_the_gateway_token(self):
-        client = NasikoStateClient.from_env({"NASIKO_STATE_URL": BASE_URL, "MCP_GATEWAY_TOKEN": "gateway"})
+    def test_the_gateway_token_is_never_used_as_a_fallback(self):
+        with pytest.raises(NasikoStateError, match="NASIKO_AGENT_TOKEN"):
+            NasikoStateClient.from_env({"NASIKO_STATE_URL": BASE_URL, "MCP_GATEWAY_TOKEN": "gateway"})
 
-        assert client._headers["Authorization"] == "Bearer gateway"
+    def test_a_blank_agent_token_counts_as_missing(self):
+        with pytest.raises(NasikoStateError, match="NASIKO_AGENT_TOKEN is empty or missing"):
+            NasikoStateClient.from_env({"NASIKO_STATE_URL": BASE_URL, "NASIKO_AGENT_TOKEN": "  "})
 
     def test_a_url_without_any_token_is_a_configuration_error(self):
         with pytest.raises(NasikoStateError, match="NASIKO_AGENT_TOKEN"):
