@@ -133,6 +133,24 @@ describe('agent Previous/Next', () => {
     expect(router.state.location.pathname).toBe(first)
   })
 
+  it('keeps the arrows on a neighbour that fails to load', async () => {
+    const { router } = renderApp('/agents')
+    await screen.findByRole('link', { name: new RegExp(live[0]!.display_name) })
+    const hrefs = cards().map((l) => l.getAttribute('href')!)
+    server.use(
+      http.get(
+        `/api/agents/${hrefs[1]!.split('/').pop()}`,
+        () => new HttpResponse('boom', { status: 500 }),
+      ),
+    )
+    await userEvent.click(cards()[0]!)
+    await userEvent.click(await screen.findByRole('button', { name: 'Next agent' }))
+    expect(await screen.findByRole('button', { name: /Retry/ })).toBeInTheDocument()
+    expect(position(2, hrefs.length)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe(hrefs[2]))
+  })
+
   it('keeps the arrows on a neighbour that is gone', async () => {
     const { router } = renderApp('/agents')
     await screen.findByRole('link', { name: new RegExp(live[0]!.display_name) })
