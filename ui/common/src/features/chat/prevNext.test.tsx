@@ -34,6 +34,11 @@ describe('chat Previous/Next', () => {
     // opened chat takes it, so PrevNext puts it back on the arrow used.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next chat' })).toHaveFocus())
     // Typing in the composer is ignored; J/K work once focus is elsewhere.
+    const composer = screen.getByRole('textbox')
+    await userEvent.type(composer, 'j')
+    expect(composer).toHaveValue('j')
+    expect(router.state.location.pathname).toBe(paths[1])
+    screen.getByRole('button', { name: 'Previous chat' }).focus()
     await userEvent.keyboard('k')
     await waitFor(() => expect(router.state.location.pathname).toBe(paths[0]))
   })
