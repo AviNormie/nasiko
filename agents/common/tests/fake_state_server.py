@@ -46,7 +46,7 @@ class Recorded:
 @dataclass
 class _Injection:
     times: int
-    response: tuple[int, dict[str, Any]] | None
+    response: tuple[int, dict[str, Any], dict[str, str]] | None
     error: Exception | None
     when: Callable[[Recorded], bool]
 
@@ -70,11 +70,17 @@ class FakeStateServer:
 
     # --- test controls ---------------------------------------------------------------------
 
-    def fail(self, status: int, *, times: int = 1, when: Callable[[Recorded], bool] | None = None) -> None:
+    def fail(
+        self,
+        status: int,
+        *,
+        times: int = 1,
+        when: Callable[[Recorded], bool] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         """Answer the next `times` matching requests with `status` before touching any state."""
-        self._injections.append(
-            _Injection(times, (status, {"error": f"injected {status}"}), None, when or (lambda _: True))
-        )
+        response = (status, {"error": f"injected {status}"}, headers or {})
+        self._injections.append(_Injection(times, response, None, when or (lambda _: True)))
 
     def disconnect(self, *, times: int = 1, when: Callable[[Recorded], bool] | None = None) -> None:
         """Raise a connection error for the next `times` matching requests."""
@@ -117,8 +123,8 @@ class FakeStateServer:
             injection.times -= 1
             if injection.error is not None:
                 raise injection.error
-            status, body = injection.response  # type: ignore[misc]
-            return httpx.Response(status, json=body)
+            status, body, headers = injection.response  # type: ignore[misc]
+            return httpx.Response(status, json=body, headers=headers)
         return None
 
     def _route(self, recorded: Recorded, request: httpx.Request) -> httpx.Response:
