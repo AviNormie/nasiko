@@ -141,6 +141,18 @@ pub struct Config {
     /// paused task (`agent_lost_task`). A round-robin Service can send the first attempt to a
     /// replica that never saw the task, so one such answer proves nothing. Total POSTs = this + 1.
     pub hitl_lost_task_retries: u32,
+    /// How long an agent's durable state row (task or key-value entry) lives after its last
+    /// write, in days. AGENT_STATE_TTL_DAYS, default 7, clamped to 1..=365: zero would expire
+    /// every row the instant it is written. Reads never extend it.
+    pub agent_state_ttl_days: i32,
+    /// Largest JSON-encoded task `body` or key-value `value` the agent state API accepts.
+    /// AGENT_STATE_MAX_BODY_BYTES, default 1 MiB, floored at 1. Larger writes get a 413.
+    pub agent_state_max_body_bytes: usize,
+    /// Requests per minute one agent may make to the agent state API.
+    /// AGENT_STATE_RATE_LIMIT_PER_MINUTE, default 600, floored at 1. Over it gets a 429. Counted
+    /// in memory by each server process, like the other limiters (`rate_limit.rs`), so the
+    /// ceiling across several processes is this value times their number.
+    pub agent_state_rate_limit_per_minute: u32,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     /// Multi-tenant mode (per-CP): when on, this control plane runs behind the
@@ -561,6 +573,10 @@ impl Config {
             hitl_resume_max_attempts: env_parse("HITL_RESUME_MAX_ATTEMPTS", 3),
             hitl_resume_retry_delay_secs: env_parse("HITL_RESUME_RETRY_DELAY_SECS", 2),
             hitl_lost_task_retries: env_parse("HITL_LOST_TASK_RETRIES", 3),
+            agent_state_ttl_days: env_parse("AGENT_STATE_TTL_DAYS", 7).clamp(1, 365),
+            agent_state_max_body_bytes: env_parse("AGENT_STATE_MAX_BODY_BYTES", 1_048_576).max(1),
+            agent_state_rate_limit_per_minute: env_parse("AGENT_STATE_RATE_LIMIT_PER_MINUTE", 600)
+                .max(1),
             github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
             multi_tenant_mode: std::env::var("MULTI_TENANT_MODE")
