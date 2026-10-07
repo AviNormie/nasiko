@@ -72,7 +72,13 @@ export interface ChatMessage {
 
 export type HitlKind = 'input_required' | 'auth_required' | 'tool_approval'
 type HitlStatus = 'pending' | 'resolved' | 'rejected' | 'expired' | 'canceled'
-type ResumeStatus = 'not_started' | 'completed' | 'failed' | 'delivery_outcome_unknown' | 'skipped'
+type ResumeStatus =
+  | 'not_started'
+  | 'completed'
+  | 'failed'
+  | 'delivery_outcome_unknown'
+  | 'skipped'
+  | 'agent_lost_task'
 
 export interface HitlOption {
   label: string
