@@ -1,0 +1,28 @@
+/** Keyboard rules shared by the shell and pages. */
+
+/** True while the user is typing: a letter shortcut must not steal keys from a field. */
+export function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || target.closest('input, textarea, select') !== null)
+  )
+}
+
+/** Widgets whose letters are their own (Radix menu and listbox typeahead). */
+const OWN_KEYS = '[role="menu"], [role="listbox"]'
+
+/**
+ * J (next) and K (previous) for a Previous/Next control: 1, -1, or 0 to ignore. Ignored with a modifier, on key
+ * repeat, while typing, inside a menu or listbox, and inside a dialog the control isn't in: a page's control stays
+ * still behind a sheet, while a sheet's own control works inside it.
+ */
+export function stepFromKey(e: KeyboardEvent, control: Element | null): -1 | 0 | 1 {
+  if (e.key !== 'j' && e.key !== 'k') return 0
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.defaultPrevented) return 0
+  if (isTypingTarget(e.target)) return 0
+  const target = e.target instanceof Element ? e.target : null
+  if (target?.closest(OWN_KEYS)) return 0
+  const dialog = target?.closest('[role="dialog"], [role="alertdialog"]')
+  if (dialog && !(control && dialog.contains(control))) return 0
+  return e.key === 'j' ? 1 : -1
+}
