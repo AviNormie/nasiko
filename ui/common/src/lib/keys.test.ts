@@ -59,6 +59,14 @@ describe('stepFromKey', () => {
     expect(step('j', inDialog, body.querySelector('#page'))).toBe(0)
     expect(step('j', inDialog, body.querySelector('#c'))).toBe(1)
   })
+
+  it('works for a control inside an open dialog while the page behind it is hidden', () => {
+    const body = el(
+      '<div aria-hidden="true"><div id="page"></div></div><div role="dialog"><div id="c"></div></div>',
+    )
+    expect(step('j', body, body.querySelector('#c'))).toBe(1)
+    expect(step('j', body, body.querySelector('#page'))).toBe(0)
+  })
 })
 
 describe('stepFromKey, more rules', () => {
