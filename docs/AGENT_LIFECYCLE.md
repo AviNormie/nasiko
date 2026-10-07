@@ -285,7 +285,7 @@ The platform injects the store's address and your credential into every deployme
 | Variable | Meaning |
 |---|---|
 | `NASIKO_STATE_URL` | Base URL of the state API (it ends in `/api/agent-state`). Unset means the platform provides no store. |
-| `NASIKO_AGENT_TOKEN` | Your agent's credential, sent as a `Bearer` token. Falls back to `MCP_GATEWAY_TOKEN`, which holds the same value. |
+| `NASIKO_AGENT_TOKEN` | Your agent's state credential, sent as a `Bearer` token. Required when `NASIKO_STATE_URL` is set; the MCP gateway token is a different credential and is not accepted. |
 
 **Python (`a2a-sdk` 0.3.x and 1.x).** An image is built from your agent's directory only, so copy
 `oss/agents/common/nasiko_state.py` next to your `main.py`, change one constructor argument and
