@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PrevNext } from './prev-next'
 
@@ -30,8 +30,6 @@ function setup(props: Props = {}, id = 'a') {
     rerender: (k: string) => view.rerender(ui({}, k)),
   }
 }
-
-afterEach(() => vi.useRealTimers())
 
 describe('PrevNext', () => {
   it('shows the position and steps with the buttons', async () => {
@@ -80,14 +78,38 @@ describe('PrevNext', () => {
     expect(screen.getByRole('button', { name: 'Next agent' })).toHaveFocus()
   })
 
-  it('does not steal focus for a click older than 2 s', async () => {
+  it('does not steal focus for a click older than 10 s', async () => {
     const { rerender } = setup()
     const now = Date.now()
     const spy = vi.spyOn(Date, 'now').mockReturnValue(now)
     await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
-    spy.mockReturnValue(now + 3000)
+    spy.mockReturnValue(now + 11_000)
     rerender('b')
     expect(screen.getByRole('button', { name: 'Next agent' })).not.toHaveFocus()
     spy.mockRestore()
+  })
+
+  it('does not take focus from an element that already has it', async () => {
+    const { rerender } = setup()
+    await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    rerender('b')
+    expect(input).toHaveFocus()
+    input.remove()
+  })
+
+  it('drops the flag when the view did not remount', async () => {
+    setup()
+    await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
+    await new Promise((r) => requestAnimationFrame(r))
+    ;(document.activeElement as HTMLElement).blur()
+    render(
+      <TooltipProvider>
+        <PrevNext noun="other" index={1} count={3} onPrev={vi.fn()} onNext={vi.fn()} />
+      </TooltipProvider>,
+    )
+    expect(screen.getByRole('button', { name: 'Next other' })).not.toHaveFocus()
   })
 })

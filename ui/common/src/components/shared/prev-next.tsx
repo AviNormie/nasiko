@@ -4,19 +4,25 @@
  * so a press there doesn't drop focus. `blocked` says why stepping is off (unsaved edits) in a tooltip.
  */
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { stepFromKey } from '@/lib/keys'
 import { cn } from '@/lib/utils'
 
 /**
- * ponytail: a module flag, not state. A detail route remounts on a step, so focus would fall to <body>; the click
- * records which arrow it used and the next PrevNext to mount within 2 s takes focus there. A step blocked by a
- * leave prompt just expires. An object mutated in place, not a reassigned `let`: the React Compiler
- * mishandled the reassignment (the mount effect read null).
+ * ponytail: a module-level flag, set in a click and consumed by the next PrevNext to mount, if focus fell to <body>
+ * within 10 s. A detail route remounts on a step, which drops focus; this puts it back on the arrow used. A step
+ * blocked by a leave prompt just expires; a view that doesn't remount clears the flag on the next frame.
  */
 const refocus: { which?: 'prev' | 'next'; at: number } = { at: 0 }
+
+/** The view didn't remount (the clicked arrow is still there next frame): nothing fell, so drop the flag. */
+function clearIfStayed(btn: HTMLElement) {
+  requestAnimationFrame(() => {
+    if (btn.isConnected) refocus.which = undefined
+  })
+}
 
 export function PrevNext({
   noun,
@@ -40,12 +46,14 @@ export function PrevNext({
   const root = useRef<HTMLDivElement>(null)
   const prevButton = useRef<HTMLButtonElement>(null)
   const nextButton = useRef<HTMLButtonElement>(null)
+  const reasonId = useId()
   const canPrev = !blocked && index > 0
   const canNext = !blocked && index < count - 1
   useEffect(() => {
     const { which, at } = refocus
     refocus.which = undefined
-    if (which && Date.now() - at < 2000)
+    const fell = !document.activeElement || document.activeElement === document.body
+    if (which && fell && Date.now() - at < 10_000)
       (which === 'prev' ? prevButton : nextButton).current?.focus()
   }, [])
   useEffect(() => {
@@ -72,6 +80,11 @@ export function PrevNext({
         aria-hidden
         className="px-1 text-xs text-muted-foreground tabular-nums"
       >{`${index + 1} of ${count}`}</span>
+      {blocked ? (
+        <span id={reasonId} className="sr-only">
+          {blocked}
+        </span>
+      ) : null}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -82,11 +95,12 @@ export function PrevNext({
             aria-label={`Previous ${noun}`}
             aria-keyshortcuts="k"
             aria-disabled={!canPrev}
-            aria-description={blocked}
-            onClick={() => {
+            aria-describedby={blocked ? reasonId : undefined}
+            onClick={(e) => {
               if (!canPrev) return
               Object.assign(refocus, { which: 'prev', at: Date.now() })
               onPrev()
+              clearIfStayed(e.currentTarget)
             }}
           >
             <ChevronUp className="size-4" aria-hidden />
@@ -104,11 +118,12 @@ export function PrevNext({
             aria-label={`Next ${noun}`}
             aria-keyshortcuts="j"
             aria-disabled={!canNext}
-            aria-description={blocked}
-            onClick={() => {
+            aria-describedby={blocked ? reasonId : undefined}
+            onClick={(e) => {
               if (!canNext) return
               Object.assign(refocus, { which: 'next', at: Date.now() })
               onNext()
+              clearIfStayed(e.currentTarget)
             }}
           >
             <ChevronDown className="size-4" aria-hidden />
