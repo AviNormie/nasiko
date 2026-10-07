@@ -92,6 +92,8 @@ CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 10.0
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 0.2
+# The longest Retry-After a rate-limited (429) request waits out; a longer one surfaces the 429.
+MAX_RETRY_AFTER_SECONDS = 5.0
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 50
 
@@ -407,8 +409,20 @@ def _request_failed(operation: _Operation, exc: httpx.RequestError) -> NasikoSta
     return NasikoStateError(f"state API {operation.method} {operation.path} request failed: {exc!r}")
 
 
-def _is_retryable(response: httpx.Response) -> bool:
-    return response.status_code >= 500
+def _retry_after_seconds(response: httpx.Response, default: float) -> float | None:
+    """How long a 429 asks to wait, ``default`` when it does not say, None when it is too long."""
+    header = response.headers.get("retry-after")
+    try:
+        seconds = float(header) if header is not None else default
+    except ValueError:
+        seconds = default  # an HTTP-date; a per-minute limit is not worth parsing one for
+    return seconds if 0 <= seconds <= MAX_RETRY_AFTER_SECONDS else None
+
+
+def _response_or_raise(operation: _Operation, outcome: httpx.Response | httpx.RequestError) -> httpx.Response:
+    if isinstance(outcome, httpx.RequestError):
+        raise _request_failed(operation, outcome) from outcome
+    return outcome
 
 
 def _is_transient(error: NasikoStateError) -> bool:
@@ -422,7 +436,8 @@ class NasikoStateClient:
     Async methods carry an ``a`` prefix (``put_task`` / ``aput_task``), the way langgraph names
     its savers. Failures raise NasikoStateError with the HTTP status and body; nothing falls back
     silently. Connection errors and 5xx answers are retried (RETRY_ATTEMPTS attempts in total,
-    exponential backoff) because every call is idempotent; 4xx answers never are.
+    exponential backoff) because every call is idempotent; so is a 429, after the Retry-After it
+    names when that is at most MAX_RETRY_AFTER_SECONDS. Other 4xx answers never are.
 
     The first write of each kind (tasks, kv) registers the agent with the platform, once.
     """
@@ -597,37 +612,44 @@ class NasikoStateClient:
 
     def _send(self, operation: _Operation) -> httpx.Response:
         http = self._sync_http()
-        for attempt in range(1, RETRY_ATTEMPTS + 1):
+        attempt = 1
+        while True:
             try:
-                response = http.request(**operation.request_kwargs())
-            except httpx.TransportError as exc:
-                if _is_final_attempt(attempt):
-                    raise _request_failed(operation, exc) from exc
+                outcome: httpx.Response | httpx.RequestError = http.request(**operation.request_kwargs())
             except httpx.RequestError as exc:
-                # Not transient (an undecodable answer, a redirect loop): retrying cannot help.
-                raise _request_failed(operation, exc) from exc
-            else:
-                if not _is_retryable(response) or _is_final_attempt(attempt):
-                    return response
-            time.sleep(self._backoff(attempt))
-        raise AssertionError("unreachable: the last attempt returns or raises")
+                outcome = exc
+            delay = self._retry_delay(attempt, outcome)
+            if delay is None:
+                return _response_or_raise(operation, outcome)
+            time.sleep(delay)
+            attempt += 1
 
     async def _asend(self, operation: _Operation) -> httpx.Response:
         http = self._async_http()
-        for attempt in range(1, RETRY_ATTEMPTS + 1):
+        attempt = 1
+        while True:
             try:
-                response = await http.request(**operation.request_kwargs())
-            except httpx.TransportError as exc:
-                if _is_final_attempt(attempt):
-                    raise _request_failed(operation, exc) from exc
+                outcome: httpx.Response | httpx.RequestError = await http.request(
+                    **operation.request_kwargs()
+                )
             except httpx.RequestError as exc:
-                # Not transient (an undecodable answer, a redirect loop): retrying cannot help.
-                raise _request_failed(operation, exc) from exc
-            else:
-                if not _is_retryable(response) or _is_final_attempt(attempt):
-                    return response
-            await asyncio.sleep(self._backoff(attempt))
-        raise AssertionError("unreachable: the last attempt returns or raises")
+                outcome = exc
+            delay = self._retry_delay(attempt, outcome)
+            if delay is None:
+                return _response_or_raise(operation, outcome)
+            await asyncio.sleep(delay)
+            attempt += 1
+
+    def _retry_delay(self, attempt: int, outcome: httpx.Response | httpx.RequestError) -> float | None:
+        """Seconds to wait before trying again, or None when this outcome is the answer."""
+        if _is_final_attempt(attempt):
+            return None
+        if isinstance(outcome, httpx.RequestError):
+            # Only transport failures are transient; an undecodable answer or a redirect loop is not.
+            return self._backoff(attempt) if isinstance(outcome, httpx.TransportError) else None
+        if outcome.status_code == 429:
+            return _retry_after_seconds(outcome, default=self._backoff(attempt))
+        return self._backoff(attempt) if outcome.status_code >= 500 else None
 
     def _backoff(self, attempt: int) -> float:
         return self._retry_backoff * 2 ** (attempt - 1)
@@ -1278,14 +1300,6 @@ def _scope(config: Mapping[str, Any] | None) -> tuple[str, ...]:
     return (configurable["thread_id"], configurable["checkpoint_ns"])
 
 
-@dataclass(frozen=True)
-class _PlannedWrite:
-    key: str
-    record: dict[str, Any]
-    # Regular writes keep the first writer's value; writes to special channels are upserts.
-    insert_only: bool
-
-
 class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
     """A langgraph checkpointer that keeps checkpoints in the platform's key-value state.
 
@@ -1315,7 +1329,10 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
                                      first one's index, so a crash cannot leave a task with only
                                      some of its writes; each write to a special channel (error,
                                      interrupt, resume, scheduled) has its own record at its
-                                     negative index.
+                                     negative index. Every record is written unconditionally, one
+                                     call each: the platform rate-limits per agent, and langgraph
+                                     saves a task's regular writes again only when it re-runs a
+                                     task whose first save did not land, so the later one wins.
 
     Blobs are written before the checkpoint and the checkpoint before the head that points at it,
     so a crash can only leave the head one checkpoint behind, which resumes cleanly: that step's
@@ -1437,18 +1454,14 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
     def put_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
     ) -> None:
-        for planned in self._plan_writes(config, writes, task_id, task_path):
-            if planned.insert_only and self._kv.get(planned.key) is not None:
-                continue
-            self._kv.put(planned.key, planned.record)
+        for key, record in self._planned_writes(config, writes, task_id, task_path):
+            self._kv.put(key, record)
 
     async def aput_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
     ) -> None:
-        for planned in self._plan_writes(config, writes, task_id, task_path):
-            if planned.insert_only and await self._kv.aget(planned.key) is not None:
-                continue
-            await self._kv.aput(planned.key, planned.record)
+        for key, record in self._planned_writes(config, writes, task_id, task_path):
+            await self._kv.aput(key, record)
 
     def delete_thread(self, thread_id: str) -> None:
         for family in _THREAD_FAMILIES:
@@ -1542,9 +1555,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         entries.sort(key=lambda entry: (entry[0], entry[1]))
         return [(task_id, channel, self._decode(value)) for task_id, _, channel, value in entries]
 
-    def _plan_writes(
+    def _planned_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str
-    ) -> list[_PlannedWrite]:
+    ) -> list[tuple[str, dict[str, Any]]]:
         thread_id, namespace = _thread_and_namespace(config)
         checkpoint_id = config["configurable"]["checkpoint_id"]
         regular: list[tuple[int, str, Any]] = []
@@ -1555,7 +1568,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             else:
                 regular.append((position, channel, value))
 
-        def planned(entries: list[tuple[int, str, Any]], *, insert_only: bool) -> _PlannedWrite:
+        def planned(entries: list[tuple[int, str, Any]]) -> tuple[str, dict[str, Any]]:
             record = {
                 "thread_id": thread_id,
                 "checkpoint_ns": namespace,
@@ -1568,10 +1581,10 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
                 ],
             }
             key = _key(WRITES_FAMILY, thread_id, namespace, checkpoint_id, task_id, str(entries[0][0]))
-            return _PlannedWrite(key, record, insert_only)
+            return key, record
 
-        plan = [planned(regular, insert_only=True)] if regular else []
-        return plan + [planned([entry], insert_only=False) for entry in special.values()]
+        plan = [planned(regular)] if regular else []
+        return plan + [planned([entry]) for entry in special.values()]
 
     def _writes_by_checkpoint(
         self, write_records: list[KVRecord]
