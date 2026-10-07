@@ -10,6 +10,7 @@ __pycache__/
 node_modules/
 .turbo/
 .trash/
+/Claude outputs/
 *.egg-info/
 dist/
 .terraform/
