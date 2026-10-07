@@ -89,15 +89,16 @@ DEFAULT_PAGE_SIZE = 50
 
 # Saves that do not change a task's state are written at most once per window per task.
 COALESCE_WINDOW_SECONDS = 0.5
+# A deferred write that failed is retried after a delay that doubles per failure, up to this.
+DEFERRED_RETRY_MAX_SECONDS = 10.0
+# An unwritten update this old is presumed superseded (the task has most likely moved on to
+# another replica), so it is discarded instead of being written over whatever is there now.
+PENDING_MAX_AGE_SECONDS = 60.0
 # Exiting with the platform unreachable must not hang for every pending task.
 EXIT_FLUSH_BUDGET_SECONDS = 10.0
-# Bound on tasks whose write state is remembered; forgetting one only costs it one extra write.
+# Bound on tasks whose write state is remembered. Forgetting an idle one costs its next write the
+# version check: having no version to match, that write is unconditional.
 MAX_TRACKED_TASKS = 4096
-
-# The state column stored with each task uses one vocabulary under both SDK majors, the A2A 0.3
-# wire spelling: submitted, working, input-required, auth-required, completed, canceled, failed,
-# rejected, unknown. 1.x names (TASK_STATE_INPUT_REQUIRED) are mapped onto it.
-TERMINAL_STATES = frozenset({"completed", "canceled", "failed", "rejected"})
 
 # The order the registration contract spells its capability lists in.
 CAPABILITY_ORDER = ("tasks", "kv")
@@ -394,6 +395,11 @@ def _is_retryable(response: httpx.Response) -> bool:
     return response.status_code >= 500
 
 
+def _is_transient(error: NasikoStateError) -> bool:
+    """Whether the same request could succeed later: no answer at all, or a server-side failure."""
+    return error.status is None or error.status >= 500
+
+
 class NasikoStateClient:
     """Typed client for the platform's state API, with a sync and an async method per endpoint.
 
@@ -674,6 +680,10 @@ def _timeout() -> httpx.Timeout:
 TASK_FORMAT_A2A_0_3 = "a2a-0.3"
 TASK_FORMAT_A2A_1 = "a2a-1"
 
+# The state column stored with each task uses one vocabulary under both SDK majors, the A2A 0.3
+# wire spelling: submitted, working, input-required, auth-required, completed, canceled, failed,
+# rejected, unknown. 1.x names (TASK_STATE_INPUT_REQUIRED) are mapped onto it.
+
 if _a2a_pb2 is None:
     TASK_FORMAT = TASK_FORMAT_A2A_0_3
     _DECODE_ERRORS: tuple[type[BaseException], ...] = (ValueError, TypeError)
@@ -769,21 +779,34 @@ class _Snapshot:
     context_id: str | None
     state: str
     body: dict[str, Any]
+    saved_at: float  # time.monotonic() at save()
+
+    def is_stale(self) -> bool:
+        return time.monotonic() - self.saved_at > PENDING_MAX_AGE_SECONDS
 
 
 def _snapshot(task: Task) -> _Snapshot:
-    return _Snapshot(task.id, task.context_id or None, _state_name(task), _stored_body(task))
+    return _Snapshot(
+        task.id, task.context_id or None, _state_name(task), _stored_body(task), time.monotonic()
+    )
 
 
 class _TaskSlot:
-    """Write-coalescing bookkeeping for one task."""
+    """Write-coalescing and concurrency bookkeeping for one task."""
 
-    def __init__(self) -> None:
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
         # The newest snapshot the server has not confirmed yet.
         self.pending: _Snapshot | None = None
-        # State of the last snapshot the server confirmed; None until the first write lands.
-        self.written_state: str | None = None
+        # The row's version as this process last saw it, from a confirmed write or a read. Every
+        # write is conditional on it (If-Match). None until this process has written or read it.
+        self.version: int | None = None
+        # The state of the newest snapshot sent to the server, or read from it. A save in any other
+        # state is written through. None when unknown: nothing sent yet, or the last send failed.
+        self.state: str | None = None
         self.last_write_started = float("-inf")
+        # Consecutive failed writes; spaces out the background retries.
+        self.failed_writes = 0
         self.flusher: asyncio.Task[None] | None = None
         # One write per task at a time, so an older snapshot cannot land after a newer one.
         self.lock = asyncio.Lock()
@@ -800,16 +823,20 @@ class NasikoTaskStore(TaskStore):
         every terminal state) is on the server before ``save()`` returns.
       - Any other save (artifact chunks, message history) is coalesced: the newest snapshot is
         written at most once per ``coalesce_window_seconds`` per task, and always flushed when the
-        task changes state, on ``aclose()`` and at interpreter exit.
+        task changes state and on ``aclose()``. A write that fails is retried in the background on
+        a growing delay; an update still unwritten after PENDING_MAX_AGE_SECONDS is discarded.
       - Guarantee boundary: a hard crash (SIGKILL, power loss) can lose at most one window,
         0.5 s by default, of non-status updates. State changes are never lost once save() returned.
 
-    Reads see this process's own unwritten snapshot, so a task is never older than the last save
-    that was made here. ``list`` is served by the server and can lag by one window.
+    Replicas. Every write is conditional on the version this process last saw of the task, so a
+    replica can never overwrite a newer write it has not seen. When another replica got there
+    first, a save that changes state raises NasikoStateConflict, and a coalesced update is dropped
+    (logged); either way the store re-reads the task, and ``get()`` returns the other replica's
+    row. ``get()`` returns this process's unwritten snapshot only while it is still based on the
+    server's current row. ``list`` is served by the server and can lag by one window.
 
     Tasks are scoped to the agent, not to an end user: the SDK's per-user owner resolution does
-    not apply. A task is expected to be handled by one replica at a time; concurrent writers to
-    the same task are last-writer-wins.
+    not apply.
     """
 
     def __init__(
@@ -824,17 +851,25 @@ class NasikoTaskStore(TaskStore):
         snapshot = _snapshot(task)
         slot = self._slot(snapshot.task_id)
         slot.pending = snapshot
-        if snapshot.state != slot.written_state:
-            await self._write_pending(slot)
-        else:
+        if snapshot.state == slot.state:
             self._schedule_flush(slot)
+            return
+        slot.state = snapshot.state
+        try:
+            await self._write_pending(slot)
+        except NasikoStateError as exc:
+            if _is_transient(exc):
+                # The state change is still owed; retry it rather than wait for a save that may
+                # never come.
+                self._schedule_flush(slot)
+            raise
 
     async def get(self, task_id: str, context: Any = None) -> Task | None:
-        slot = self._slots.get(task_id)
-        if slot is not None and slot.pending is not None:
-            return _decode_stored_task(slot.pending.body, task_id)
-        record = await self._client.aget_task(task_id)
-        return None if record is None else _decode_stored_task(record.body, task_id)
+        slot = self._slot(task_id)
+        # Under the slot's lock, so a write in flight cannot be mistaken for another writer's.
+        async with slot.lock:
+            record = await self._client.aget_task(task_id)
+            return self._newest_of(slot, record)
 
     async def delete(self, task_id: str, context: Any = None) -> None:
         slot = self._slot(task_id)
@@ -859,12 +894,15 @@ class NasikoTaskStore(TaskStore):
         for flusher in flushers:
             flusher.cancel()
         await asyncio.gather(*flushers, return_exceptions=True)
-        pending = [slot for slot in list(self._slots.values()) if slot.pending is not None]
-        outcomes = await asyncio.gather(
-            *(self._write_pending(slot) for slot in pending), return_exceptions=True
-        )
+        owed = [slot for slot in list(self._slots.values()) if self._owes_a_write(slot)]
+        outcomes = await asyncio.gather(*(self._write_pending(slot) for slot in owed), return_exceptions=True)
         await self._client.aclose()
-        failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+        failures = []
+        for slot, outcome in zip(owed, outcomes):
+            if isinstance(outcome, NasikoStateConflict):
+                _log_superseded(slot, outcome)
+            elif isinstance(outcome, BaseException):
+                failures.append(outcome)
         for failure in failures[1:]:
             logger.error("a pending task write could not be flushed on close: %s", failure)
         if failures:
@@ -874,24 +912,16 @@ class NasikoTaskStore(TaskStore):
         """Write every pending snapshot, blocking. Registered with atexit, when no event loop is left."""
         deadline = time.monotonic() + EXIT_FLUSH_BUDGET_SECONDS
         for slot in list(self._slots.values()):
-            snapshot = slot.pending
-            if snapshot is None:
+            if not self._owes_a_write(slot):
                 continue
             if time.monotonic() >= deadline:
                 logger.error(
-                    "exit flush budget spent; task %s and any after it were not written", snapshot.task_id
+                    "exit flush budget spent; task %s and any after it were not written", slot.task_id
                 )
                 return
-            try:
-                self._client.put_task(
-                    snapshot.task_id, context_id=snapshot.context_id, state=snapshot.state, body=snapshot.body
-                )
-            except NasikoStateError as exc:
-                logger.error("exit flush of task %s failed: %s", snapshot.task_id, exc)
-            else:
-                self._confirm(slot, snapshot)
+            self._write_pending_sync(slot)
 
-    # --- coalescing ------------------------------------------------------------------------
+    # --- writing ---------------------------------------------------------------------------
 
     async def _write_pending(self, slot: _TaskSlot) -> None:
         async with slot.lock:
@@ -899,18 +929,94 @@ class NasikoTaskStore(TaskStore):
             if snapshot is None:
                 return  # a newer write already carried it
             slot.last_write_started = time.monotonic()
-            await self._client.aput_task(
-                snapshot.task_id, context_id=snapshot.context_id, state=snapshot.state, body=snapshot.body
-            )
-            self._confirm(slot, snapshot)
+            try:
+                receipt = await self._client.aput_task(
+                    snapshot.task_id,
+                    context_id=snapshot.context_id,
+                    state=snapshot.state,
+                    body=snapshot.body,
+                    if_match=slot.version,
+                )
+            except NasikoStateConflict:
+                await self._reread_after_conflict(slot)
+                raise
+            except NasikoStateError as exc:
+                self._record_failure(slot, exc)
+                raise
+            self._confirm(slot, snapshot, receipt.version)
 
-    def _confirm(self, slot: _TaskSlot, snapshot: _Snapshot) -> None:
-        slot.written_state = snapshot.state
-        if slot.pending is not snapshot:
-            return  # a newer snapshot arrived while this one was in flight; it is still owed
+    def _write_pending_sync(self, slot: _TaskSlot) -> None:
+        """The exit-time twin of _write_pending: no event loop, so no lock and no re-read."""
+        snapshot = slot.pending
+        assert snapshot is not None, "callers check _owes_a_write first"
+        try:
+            receipt = self._client.put_task(
+                snapshot.task_id,
+                context_id=snapshot.context_id,
+                state=snapshot.state,
+                body=snapshot.body,
+                if_match=slot.version,
+            )
+        except NasikoStateConflict as exc:
+            slot.pending = None
+            _log_superseded(slot, exc)
+        except NasikoStateError as exc:
+            logger.error("exit flush of task %s failed: %s", slot.task_id, exc)
+        else:
+            self._confirm(slot, snapshot, receipt.version)
+
+    def _confirm(self, slot: _TaskSlot, snapshot: _Snapshot, version: int) -> None:
+        slot.version = version
+        slot.failed_writes = 0
+        if slot.state is None:
+            slot.state = snapshot.state
+        if slot.pending is snapshot:
+            slot.pending = None
+        # Otherwise a newer snapshot arrived while this one was in flight; it is still owed.
+
+    def _record_failure(self, slot: _TaskSlot, error: NasikoStateError) -> None:
+        slot.failed_writes += 1
+        slot.state = None  # unknown whether the server has it, so the next save writes through
+        if not _is_transient(error):
+            slot.pending = None  # retrying cannot help; the caller or the log has the error
+
+    async def _reread_after_conflict(self, slot: _TaskSlot) -> None:
+        """Another writer changed the task first: drop what this process had not written, re-read."""
         slot.pending = None
-        if snapshot.state in TERMINAL_STATES:
-            self._forget(snapshot.task_id, slot)
+        slot.state = None
+        try:
+            record = await self._client.aget_task(slot.task_id)
+        except NasikoStateError as exc:
+            # The stale version is kept, so the next write conflicts again and retries the read.
+            logger.error("re-reading task %s after a write conflict failed: %s", slot.task_id, exc)
+            return
+        self._adopt(slot, record)
+
+    # --- reading ---------------------------------------------------------------------------
+
+    def _newest_of(self, slot: _TaskSlot, record: TaskRecord | None) -> Task | None:
+        """This process's unwritten snapshot while it is based on the server's row, else the row."""
+        if slot.pending is not None and (record is None or record.version == slot.version):
+            return _decode_stored_task(slot.pending.body, slot.task_id)
+        if record is None:
+            return None
+        task = _decode_stored_task(record.body, slot.task_id)
+        if slot.pending is not None:
+            logger.warning(
+                "task %s was changed by another writer (version %s); this replica's unwritten "
+                "update was dropped",
+                slot.task_id,
+                record.version,
+            )
+            slot.pending = None
+        self._adopt(slot, record)
+        return task
+
+    def _adopt(self, slot: _TaskSlot, record: TaskRecord | None) -> None:
+        slot.version = None if record is None else record.version
+        slot.state = None if record is None else record.state
+
+    # --- coalescing ------------------------------------------------------------------------
 
     def _schedule_flush(self, slot: _TaskSlot) -> None:
         if slot.flusher is None:
@@ -918,18 +1024,42 @@ class NasikoTaskStore(TaskStore):
 
     async def _flush_when_due(self, slot: _TaskSlot) -> None:
         try:
-            while slot.pending is not None:
+            while self._owes_a_write(slot):
                 await asyncio.sleep(self._seconds_until_due(slot))
-                await self._write_pending(slot)
-        except NasikoStateError as exc:
-            # No caller awaits this task to hand the error to. The snapshot stays pending, so the
-            # next save, aclose() or the exit flush retries it.
-            logger.error("deferred task write failed, will retry on the next save or at exit: %s", exc)
+                if not self._owes_a_write(slot):
+                    return
+                await self._try_deferred_write(slot)
         finally:
             slot.flusher = None
 
+    async def _try_deferred_write(self, slot: _TaskSlot) -> None:
+        # No caller awaits a deferred write to hand its error to, so each outcome is logged here.
+        try:
+            await self._write_pending(slot)
+        except NasikoStateConflict as exc:
+            _log_superseded(slot, exc)
+        except NasikoStateError as exc:
+            retry = "will retry" if slot.pending is not None else "dropped"
+            logger.error("deferred write of task %s failed (%s): %s", slot.task_id, retry, exc)
+
     def _seconds_until_due(self, slot: _TaskSlot) -> float:
-        return max(0.0, slot.last_write_started + self._window - time.monotonic())
+        delay = min(self._window * 2**slot.failed_writes, max(self._window, DEFERRED_RETRY_MAX_SECONDS))
+        return max(0.0, slot.last_write_started + delay - time.monotonic())
+
+    def _owes_a_write(self, slot: _TaskSlot) -> bool:
+        """Whether the slot has an update to write, discarding it instead when it is stale."""
+        snapshot = slot.pending
+        if snapshot is None:
+            return False
+        if not snapshot.is_stale():
+            return True
+        logger.error(
+            "task %s: discarding an update that could not be written for over %.0f s",
+            slot.task_id,
+            PENDING_MAX_AGE_SECONDS,
+        )
+        slot.pending = None
+        return False
 
     # --- slot bookkeeping ------------------------------------------------------------------
 
@@ -938,7 +1068,7 @@ class NasikoTaskStore(TaskStore):
         if slot is not None:
             self._slots.move_to_end(task_id)
             return slot
-        slot = self._slots[task_id] = _TaskSlot()
+        slot = self._slots[task_id] = _TaskSlot(task_id)
         self._evict_idle_slots()
         return slot
 
@@ -958,6 +1088,14 @@ class NasikoTaskStore(TaskStore):
             if self._slots[task_id].is_idle():
                 del self._slots[task_id]
                 excess -= 1
+
+
+def _log_superseded(slot: _TaskSlot, conflict: NasikoStateConflict) -> None:
+    logger.warning(
+        "task %s was changed by another writer (now version %s); this replica's unwritten update was dropped",
+        slot.task_id,
+        conflict.current_version,
+    )
 
 
 def make_task_store() -> TaskStore:
