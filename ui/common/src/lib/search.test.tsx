@@ -11,7 +11,7 @@ import { useSetSearch } from './search'
 it('useSetSearch keeps the sibling list across a search change and drops other state', async () => {
   let set!: ReturnType<typeof useSetSearch<{ tab: string }>>
   function Probe() {
-    set = useSetSearch<{ tab: string }>('/sessions')
+    set = useSetSearch<{ tab: string }>('/optimization')
     return null
   }
   const router = createRouter({
