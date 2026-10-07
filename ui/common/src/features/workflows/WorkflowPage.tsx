@@ -81,9 +81,10 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
   const live = isDeployed(wf)
-  // Save & run lands on the Runs tab with the run open, as Run does (`run.ts`).
+  // Save & run lands on the Runs tab with the run open, as Run does (`run.ts`). The edits are saved by then, but the
+  // editor's leave guard may not have re-rendered yet.
   const openRun = (execId: string) =>
-    void navigate({ to: '/workflows/runs', search: { run: execId } })
+    void navigate({ to: '/workflows/runs', search: { run: execId }, ignoreBlocker: true })
   if (run)
     return (
       <RunView
