@@ -251,15 +251,27 @@ class TestListing:
 
         assert state_server.calls("GET", "/tasks")[0].query == {"limit": "50"}
 
-    async def test_a_timestamp_filter_is_refused_rather_than_ignored(self, store):
-        from a2a.types import ListTasksRequest
-        from a2a.utils.errors import UnsupportedOperationError
+    async def test_a_timestamp_filter_is_applied_to_the_page(self, store):
         from google.protobuf.timestamp_pb2 import Timestamp
 
-        request = ListTasksRequest(status_timestamp_after=Timestamp(seconds=1))
+        for task_id, seconds in (("old", 100), ("exact", 150), ("new", 200), ("unstamped", None)):
+            task = new_task(task_id, "working")
+            if seconds is not None:
+                task.status.timestamp.FromSeconds(seconds)
+            await store.save(task)
 
-        with pytest.raises(UnsupportedOperationError, match="status_timestamp_after"):
-            await store.list(request)
+        response = await store.list(self.request(status_timestamp_after=Timestamp(seconds=150)))
+
+        assert sorted(t.id for t in response.tasks) == ["exact", "new"]
+
+    async def test_total_size_is_left_unset_rather_than_guessed(self, store):
+        for n in range(3):
+            await store.save(new_task(f"t{n}", "working"))
+
+        response = await store.list(self.request(page_size=2))
+
+        assert len(response.tasks) == 2
+        assert response.total_size == 0
 
     async def test_a_server_refusal_surfaces_as_a_state_error(self, store, state_server):
         state_server.fail(400, when=lambda r: r.path == "/tasks")

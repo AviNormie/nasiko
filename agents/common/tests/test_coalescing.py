@@ -449,3 +449,40 @@ class TestBoundedMemory:
         assert list(store._slots) == ["t1", "t2"]  # over the cap rather than losing a pending write
         await store.aclose()
         assert written_texts(state_server) == ["1", "2"]
+
+
+class TestExitBudget:
+    def test_the_budget_bounds_each_request_not_only_the_loop_between_tasks(self, monkeypatch, caplog):
+        """A slow, failing platform: the flush gives up inside a task's retries, on time."""
+        import httpx
+        from fake_state_server import BASE_URL, TOKEN
+        from nasiko_state import NasikoStateClient
+
+        server = FakeStateServer()
+        attempts = []
+
+        def slow_and_failing(request):
+            if request.method == "PUT":
+                attempts.append(request.extensions["timeout"]["read"])
+                time.sleep(0.2)
+                return httpx.Response(503, json={"error": "unavailable"})
+            return server.handle(request)
+
+        client = NasikoStateClient(
+            BASE_URL, TOKEN, transport=httpx.MockTransport(slow_and_failing), retry_backoff_seconds=0
+        )
+        store = NasikoTaskStore(client, coalesce_window_seconds=LONG_WINDOW)
+        for task_id in ("a", "b"):
+            store._slot(task_id).pending = nasiko_state._snapshot(new_task(task_id, "working"))
+        monkeypatch.setattr(nasiko_state, "EXIT_FLUSH_BUDGET_SECONDS", 0.3)
+
+        started = time.monotonic()
+        with caplog.at_level(logging.ERROR, logger="nasiko_state"):
+            store.flush_sync()
+        elapsed = time.monotonic() - started
+        atexit.unregister(store.flush_sync)
+
+        assert len(attempts) == 2  # task a: the second attempt is the last that fits; no third
+        assert attempts[1] <= 0.15  # and it was only given the time left
+        assert "budget spent; task b" in caplog.text
+        assert elapsed < 0.6
