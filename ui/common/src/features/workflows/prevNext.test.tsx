@@ -86,21 +86,33 @@ describe('workflow Previous/Next', () => {
     ).toBeInTheDocument()
   })
 
-  it('keeps the arrows on a workflow that fails to load', async () => {
+  it.each([
+    [404, copy.notFound],
+    [500, copy.loadOneFailed],
+  ])('keeps the arrows on a workflow that fails to load (%i)', async (status, title) => {
     const { router, queryClient } = renderApp('/workflows')
     await screen.findByRole('link', { name: 'Ticket resolution' }, T)
     const hrefs = titles().map((l) => l.getAttribute('href'))
+    expect(hrefs.length).toBeGreaterThan(2)
     const gone = hrefs[1]!.split('/').pop()!
-    server.use(
-      http.get(`/api/maf/workflow/${gone}`, () => new HttpResponse('not found', { status: 404 })),
-    )
+    server.use(http.get(`/api/maf/workflow/${gone}`, () => new HttpResponse('failed', { status })))
     queryClient.removeQueries({ queryKey: workflowKeys.detail(gone) })
     await userEvent.click(titles()[0]!)
     await userEvent.click(await screen.findByRole('button', { name: 'Next workflow' }, T))
-    expect(await screen.findByRole('heading', { name: copy.notFound }, T)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: title }, T)).toBeInTheDocument()
     expect(position(2, hrefs.length)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Next workflow' }))
     await waitFor(() => expect(router.state.location.pathname).toBe(hrefs[2]))
+  })
+
+  it('Save & run on edited steps goes to the run without the leave prompt', async () => {
+    const id = workflowsMockState().workflows.find((w) => w.name === 'Onboarding checklist')!.id
+    const { router } = renderApp(`/workflows/${id}`)
+    const name = await screen.findByLabelText(copy.nameLabel, {}, T)
+    await userEvent.type(name, ' edited')
+    await userEvent.click(screen.getByRole('button', { name: copy.saveAndRun }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workflows/runs'), T)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('shows no arrows on a deep link', async () => {

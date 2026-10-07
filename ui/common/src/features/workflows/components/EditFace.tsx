@@ -57,8 +57,8 @@ export function EditFace({
     wf.maf_json?.steps?.length ? initialDesc.trim() : null,
   )
   const [planned, setPlanned] = useState(() => snapshot('', '', steps))
-  // What the editor opened with: a change from it is unsaved until Save & run or Deploy succeeds.
-  const [opened] = useState(() => snapshot(wf.name, initialDesc, fromMaf(wf.maf_json?.steps)))
+  // What the server holds: what the editor opened with, then what it last saved (even if the run or promote failed).
+  const [opened, setOpened] = useState(() => snapshot(wf.name, initialDesc, steps))
   const dirty = snapshot(name, desc, steps) !== opened
   const failedAt = useRef<'Save' | 'Run' | 'Deploy'>('Save')
 
@@ -84,6 +84,7 @@ export function EditFace({
         description: desc.trim() || null,
         steps: payload,
       })
+      setOpened(snapshot(name, desc, steps))
       failedAt.current = then === 'run' ? 'Run' : 'Deploy'
       if (then === 'run') {
         const r = await runWorkflow(wf.id)
@@ -116,7 +117,7 @@ export function EditFace({
 
   return (
     <>
-      <LeaveGuard when={dirty && !act.isPending && !act.isSuccess} />
+      <LeaveGuard when={dirty && !act.isPending} />
       <h1 tabIndex={-1} className="sr-only">
         {wf.name}
       </h1>
