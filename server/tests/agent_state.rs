@@ -2283,70 +2283,106 @@ async fn a_malformed_registration_is_refused_and_changes_nothing() {
 
 // ─── Encryption at rest ─────────────────────────────────────────────────────
 
+/// The raw stored column of one row.
+async fn stored_column(server: &TestServer, agent: &Agent, store: &str, name: &str) -> String {
+    let (table, column, key) = match store {
+        "tasks" => ("agent_tasks", "body", "task_id"),
+        _ => ("agent_kv", "value", "key"),
+    };
+    sqlx::query_scalar(&format!(
+        "SELECT {column} FROM {table} WHERE agent_id = $1 AND {key} = $2"
+    ))
+    .bind(agent.id)
+    .bind(name)
+    .fetch_one(&server.db)
+    .await
+    .unwrap()
+}
+
+async fn overwrite_column(
+    server: &TestServer,
+    agent: &Agent,
+    store: &str,
+    name: &str,
+    sealed: &str,
+) {
+    let (table, column, key) = match store {
+        "tasks" => ("agent_tasks", "body", "task_id"),
+        _ => ("agent_kv", "value", "key"),
+    };
+    sqlx::query(&format!(
+        "UPDATE {table} SET {column} = $3 WHERE agent_id = $1 AND {key} = $2"
+    ))
+    .bind(agent.id)
+    .bind(name)
+    .bind(sealed)
+    .execute(&server.db)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 #[serial]
-async fn a_task_body_is_stored_as_ciphertext_under_the_agents_own_key() {
+async fn task_bodies_and_values_are_stored_as_ciphertext_under_a_key_of_their_own() {
     let server = TestServer::start().await;
-    let agent = new_agent(&server, "sealed-task-agent").await;
-    let stranger = new_agent(&server, "sealed-task-stranger").await;
-    let body = json!({"secret": "PLAINTEXT-MARKER-4821", "n": [1, 2, 3]});
-    put_task(&server, &agent, "t", body.clone()).await;
+    let agent = new_agent(&server, "sealed-agent").await;
+    put_task(
+        &server,
+        &agent,
+        "t",
+        json!({"secret": "PLAINTEXT-MARKER-4821"}),
+    )
+    .await;
+    put_kv(&server, &agent, "k", json!("PLAINTEXT-MARKER-9034")).await;
 
-    let stored: String =
-        sqlx::query_scalar("SELECT body FROM agent_tasks WHERE agent_id = $1 AND task_id = 't'")
-            .bind(agent.id)
-            .fetch_one(&server.db)
-            .await
-            .unwrap();
-    assert!(
-        !stored.contains("PLAINTEXT-MARKER"),
-        "the secret is in the database in the clear"
-    );
-    assert!(
-        serde_json::from_str::<Value>(&stored).is_err(),
-        "the column holds JSON, not ciphertext"
-    );
-
-    // It opens with this agent's key, to exactly the JSON text that was written...
-    let opened = nasiko_secrets::SecretsCrypto::for_agent(agent.id)
-        .decrypt(&stored)
-        .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&opened).unwrap(), body);
-    // ...and not with another agent's.
-    assert!(
-        nasiko_secrets::SecretsCrypto::for_agent(stranger.id)
-            .decrypt(&stored)
-            .is_err()
-    );
-
+    for (store, name) in [("tasks", "t"), ("kv", "k")] {
+        let stored = stored_column(&server, &agent, store, name).await;
+        assert!(
+            !stored.contains("PLAINTEXT-MARKER"),
+            "the {store} secret is in the database in the clear"
+        );
+        assert!(
+            serde_json::from_str::<Value>(&stored).is_err(),
+            "the {store} column holds JSON, not ciphertext"
+        );
+        // Not under the key that protects the agent's secrets either: a separate domain.
+        assert!(
+            nasiko_secrets::SecretsCrypto::for_agent(agent.id)
+                .decrypt(&stored)
+                .is_err()
+        );
+    }
     server.cleanup().await;
 }
 
 #[tokio::test]
 #[serial]
-async fn a_kv_value_is_stored_as_ciphertext_under_the_agents_own_key() {
+async fn a_ciphertext_moved_onto_another_row_does_not_open_there() {
     let server = TestServer::start().await;
-    let agent = new_agent(&server, "sealed-kv-agent").await;
-    let stranger = new_agent(&server, "sealed-kv-stranger").await;
-    let value = json!("PLAINTEXT-MARKER-9034");
-    put_kv(&server, &agent, "k", value.clone()).await;
+    let agent = new_agent(&server, "moved-agent").await;
+    let other = new_agent(&server, "moved-other-agent").await;
+    put_task(&server, &agent, "a", json!("from a")).await;
+    put_task(&server, &agent, "b", json!("from b")).await;
+    put_kv(&server, &agent, "a", json!("kv a")).await;
+    put_task(&server, &other, "a", json!("other a")).await;
+    let sealed_a = stored_column(&server, &agent, "tasks", "a").await;
 
-    let stored: String =
-        sqlx::query_scalar("SELECT value FROM agent_kv WHERE agent_id = $1 AND key = 'k'")
-            .bind(agent.id)
-            .fetch_one(&server.db)
-            .await
-            .unwrap();
-    assert!(!stored.contains("PLAINTEXT-MARKER"));
-    let opened = nasiko_secrets::SecretsCrypto::for_agent(agent.id)
-        .decrypt(&stored)
-        .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&opened).unwrap(), value);
-    assert!(
-        nasiko_secrets::SecretsCrypto::for_agent(stranger.id)
-            .decrypt(&stored)
-            .is_err()
-    );
+    // Another task of the same agent: same key, different row.
+    let sealed_b = stored_column(&server, &agent, "tasks", "b").await;
+    overwrite_column(&server, &agent, "tasks", "b", &sealed_a).await;
+    expect_error(get_task(&server, &agent, "b").await, 500, "internal_error").await;
+    // Put back where it belongs, it opens again: the row, not the bytes, was wrong.
+    overwrite_column(&server, &agent, "tasks", "b", &sealed_b).await;
+    let read: Value = get_task(&server, &agent, "b").await.json().await.unwrap();
+    assert_eq!(read["body"], "from b");
+
+    // The same name in the other store.
+    overwrite_column(&server, &agent, "kv", "a", &sealed_a).await;
+    expect_error(get_kv(&server, &agent, "a").await, 500, "internal_error").await;
+
+    // The same task id under another agent.
+    overwrite_column(&server, &other, "tasks", "a", &sealed_a).await;
+    expect_error(get_task(&server, &other, "a").await, 500, "internal_error").await;
 
     server.cleanup().await;
 }
