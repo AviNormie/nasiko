@@ -90,7 +90,6 @@ export function SessionHeader({
           <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          <ChatSiblings sessionId={sessionId} />
           <HeaderTotals replies={replies} partial={partial} className="hidden @min-[560px]:flex" />
           <Button
             asChild
@@ -171,6 +170,8 @@ export function SessionHeader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {/* Rightmost, so the arrows stay put from chat to chat whatever the totals' width. */}
+          <ChatSiblings sessionId={sessionId} />
         </div>
       </div>
     </header>

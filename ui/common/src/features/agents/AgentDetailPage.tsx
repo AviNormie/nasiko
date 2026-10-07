@@ -240,6 +240,8 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
 
   return (
     <div className="space-y-4">
+      {/* The arrows keep one place for every agent (and for one that fails to load), whatever its actions. */}
+      <AgentSiblings id={id} className="justify-end" />
       <Header
         agent={agent}
         display={display}
@@ -377,7 +379,6 @@ function Header({
         }
         actions={
           <div className="flex flex-wrap items-start justify-end gap-2">
-            <AgentSiblings id={agent.id} />
             <TryItLink
               id={agent.id}
               name={agent.displayName}
