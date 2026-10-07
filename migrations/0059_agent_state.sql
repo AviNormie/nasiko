@@ -17,10 +17,10 @@ ALTER TABLE agents
 -- JSON itself. `version` starts at 1 and increments on every write.
 --
 -- ON DELETE CASCADE covers a hard delete of the agent row only. The catalog's
--- delete route is a soft delete (`agents.deleted_at`), which leaves these rows
--- in place until `expires_at`: the agent's credential stops authenticating the
--- moment it is soft-deleted, so they are unreachable meanwhile, and the sweeper
--- reclaims them after expiry.
+-- delete route is a soft delete (`agents.deleted_at`), which never fires it: the
+-- agent's credential stops authenticating the moment it is soft-deleted, and the
+-- sweeper (oss/server/src/agent_state/sweeper.rs) removes the rows of deleted
+-- agents on its next pass.
 CREATE TABLE agent_tasks (
     agent_id    UUID        NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     task_id     TEXT        NOT NULL,

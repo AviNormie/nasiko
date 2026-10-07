@@ -27,6 +27,24 @@ pub(super) enum Store {
 }
 
 impl Store {
+    pub(super) const ALL: [Self; 2] = [Self::Tasks, Self::Kv];
+
+    /// The table that holds the store's rows.
+    pub(super) fn table(self) -> &'static str {
+        match self {
+            Self::Tasks => "agent_tasks",
+            Self::Kv => "agent_kv",
+        }
+    }
+
+    /// The column that names a row within one agent's share of the store.
+    pub(super) fn name_column(self) -> &'static str {
+        match self {
+            Self::Tasks => "task_id",
+            Self::Kv => "key",
+        }
+    }
+
     /// Names the store inside a lock key, so a task and a key of the same name never contend.
     fn lock_label(self) -> &'static str {
         match self {
