@@ -14,12 +14,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 venv_root="${NASIKO_STATE_TEST_VENVS:-${TMPDIR:-/tmp}/nasiko-state-test-venvs}"
 python="${PYTHON:-python3}"
 
-# name | a2a-sdk requirement. langgraph covers the checkpointer; anyio is pytest's async runner.
+# name | a2a-sdk requirement. langgraph covers the checkpointer, bounded as the stock langgraph
+# agent bounds it (oss/agents/langgraph/pyproject.toml); anyio is pytest's async runner.
 suites=(
   "a2a-0.3|a2a-sdk[http-server]>=0.3,<1"
   "a2a-1.x|a2a-sdk[http-server]==1.1.1"
 )
-shared_requirements=("langgraph" "pytest" "anyio")
+shared_requirements=("langgraph>=1.0,<2" "langgraph-checkpoint>=4.1,<5" "pytest" "anyio")
 
 install_requirements() {
   local venv="$1"
