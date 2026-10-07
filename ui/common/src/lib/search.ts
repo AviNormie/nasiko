@@ -60,7 +60,8 @@ export function useSetSearch<S extends object>(
     (patch: Partial<S>, opts?: { replace?: boolean }) =>
       void navigate({
         search: (prev) => ({ ...prev, ...patch }),
-        // A search change on a detail page keeps the list it was opened from (lib/siblings.ts), and nothing else.
+        // A search change on a detail page keeps the list it was opened from (lib/siblings.ts), and nothing else
+        // (an unchanged search with the same list writes no history entry).
         state: (prev) => (prev.siblings ? { siblings: prev.siblings } : {}),
         replace: opts?.replace ?? replaceByDefault,
         resetScroll: false,

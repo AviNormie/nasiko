@@ -6,12 +6,13 @@ import {
 } from '@tanstack/react-router'
 import { act, render, waitFor } from '@testing-library/react'
 import { expect, it } from 'vitest'
+import '@/features/agents/search' // augments HistoryState with agentDeleted
 import { useSetSearch } from './search'
 
 it('useSetSearch keeps the sibling list across a search change and drops other state', async () => {
   let set!: ReturnType<typeof useSetSearch<{ tab: string }>>
   function Probe() {
-    set = useSetSearch<{ tab: string }>('/optimization')
+    set = useSetSearch<{ tab: string }>('/')
     return null
   }
   const router = createRouter({
@@ -23,7 +24,7 @@ it('useSetSearch keeps the sibling list across a search change and drops other s
   await act(() =>
     router.navigate({
       to: '/',
-      state: { siblings: ['a', 'b'], agentDeleted: { name: 'x' } } as never,
+      state: { siblings: ['a', 'b'], agentDeleted: { name: 'x', errors: [], stopped: 0 } },
     }),
   )
   expect(router.state.location.state.siblings).toEqual(['a', 'b'])
