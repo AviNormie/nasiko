@@ -272,6 +272,55 @@ forwarded `traceparent` and requires that the flow was actually dispatched to yo
 agent, so the same OTel propagation above is all you need. The Go reference
 implementation is `oss/agents/weather` (`mcp.go`).
 
+### Durable state
+
+Any A2A agent runs on the platform, whatever it does with its state. An agent that keeps its
+tasks in the platform's state store also survives restarts (a task paused for human input is
+still there afterwards) and can run more than one replica. An agent that keeps tasks in process
+memory, as the SDK's `InMemoryTaskStore` does, loses paused work on every restart and has to
+stay at one replica.
+
+The platform injects the store's address and your credential into every deployment:
+
+| Variable | Meaning |
+|---|---|
+| `NASIKO_STATE_URL` | Base URL of the state API (it ends in `/api/agent-state`). Unset means the platform provides no store. |
+| `NASIKO_AGENT_TOKEN` | Your agent's credential, sent as a `Bearer` token. Falls back to `MCP_GATEWAY_TOKEN`, which holds the same value. |
+
+**Python (`a2a-sdk` 0.3.x and 1.x).** An image is built from your agent's directory only, so copy
+`oss/agents/common/nasiko_state.py` next to your `main.py` and change one constructor argument:
+
+```python
+from nasiko_state import make_task_store
+
+handler = DefaultRequestHandler(
+    agent_executor=MyExecutor(),
+    task_store=make_task_store(),  # was InMemoryTaskStore()
+    agent_card=card,
+)
+```
+
+`make_task_store()` returns the SDK's in-memory store when `NASIKO_STATE_URL` is unset, so the
+same code runs unchanged on your laptop. A LangGraph agent swaps `MemorySaver()` for
+`make_checkpointer()` the same way. The agents in `oss/agents` already do both, and
+`oss/agents/common/check_vendored.py` fails CI when a copy drifts from the original.
+
+**What is written, and when.** The store never pretends a write happened:
+
+- A save that changes `task.status.state` (a task's first save, `input-required`, every terminal
+  state) is on the server before `save()` returns.
+- Any other save, such as streamed artifact chunks, is coalesced to at most one write per 500 ms
+  per task. Pending writes are flushed when the task changes state, on `aclose()` and when the
+  interpreter exits.
+- After a hard crash (SIGKILL, power loss) at most the last 500 ms of those non-status updates
+  is lost. A state change that `save()` returned for always survives.
+
+Failures raise `NasikoStateError` with the HTTP status and body; there is no silent fallback to
+memory once `NASIKO_STATE_URL` is set. Design around three limits: a task is handled by one
+replica at a time (concurrent writers to the same task are last-writer-wins), a single task or
+checkpoint above the platform's body limit (1 MiB by default) is rejected, and stored state
+expires after the platform's retention window (7 days by default) counted from its last write.
+
 ---
 
 ## Phase 5: Share (Registry)
