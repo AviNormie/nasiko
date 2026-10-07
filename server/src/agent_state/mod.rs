@@ -43,6 +43,7 @@
 mod auth;
 mod cursor;
 mod error;
+mod page;
 mod payload;
 mod precondition;
 mod repo;

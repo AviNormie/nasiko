@@ -633,6 +633,117 @@ async fn tasks_list_newest_first_and_page_by_cursor() {
     server.cleanup().await;
 }
 
+/// Follows `path`'s cursors to the end and returns every page.
+async fn all_pages(server: &TestServer, agent: &Agent, path: &str) -> Vec<Value> {
+    let mut pages = vec![list(server, agent, path).await];
+    while let Some(cursor) = pages.last().unwrap()["next_cursor"].as_str() {
+        let separator = if path.contains('?') { '&' } else { '?' };
+        let next = format!("{path}{separator}cursor={cursor}");
+        pages.push(list(server, agent, &next).await);
+    }
+    pages
+}
+
+#[tokio::test]
+#[serial]
+async fn a_listing_of_large_bodies_pages_in_short_pages_within_the_byte_budget() {
+    const MIB: usize = 1024 * 1024;
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "big-list-agent").await;
+    // 100 bodies of exactly 1 MiB as sent: a 100-item page of them would be 100 MiB.
+    let body = format!("\"{}\"", "x".repeat(MIB - 2));
+    for n in 0..100 {
+        let res = put_task_raw(&server, &agent, &format!("t{n:03}"), &body).await;
+        assert_eq!(res.status(), 200, "task {n}");
+    }
+
+    let pages = all_pages(&server, &agent, "/tasks?limit=100").await;
+    let mut seen = Vec::new();
+    for page in &pages {
+        let ids = names(page, "task_id");
+        assert!(!ids.is_empty(), "every page carries something");
+        assert!(
+            ids.len() <= 8,
+            "8 MiB holds at most 8 of them, got {}",
+            ids.len()
+        );
+        seen.extend(ids);
+    }
+    assert!(
+        pages.len() >= 13,
+        "100 MiB in 8 MiB pages, got {} pages",
+        pages.len()
+    );
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 100, "every task exactly once");
+
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_listing_byte_budget_comes_from_configuration_and_a_larger_row_lists_alone() {
+    let server = TestServer::start_with(|c| c.agent_state_list_bytes_budget = 25).await;
+    let agent = new_agent(&server, "budget-agent").await;
+    // Each value is 10 bytes as sent, except `c`, which alone is over the budget.
+    for (key, value) in [("a", "12345678"), ("b", "12345678"), ("d", "12345678")] {
+        put_kv(&server, &agent, key, json!(value)).await;
+    }
+    put_kv(&server, &agent, "c", json!("x".repeat(40))).await;
+
+    let pages: Vec<Vec<String>> = all_pages(&server, &agent, "/kv")
+        .await
+        .iter()
+        .map(|page| names(page, "key"))
+        .collect();
+    assert_eq!(pages, [vec!["a", "b"], vec!["c"], vec!["d"]]);
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_row_that_does_not_decrypt_is_left_out_of_listings_and_fails_only_its_own_read() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "damaged-agent").await;
+    for id in ["a", "b", "c"] {
+        put_task(&server, &agent, id, json!(id)).await;
+        put_kv(&server, &agent, id, json!(id)).await;
+    }
+    for table in ["agent_tasks", "agent_kv"] {
+        let (column, name) = if table == "agent_tasks" {
+            ("body", "task_id")
+        } else {
+            ("value", "key")
+        };
+        sqlx::query(&format!(
+            "UPDATE {table} SET {column} = 'bm90IGNpcGhlcnRleHQ=' WHERE {name} = 'b'"
+        ))
+        .execute(&server.db)
+        .await
+        .unwrap();
+    }
+
+    let mut tasks = names(&list(&server, &agent, "/tasks").await, "task_id");
+    tasks.sort();
+    assert_eq!(tasks, ["a", "c"]);
+    assert_eq!(
+        names(&list(&server, &agent, "/kv").await, "key"),
+        ["a", "c"]
+    );
+    // One row per page: the damaged one yields an empty page that still moves on past it.
+    let pages: Vec<Vec<String>> = all_pages(&server, &agent, "/kv?limit=1")
+        .await
+        .iter()
+        .map(|page| names(page, "key"))
+        .collect();
+    assert_eq!(pages, [vec!["a"], vec![], vec!["c"]]);
+
+    expect_error(get_task(&server, &agent, "b").await, 500, "internal_error").await;
+    expect_error(get_kv(&server, &agent, "b").await, 500, "internal_error").await;
+    server.cleanup().await;
+}
+
 #[tokio::test]
 #[serial]
 async fn rewriting_a_task_moves_it_to_the_front() {

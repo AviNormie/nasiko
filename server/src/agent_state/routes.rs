@@ -7,18 +7,17 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router, middleware};
 
 use super::auth::{AgentAuth, AuthenticatedAgent, authenticate};
-use super::cursor::{KeyCursor, TaskCursor};
 use super::error::StateError;
+use super::page::{ListedRow, Page, build_page};
 use super::payload::{BoundedPayload, PayloadCipher};
 use super::precondition::Precondition;
 use super::repo::{
-    self, DeleteOutcome, KvQuery, KvRow, NewEntry, NewTask, PutOutcome, Rows, Stamp, Store,
-    TaskQuery, TaskRow,
+    self, DeleteOutcome, KvQuery, NewEntry, NewTask, PutOutcome, Stamp, Store, TaskQuery,
 };
 use super::request::{KvKey, StateJson, StateQuery, TaskId};
 use super::wire::{
-    KvStamp, KvView, ListKvQuery, ListTasksQuery, Page, PutKvRequest, PutTaskRequest,
-    RegisterRequest, TaskStamp, TaskView,
+    KvStamp, KvView, ListKvQuery, ListTasksQuery, PutKvRequest, PutTaskRequest, RegisterRequest,
+    TaskStamp, TaskView,
 };
 use crate::state::AppState;
 
@@ -117,8 +116,8 @@ async fn get_task(
     let row = repo::get_task(&state.db, agent_id, task_id.as_str())
         .await?
         .ok_or(StateError::NotFound { what: "task" })?;
-    let cipher = PayloadCipher::for_agent(agent_id)?;
-    Ok(Json(TaskView::open(row, &cipher)?))
+    let body = PayloadCipher::for_agent(agent_id)?.open(&row.sealed_body)?;
+    Ok(Json(row.into_view(body)))
 }
 
 async fn delete_task(
@@ -146,29 +145,10 @@ async fn list_tasks(
     let query = TaskQuery::try_from(query)?;
     let rows = repo::list_tasks(&state.db, agent_id, &query).await?;
     let cipher = PayloadCipher::for_agent(agent_id)?;
-    Ok(Json(task_page(rows, &cipher)?))
-}
-
-fn task_page(rows: Rows<TaskRow>, cipher: &PayloadCipher) -> Result<Page<TaskView>, StateError> {
-    let next_cursor = next_task_cursor(&rows);
-    let items = rows
-        .rows
-        .into_iter()
-        .map(|row| TaskView::open(row, cipher))
-        .collect::<Result<_, _>>()?;
-    Ok(Page { items, next_cursor })
-}
-
-/// Where the next page of tasks starts: just after this page's last row, if another page exists.
-fn next_task_cursor(rows: &Rows<TaskRow>) -> Option<String> {
-    let last = rows.has_more.then(|| rows.rows.last()).flatten()?;
-    Some(
-        TaskCursor {
-            updated_at: last.updated_at,
-            task_id: last.task_id.clone(),
-        }
-        .encode(),
-    )
+    let budget = state.config.agent_state_list_bytes_budget;
+    Ok(Json(build_page(rows, budget, |row| {
+        cipher.open(&row.sealed_body)
+    })))
 }
 
 // ─── Key-value ──────────────────────────────────────────────────────────────
@@ -205,8 +185,8 @@ async fn get_kv(
     let row = repo::get_kv(&state.db, agent_id, key.as_str())
         .await?
         .ok_or(StateError::NotFound { what: "key" })?;
-    let cipher = PayloadCipher::for_agent(agent_id)?;
-    Ok(Json(KvView::open(row, &cipher)?))
+    let value = PayloadCipher::for_agent(agent_id)?.open(&row.sealed_value)?;
+    Ok(Json(row.into_view(value)))
 }
 
 async fn delete_kv(
@@ -227,28 +207,10 @@ async fn list_kv(
     let query = KvQuery::try_from(query)?;
     let rows = repo::list_kv(&state.db, agent_id, &query).await?;
     let cipher = PayloadCipher::for_agent(agent_id)?;
-    Ok(Json(kv_page(rows, &cipher)?))
-}
-
-fn kv_page(rows: Rows<KvRow>, cipher: &PayloadCipher) -> Result<Page<KvView>, StateError> {
-    let next_cursor = next_kv_cursor(&rows);
-    let items = rows
-        .rows
-        .into_iter()
-        .map(|row| KvView::open(row, cipher))
-        .collect::<Result<_, _>>()?;
-    Ok(Page { items, next_cursor })
-}
-
-/// Where the next page of entries starts: just after this page's last row, if another exists.
-fn next_kv_cursor(rows: &Rows<KvRow>) -> Option<String> {
-    let last = rows.has_more.then(|| rows.rows.last()).flatten()?;
-    Some(
-        KeyCursor {
-            key: last.key.clone(),
-        }
-        .encode(),
-    )
+    let budget = state.config.agent_state_list_bytes_budget;
+    Ok(Json(build_page(rows, budget, |row| {
+        cipher.open(&row.sealed_value)
+    })))
 }
 
 // ─── Outcomes to responses ──────────────────────────────────────────────────
@@ -282,18 +244,6 @@ mod tests {
         DateTime::from_timestamp_micros(micros).unwrap()
     }
 
-    fn task_row(task_id: &str, updated_at_micros: i64) -> TaskRow {
-        TaskRow {
-            task_id: task_id.into(),
-            context_id: None,
-            state: "working".into(),
-            sealed_body: String::new(),
-            version: 1,
-            updated_at: at(updated_at_micros),
-            expires_at: at(updated_at_micros + 1),
-        }
-    }
-
     #[test]
     fn a_put_that_stored_is_its_stamp_and_a_conflict_carries_the_current_version() {
         let stamp = Stamp {
@@ -325,67 +275,5 @@ mod tests {
             ),
             Err(StateError::VersionConflict { current_version: 2 })
         ));
-    }
-
-    fn kv_row(key: &str) -> KvRow {
-        KvRow {
-            key: key.into(),
-            sealed_value: String::new(),
-            version: 1,
-            updated_at: at(1),
-            expires_at: at(2),
-        }
-    }
-
-    #[test]
-    fn a_page_with_more_after_it_resumes_just_past_its_last_task() {
-        let rows = Rows {
-            rows: vec![task_row("a", 20), task_row("b", 10)],
-            has_more: true,
-        };
-        let cursor = next_task_cursor(&rows).expect("another page follows");
-        assert_eq!(
-            TaskCursor::decode(&cursor).unwrap(),
-            TaskCursor {
-                updated_at: at(10),
-                task_id: "b".into()
-            }
-        );
-    }
-
-    #[test]
-    fn the_last_page_of_tasks_has_no_next_cursor() {
-        let rows = Rows {
-            rows: vec![task_row("a", 20)],
-            has_more: false,
-        };
-        assert_eq!(next_task_cursor(&rows), None);
-        let empty = Rows::<TaskRow> {
-            rows: vec![],
-            has_more: false,
-        };
-        assert_eq!(next_task_cursor(&empty), None);
-    }
-
-    #[test]
-    fn a_page_with_more_after_it_resumes_just_past_its_last_key() {
-        let rows = Rows {
-            rows: vec![kv_row("a"), kv_row("b")],
-            has_more: true,
-        };
-        let cursor = next_kv_cursor(&rows).expect("another page follows");
-        assert_eq!(
-            KeyCursor::decode(&cursor).unwrap(),
-            KeyCursor { key: "b".into() }
-        );
-    }
-
-    #[test]
-    fn the_last_page_of_entries_has_no_next_cursor() {
-        let rows = Rows {
-            rows: vec![kv_row("a")],
-            has_more: false,
-        };
-        assert_eq!(next_kv_cursor(&rows), None);
     }
 }

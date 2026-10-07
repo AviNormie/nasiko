@@ -154,6 +154,10 @@ pub struct Config {
     /// in memory by each server process, like the other limiters (`rate_limit.rs`), so the
     /// ceiling across several processes is this value times their number.
     pub agent_state_rate_limit_per_minute: u32,
+    /// Most body bytes one agent state listing page carries. AGENT_STATE_LIST_BYTES_BUDGET,
+    /// default 8 MiB, floored at 1. A page stops before the next row would pass it and hands back
+    /// a cursor, so a short page is normal; a single row larger than it still lists, alone.
+    pub agent_state_list_bytes_budget: usize,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     /// Multi-tenant mode (per-CP): when on, this control plane runs behind the
@@ -578,6 +582,11 @@ impl Config {
             agent_state_max_body_bytes: env_parse("AGENT_STATE_MAX_BODY_BYTES", 1_048_576).max(1),
             agent_state_rate_limit_per_minute: env_parse("AGENT_STATE_RATE_LIMIT_PER_MINUTE", 600)
                 .max(1),
+            agent_state_list_bytes_budget: env_parse(
+                "AGENT_STATE_LIST_BYTES_BUDGET",
+                8 * 1024 * 1024,
+            )
+            .max(1),
             github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
             multi_tenant_mode: std::env::var("MULTI_TENANT_MODE")
