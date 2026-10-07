@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::authz::HitlIdentity;
-use crate::types::{HitlKind, HitlOrigin, HitlRequest, HitlStatus, NewHitlRequest};
+use crate::types::{HitlKind, HitlOrigin, HitlRequest, HitlStatus, NewHitlRequest, ResumeStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HitlError {
@@ -154,6 +154,14 @@ pub trait HitlStore: Send + Sync {
     /// `mark_resume_failed`'s own cap check). Sets `resume_status = 'delivery_outcome_unknown'`
     /// and releases the lease so it stops being reclaimed.
     async fn mark_resume_unknown(&self, id: Uuid) -> Result<(), HitlError>;
+    /// The agent answered the resume with "no such task" (A2A `TaskNotFoundError`, or HTTP 404): it
+    /// no longer holds the paused task, so the human's answer reached no task. Sets
+    /// `resume_status = 'agent_lost_task'`, releases the lease and stores `error` (which signal
+    /// said so) in `resume_last_error`. Terminal and never retried: re-sending the answer cannot
+    /// find a task that is gone, so unlike `mark_resume_unknown` there is no double-delivery to
+    /// guard against. Only acts on a row still `not_started`, so a late or duplicate attempt can
+    /// never overwrite an outcome another attempt already recorded.
+    async fn mark_resume_agent_lost_task(&self, id: Uuid, error: &str) -> Result<(), HitlError>;
     /// Records that the human clicked "start authorization" (§7/Phase 4) — an in-place,
     /// non-terminal annotation on `human_response.auth_outcome`, deliberately **not** a call to
     /// `resolve()`: the row stays `pending` (the human hasn't actually completed the external
@@ -793,6 +801,20 @@ impl HitlStore for PgHitlStore {
         Ok(())
     }
 
+    async fn mark_resume_agent_lost_task(&self, id: Uuid, error: &str) -> Result<(), HitlError> {
+        sqlx::query(
+            "UPDATE hitl_requests
+                SET resume_status = $3, resume_claimed_at = NULL, resume_last_error = $2
+              WHERE id = $1 AND resume_status = 'not_started'",
+        )
+        .bind(id)
+        .bind(error)
+        .bind(ResumeStatus::AgentLostTask.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn record_auth_start(&self, id: Uuid) -> Result<Option<HitlRequest>, HitlError> {
         let row: Option<HitlRequestRow> = sqlx::query_as(
             "UPDATE hitl_requests
@@ -970,6 +992,13 @@ mod resolve_display_row_tests {
             unimplemented!("not exercised by resolve_display_row")
         }
         async fn mark_resume_unknown(&self, _id: Uuid) -> Result<(), HitlError> {
+            unimplemented!("not exercised by resolve_display_row")
+        }
+        async fn mark_resume_agent_lost_task(
+            &self,
+            _id: Uuid,
+            _error: &str,
+        ) -> Result<(), HitlError> {
             unimplemented!("not exercised by resolve_display_row")
         }
         async fn record_auth_start(&self, _id: Uuid) -> Result<Option<HitlRequest>, HitlError> {
