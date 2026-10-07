@@ -7,7 +7,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -75,7 +75,7 @@ function Redirect({ id, tab }: { id: string; tab?: string }) {
   return <PageLoader label={copy.loadingAgent} />
 }
 
-/** `id`: a gone agent stepped to from a list keeps its arrows, so the user can step on. */
+/** `id`: the page's own agent (a name lookup has none), for the arrows. */
 function NotFound({ id }: { id?: string }) {
   const card = (
     <StateCard
@@ -92,11 +92,15 @@ function NotFound({ id }: { id?: string }) {
       }
     />
   )
-  if (!id) return card
+  return id ? <WithSiblings id={id}>{card}</WithSiblings> : card
+}
+
+/** A state shown in place of an agent stepped to from a list keeps the arrows, so the user can step on. */
+function WithSiblings({ id, children }: { id: string; children: ReactNode }) {
   return (
     <div className="space-y-2">
       <AgentSiblings id={id} className="justify-end" />
-      {card}
+      {children}
     </div>
   )
 }
@@ -205,7 +209,9 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
       (detail.error.status === 404 || detail.error.status === 403) ? (
       <NotFound id={id} />
     ) : (
-      <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
+      <WithSiblings id={id}>
+        <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
+      </WithSiblings>
     )
   }
   if (!agent || !status.display) return null
