@@ -1,6 +1,7 @@
 pub mod authz;
 pub mod dispatcher;
 pub mod notifier;
+pub mod observer;
 pub mod repo;
 pub mod store;
 pub mod types;
@@ -13,10 +14,11 @@ pub mod types;
 pub use authz::{HitlAction, HitlAuthzError, HitlIdentity, authorize_hitl_action};
 pub use dispatcher::{DispatcherConfig, NotifyError, ResumeNotifier};
 pub use notifier::RuntimeResumeNotifier;
+pub use observer::{HitlObserver, install_observer};
 pub use repo::{NewAuthRequired, NewSessionGrant, NewToolApproval, ResolveDecision};
 pub use store::{
-    FailureKind, HitlError, HitlStore, PauseHook, PgHitlStore, ResolveOutcome,
-    is_valid_mcp_mirror_link, resolve_display_row,
+    FailureKind, HitlError, HitlStore, PgHitlStore, ResolveOutcome, is_valid_mcp_mirror_link,
+    resolve_display_row,
 };
 pub use types::{
     AUTH_ACTION_CONFIRM, AUTH_ACTION_START, AUTH_OUTCOME_CONFIRMED, AUTH_OUTCOME_DENIED,

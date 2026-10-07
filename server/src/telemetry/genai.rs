@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use nasiko_hitl::HitlRequest;
+use nasiko_hitl::{HitlObserver, HitlRequest, ResumeStatus};
 use opentelemetry::{
     KeyValue, global,
     metrics::{Counter, Histogram},
@@ -249,11 +249,17 @@ impl GenAiMetrics {
         );
     }
 
-    /// The resume of an answered request reached a terminal outcome, which is `row.resume_status`
-    /// as the dispatcher left it. One call records the outcome and both durations, so each answered
-    /// request is counted exactly once, at the end.
-    pub fn record_hitl_resume_finished(&self, row: &HitlRequest) {
-        let outcome = KeyValue::new(attr::HITL_OUTCOME, row.resume_status.as_str());
+    /// The resume of an answered request reached the terminal `outcome` at `finished_at`, which
+    /// the dispatcher reports the moment it writes it. One call records the outcome and both
+    /// durations, so each answered request is counted exactly once, at the end. `row` is the
+    /// request as the dispatcher held it, which carries `created_at` and `resolved_at`.
+    pub fn record_hitl_resume_finished(
+        &self,
+        row: &HitlRequest,
+        outcome: ResumeStatus,
+        finished_at: DateTime<Utc>,
+    ) {
+        let outcome = KeyValue::new(attr::HITL_OUTCOME, outcome.as_str());
         self.hitl_resume_outcomes
             .add(1, &[hitl_agent(row), hitl_origin(row), outcome.clone()]);
 
@@ -270,14 +276,27 @@ impl GenAiMetrics {
                 hitl_origin(row),
             ],
         );
-        // `updated_at` is when the outcome itself was written (nothing else touches a row once its
-        // resume is terminal), and it shares `resolved_at`'s clock, the database's, so the figure
-        // carries no skew between this process and the database. Reading "now" here instead would
-        // also count the orchestrator turn that follows a completed resume.
         self.hitl_resume_duration.record(
-            seconds_between(answered_at, row.updated_at),
+            seconds_between(answered_at, finished_at),
             &[hitl_agent(row), hitl_origin(row), outcome],
         );
+    }
+}
+
+/// The HITL crate reports pauses and outcomes through this seam (`nasiko_hitl::observer`), so every
+/// writer of either is metered, including the MCP gateway's rows and the `mcp_tool` dispatcher.
+impl HitlObserver for GenAiMetrics {
+    fn pause_recorded(&self, row: &HitlRequest) {
+        self.record_hitl_pause(row);
+    }
+
+    fn resume_finished(
+        &self,
+        row: &HitlRequest,
+        outcome: ResumeStatus,
+        finished_at: DateTime<Utc>,
+    ) {
+        self.record_hitl_resume_finished(row, outcome, finished_at);
     }
 }
 

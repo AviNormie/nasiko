@@ -4,12 +4,13 @@
 //! truncates `hitl_requests` on entry, same `--test-threads=1` convention the repo's own
 //! `test-server-oss`/`test-one` recipes use).
 
-use std::sync::{Arc, Mutex};
-
 use nasiko_hitl::{HitlIdentity, HitlKind, HitlStatus, HitlStore, NewHitlRequest, PgHitlStore};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+mod recorder;
+use recorder::Recorder;
 
 async fn pool() -> PgPool {
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -877,13 +878,10 @@ async fn mark_resume_agent_lost_task_ignores_a_superseded_claim() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL (DATABASE_URL)"]
-async fn pause_hook_fires_once_per_inserted_row_and_not_for_an_idempotent_recreate() {
+async fn a_pause_is_observed_once_per_inserted_row_and_not_for_an_idempotent_recreate() {
+    let recorder = Recorder::installed();
     let pool = pool().await;
-    let seen = Arc::new(Mutex::new(Vec::<Uuid>::new()));
-    let store = PgHitlStore::new(pool.clone()).with_pause_hook({
-        let seen = seen.clone();
-        Arc::new(move |row| seen.lock().unwrap().push(row.id))
-    });
+    let store = PgHitlStore::new(pool.clone());
     let owner = fixture_user(&pool).await;
     let agent = fixture_agent(&pool, owner).await;
     let task = format!("task-{}", Uuid::new_v4());
@@ -910,7 +908,8 @@ async fn pause_hook_fires_once_per_inserted_row_and_not_for_an_idempotent_recrea
         .await
         .unwrap();
 
-    assert_eq!(*seen.lock().unwrap(), vec![first.id, other.id]);
+    assert_eq!(recorder.pauses_of(first.id), 1);
+    assert_eq!(recorder.pauses_of(other.id), 1);
 }
 
 #[tokio::test]
