@@ -18,6 +18,8 @@ import { cn } from '@/lib/utils'
  */
 const refocus: { which?: 'prev' | 'next'; el?: HTMLElement; at: number } = { at: 0 }
 
+export type StepVia = 'click' | 'key'
+
 export function PrevNext({
   noun,
   index,
@@ -25,6 +27,7 @@ export function PrevNext({
   onPrev,
   onNext,
   blocked,
+  restoreFocus = true,
   className,
 }: {
   /** What is stepped through, for the labels ("Previous agent"). */
@@ -32,9 +35,12 @@ export function PrevNext({
   /** 0-based position in the list. */
   index: number
   count: number
-  onPrev: () => void
-  onNext: () => void
+  /** `via` says what stepped: a click on an arrow or the J/K key. */
+  onPrev: (via: StepVia) => void
+  onNext: (via: StepVia) => void
   blocked?: string
+  /** Put focus back on the arrow used after the view remounts. Off where the page focuses something better. */
+  restoreFocus?: boolean
   className?: string
 }) {
   const root = useRef<HTMLDivElement>(null)
@@ -48,17 +54,17 @@ export function PrevNext({
     refocus.which = undefined
     refocus.el = undefined
     const fell = !document.activeElement || document.activeElement === document.body
-    if (which && fell && !el?.isConnected && Date.now() - at < 10_000)
+    if (restoreFocus && which && fell && !el?.isConnected && Date.now() - at < 10_000)
       (which === 'prev' ? prevButton : nextButton).current?.focus()
-  }, [])
+  }, [restoreFocus])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const delta = stepFromKey(e, root.current)
       if (!delta) return
       // Claimed even at an end or while blocked, so a second control can't step (J/K has no default action outside fields).
       e.preventDefault()
-      if (delta < 0 && canPrev) onPrev()
-      if (delta > 0 && canNext) onNext()
+      if (delta < 0 && canPrev) onPrev('key')
+      if (delta > 0 && canNext) onNext('key')
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -94,7 +100,7 @@ export function PrevNext({
             onClick={(e) => {
               if (!canPrev) return
               Object.assign(refocus, { which: 'prev', el: e.currentTarget, at: Date.now() })
-              onPrev()
+              onPrev('click')
             }}
           >
             <ChevronUp className="size-4" aria-hidden />
@@ -116,7 +122,7 @@ export function PrevNext({
             onClick={(e) => {
               if (!canNext) return
               Object.assign(refocus, { which: 'next', el: e.currentTarget, at: Date.now() })
-              onNext()
+              onNext('click')
             }}
           >
             <ChevronDown className="size-4" aria-hidden />

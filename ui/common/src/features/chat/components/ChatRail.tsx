@@ -282,7 +282,12 @@ export function ChatRail({
                           to="/chat/$sessionId"
                           params={{ sessionId: r.session_id }}
                           search={carry}
-                          onClick={onNavigate}
+                          onClick={(e) => {
+                            // A mouse click lets go of the row, so the opened chat focuses its composer;
+                            // Enter (detail 0) keeps keyboard users in the rail.
+                            if (e.detail > 0) e.currentTarget.blur()
+                            onNavigate?.()
+                          }}
                           title={rowTooltip(r)}
                           aria-current={active ? 'page' : undefined}
                           data-testid="rail-row"
