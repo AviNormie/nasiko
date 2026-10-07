@@ -6,7 +6,7 @@
  * differ from the server's (A4, O5); when it does, a line says why. Open trace and Open chat need the flow's chat
  * session (O1). The page's clock ticks only while the flow moves.
  */
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Announcer } from '@/components/shared/announcer'
@@ -15,7 +15,6 @@ import { CopyButton } from '@/components/shared/copy-button'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
-import { PrevNext } from '@/components/shared/prev-next'
 import { Panel, PanelError } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -28,7 +27,6 @@ import { flowNarrative } from '@/features/narrative/flows'
 import { ApiError } from '@/lib/api/client'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useNow } from '@/lib/useNow'
-import { useSiblings } from '@/lib/siblings'
 import { isGone, useFlowView } from './api'
 import { waitFrom } from './calls'
 import { PAUSED_TICK_MS, TICK_MS } from './tuning'
@@ -118,8 +116,6 @@ function FlowBody({
     const status = query.error instanceof ApiError ? query.error.status : null
     return (
       <Frame>
-        {/* The arrows stay, so a flow that's gone isn't a dead end. */}
-        <FlowSiblings flowId={flowId} className="justify-end" />
         {status === 404 ? (
           <StateCard title={copy.page.notFound}>{copy.page.notFoundHint}</StateCard>
         ) : status === 403 && query.data ? (
@@ -194,13 +190,7 @@ function FlowBody({
   return (
     <Frame>
       <PageHeader
-        // The arrows sit at the right of the breadcrumb row, so the varying actions can't move them.
-        breadcrumb={
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <BackToFlows />
-            <FlowSiblings flowId={flow.flow_id} />
-          </div>
-        }
+        breadcrumb={<BackToFlows />}
         title={title}
         description={
           <span className="inline-flex flex-wrap items-center gap-x-2">
@@ -213,28 +203,26 @@ function FlowBody({
           </span>
         }
         actions={
-          <>
-            {session ? (
-              <>
-                {tempo ? (
-                  <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
-                    <Link
-                      to="/sessions/$sessionId"
-                      params={{ sessionId: session }}
-                      search={{ trace: flow.flow_id }}
-                    >
-                      {copy.actions.openTrace}
-                    </Link>
-                  </Button>
-                ) : null}
-                <Button asChild variant="ghost" size="sm" className="pointer-coarse:min-h-11">
-                  <Link to="/chat/$sessionId" params={{ sessionId: session }}>
-                    {copy.actions.openChat}
+          session ? (
+            <>
+              {tempo ? (
+                <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
+                  <Link
+                    to="/sessions/$sessionId"
+                    params={{ sessionId: session }}
+                    search={{ trace: flow.flow_id }}
+                  >
+                    {copy.actions.openTrace}
                   </Link>
                 </Button>
-              </>
-            ) : null}
-          </>
+              ) : null}
+              <Button asChild variant="ghost" size="sm" className="pointer-coarse:min-h-11">
+                <Link to="/chat/$sessionId" params={{ sessionId: session }}>
+                  {copy.actions.openChat}
+                </Link>
+              </Button>
+            </>
+          ) : null
         }
       />
 
@@ -420,34 +408,6 @@ function BackToFlows() {
         <ArrowLeft aria-hidden /> {copy.back}
       </Link>
     </Button>
-  )
-}
-
-/** Previous/Next through the Flows rows this flow was opened from (lib/siblings.ts); nothing on a deep link. */
-function FlowSiblings({ flowId, className }: { flowId: string; className?: string }) {
-  const navigate = useNavigate()
-  const around = useSiblings(flowId)
-  if (!around) return null
-  // Replace: Back still returns to the list. `?step=` is one flow's call, so it doesn't carry over.
-  const go = (id: string | undefined) => {
-    if (id)
-      void navigate({
-        to: '/flows/$flowId',
-        params: { flowId: id },
-        search: {},
-        state: { siblings: around.siblings },
-        replace: true,
-      })
-  }
-  return (
-    <PrevNext
-      noun="flow"
-      index={around.index}
-      count={around.count}
-      onPrev={() => go(around.prev)}
-      onNext={() => go(around.next)}
-      className={className}
-    />
   )
 }
 

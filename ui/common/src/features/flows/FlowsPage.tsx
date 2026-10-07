@@ -38,7 +38,6 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { relTime } from '@/features/agents/format'
 import { resolveWindow } from '@/features/tokenops/window'
 import { isEndpointAbsent } from '@/lib/api/detect'
-import { useSiblingState } from '@/lib/siblings'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import { flowKeys, useFlowsList } from './api'
 import { DurationPanel } from './components/DurationPanel'
@@ -356,8 +355,6 @@ function Filter<T extends string>({
 }
 
 function FlowsTable({ rows, now }: { rows: Flow[]; now: number }) {
-  // Previous/Next on the flow page walks these rows as drawn when one is clicked.
-  const linkState = useSiblingState(rows.map((f) => f.flow_id))
   return (
     <Table aria-label={copy.list.tableLabel}>
       <TableHeader>
@@ -384,7 +381,6 @@ function FlowsTable({ rows, now }: { rows: Flow[]; now: number }) {
                   <Link
                     to="/flows/$flowId"
                     params={{ flowId: f.flow_id }}
-                    state={linkState}
                     className="truncate font-medium hover:underline"
                   >
                     {f.title || copy.callTo(root)}
