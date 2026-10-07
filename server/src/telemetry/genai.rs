@@ -6,6 +6,8 @@ use opentelemetry::{
 };
 use std::time::Instant;
 
+use super::agent_request::{AgentRequestGuard, AgentRequestMetrics};
+
 /// OTel GenAI semantic convention attribute names.
 /// Based on: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 pub mod attr {
@@ -63,6 +65,7 @@ pub struct GenAiMetrics {
     pub hitl_resume_outcomes: Counter<u64>,
     pub hitl_human_response_duration: Histogram<f64>,
     pub hitl_resume_duration: Histogram<f64>,
+    agent_requests: AgentRequestMetrics,
 }
 
 impl Default for GenAiMetrics {
@@ -135,7 +138,15 @@ impl GenAiMetrics {
             hitl_resume_outcomes,
             hitl_human_response_duration,
             hitl_resume_duration,
+            agent_requests: AgentRequestMetrics::new(&meter),
         }
+    }
+
+    /// Count a request to `agent_id` as in flight until the guard is dropped; see
+    /// [`AgentRequestGuard`]. Recorded in addition to `record_invocation`, which stays
+    /// name-keyed and orchestrator-only.
+    pub fn begin_agent_request(&self, agent_id: &str) -> AgentRequestGuard {
+        self.agent_requests.begin(agent_id)
     }
 
     pub fn record_tokens(
