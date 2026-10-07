@@ -24,7 +24,7 @@ from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
 
 from agent_executor import SummarizerExecutor
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ def main(host: str, port: int):
     routes = create_agent_card_routes(agent_card) + create_jsonrpc_routes(handler, rpc_url="/")
     from starlette.applications import Starlette
     app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
 
     logger.info("Summarizer Agent listening on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)

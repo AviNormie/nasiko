@@ -23,7 +23,7 @@ from a2a.types import (
 )
 from starlette.applications import Starlette
 
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 logging.basicConfig(level=logging.INFO)
 
@@ -131,6 +131,7 @@ def main(host, port):
     routes.extend(create_jsonrpc_routes(handler, rpc_url="/"))
 
     app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
     uvicorn.run(app, host=host, port=port)
 
 

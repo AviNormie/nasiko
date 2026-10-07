@@ -33,7 +33,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from agent import run
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 _CARD_PATH = Path(__file__).parent.parent / "AgentCard.json"
 
@@ -111,7 +111,9 @@ def main() -> None:
     routes = [Route("/health", health)]
     routes += create_agent_card_routes(agent_card)
     routes += create_jsonrpc_routes(handler, rpc_url="/")
-    uvicorn.run(Starlette(routes=routes), host=host, port=port)
+    app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
