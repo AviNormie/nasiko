@@ -3,7 +3,7 @@
  * carry no metrics (W-3), so the metric chips, health, last-run line and sort are hidden, and Drafts is absent (W-1).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, type HistoryState } from '@tanstack/react-router'
 import { EllipsisVertical, Plus, RotateCw, SearchX, Workflow } from 'lucide-react'
 import { memo, useDeferredValue, useState } from 'react'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/select'
 import { relTime } from '@/features/agents/format'
 import { fmtLongDay, fmtPct, fmtTokens } from '@/lib/format'
+import { useSiblingState } from '@/lib/siblings'
 import { cn } from '@/lib/utils'
 import { dropFromLists, workflowListQuery } from './api'
 import { HEALTH_LABEL, SORT_LABEL, copy, reason, type ListMode } from './copy'
@@ -95,6 +96,7 @@ export function WorkflowsPage({
   const shown = q
     ? rows.filter((wf) => `${wf.name} ${descriptionOf(wf)}`.toLowerCase().includes(q))
     : rows
+  const linkState = useSiblingState(shown.map((wf) => wf.id))
   const empty = list.isSuccess && rows.length === 0
   const absent = mode === 'drafts' && list.isError && isDraftsAbsent(list.error)
   const sorts: readonly string[] = mode === 'deployed' ? WORKFLOW_SORTS : DRAFT_SORTS
@@ -173,6 +175,7 @@ export function WorkflowsPage({
               wf={wf}
               mode={mode}
               metrics={metrics}
+              linkState={linkState}
               onRun={() => startRun(wf.id)}
               onDelete={() => setDeleting(wf)}
             />
@@ -234,12 +237,14 @@ const WorkflowCard = memo(function WorkflowCard({
   wf,
   mode,
   metrics,
+  linkState,
   onRun,
   onDelete,
 }: {
   wf: WorkflowRow
   mode: ListMode
   metrics: boolean
+  linkState: () => HistoryState
   onRun: () => void
   onDelete: () => void
 }) {
@@ -250,7 +255,12 @@ const WorkflowCard = memo(function WorkflowCard({
   const health = wf.health && wf.health !== 'unknown' ? wf.health : null
   const description = descriptionOf(wf)
   const open = () =>
-    void navigate({ to: '/workflows/$workflowId', params: { workflowId: wf.id }, search: {} })
+    void navigate({
+      to: '/workflows/$workflowId',
+      params: { workflowId: wf.id },
+      search: {},
+      state: linkState,
+    })
   const chips = [
     copy.steps(steps),
     copy.runs(wf.execution_count ?? 0),
@@ -274,6 +284,7 @@ const WorkflowCard = memo(function WorkflowCard({
             to="/workflows/$workflowId"
             params={{ workflowId: wf.id }}
             search={{}}
+            state={linkState}
             className="underline-offset-4 after:absolute after:inset-0 after:rounded-xl hover:underline focus-visible:outline-none"
           >
             {wf.name}

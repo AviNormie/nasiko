@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Play } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
+import { LeaveGuard } from '@/components/shared/leave-guard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -56,6 +57,9 @@ export function EditFace({
     wf.maf_json?.steps?.length ? initialDesc.trim() : null,
   )
   const [planned, setPlanned] = useState(() => snapshot('', '', steps))
+  // What the editor opened with: a change from it is unsaved until Save & run or Deploy succeeds.
+  const [opened] = useState(() => snapshot(wf.name, initialDesc, fromMaf(wf.maf_json?.steps)))
+  const dirty = snapshot(name, desc, steps) !== opened
   const failedAt = useRef<'Save' | 'Run' | 'Deploy'>('Save')
 
   const gen = useMutation({ mutationFn: generateWorkflow })
@@ -112,6 +116,7 @@ export function EditFace({
 
   return (
     <>
+      <LeaveGuard when={dirty && !act.isPending && !act.isSuccess} />
       <h1 tabIndex={-1} className="sr-only">
         {wf.name}
       </h1>

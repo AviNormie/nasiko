@@ -8,10 +8,12 @@ import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { ChevronLeft, Pencil, Play, RotateCw, Workflow as WorkflowIcon } from 'lucide-react'
 import { useState } from 'react'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Button } from '@/components/ui/button'
 import { isUuid } from '@/features/agents/normalize'
 import { ApiError } from '@/lib/api/client'
+import { useSiblings } from '@/lib/siblings'
 import { dropFromLists, workflowQuery } from './api'
 import { copy, reason } from './copy'
 import { descriptionOf, isDeployed } from './logic'
@@ -29,9 +31,11 @@ export function WorkflowPage({ id, run }: { id: string; run?: string }) {
   return <Detail id={id.toLowerCase()} run={run} />
 }
 
-function DeadEnd({ title, text }: { title: string; text: string }) {
+/** `id`: a workflow stepped to from a list keeps its arrows when it fails to load, so the user can step on. */
+function DeadEnd({ id, title, text }: { id?: string; title: string; text: string }) {
   return (
     <div className={COLUMN}>
+      {id ? <WorkflowSiblings id={id} className="justify-end" /> : null}
       <EmptyState
         icon={WorkflowIcon}
         title={<h1>{title}</h1>}
@@ -52,10 +56,11 @@ function Detail({ id, run }: { id: string; run?: string }) {
   if (wf.data) return <Loaded key={wf.data.id} wf={wf.data} run={run} />
   if (wf.isError)
     return wf.error instanceof ApiError && (wf.error.status === 404 || wf.error.isForbidden) ? (
-      <DeadEnd title={copy.notFound} text={copy.notFoundText} />
+      <DeadEnd id={id} title={copy.notFound} text={copy.notFoundText} />
     ) : (
       <div className={COLUMN}>
         <h1 className="sr-only">{copy.loadOneFailed}</h1>
+        <WorkflowSiblings id={id} className="justify-end" />
         <StateCard
           tone="error"
           title={copy.loadOneFailed}
@@ -91,6 +96,8 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
                 to: '/workflows/$workflowId',
                 params: { workflowId: wf.id },
                 search: {},
+                // Keeps the list this workflow was opened from (lib/siblings.ts).
+                state: (s) => ({ siblings: s.siblings }),
                 replace: true,
               })
         }
@@ -99,12 +106,13 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
   return (
     <div className={COLUMN}>
       <title>{`${wf.name} · OpenRuntime`}</title>
-      <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Button asChild variant="ghost" size="sm" className="-ml-2 text-muted-foreground">
           <Link to={live ? '/workflows' : '/workflows/drafts'}>
             <ChevronLeft aria-hidden /> {live ? copy.crumbDeployed : copy.crumbDrafts}
           </Link>
         </Button>
+        <WorkflowSiblings id={wf.id} />
       </div>
       {live && !editing ? (
         <ReadOnlyFace wf={wf} onEdit={() => setEditing(true)} />
@@ -115,6 +123,34 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
       )}
       <DangerZone wf={wf} />
     </div>
+  )
+}
+
+/** Previous/Next through the list this workflow was opened from (lib/siblings.ts); nothing on a deep link. */
+function WorkflowSiblings({ id, className }: { id: string; className?: string }) {
+  const navigate = useNavigate()
+  const around = useSiblings(id)
+  if (!around) return null
+  // Replace: Back still returns to the list. A run (`?run=`) never carries over.
+  const go = (workflowId: string | undefined) => {
+    if (workflowId)
+      void navigate({
+        to: '/workflows/$workflowId',
+        params: { workflowId },
+        search: {},
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="workflow"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+      className={className}
+    />
   )
 }
 
