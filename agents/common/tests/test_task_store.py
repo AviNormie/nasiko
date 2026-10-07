@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 from fake_state_server import Row
-from nasiko_state import NasikoStateError, NasikoTaskStore
+from nasiko_state import (
+    TASK_FORMAT,
+    TASK_FORMAT_A2A_0_3,
+    TASK_FORMAT_A2A_1,
+    NasikoStateError,
+    NasikoStateMalformedRow,
+    NasikoTaskStore,
+)
 from sdk_compat import (
     A2A_V1,
     artifact_text,
@@ -16,6 +23,15 @@ from sdk_compat import (
 pytestmark = pytest.mark.anyio
 
 LONG_WINDOW = 60  # nothing flushes by timer inside a test; coalescing has its own module
+
+
+def stored_row(task_id: str, body, *, version: int = 1) -> Row:
+    """A task row as the server holds it, with an arbitrary body."""
+    return Row({"task_id": task_id, "context_id": None, "state": "working", "body": body}, version, version)
+
+
+def tagged(task_body, task_format: str = TASK_FORMAT) -> dict:
+    return {"format": task_format, "task": task_body}
 
 
 @pytest.fixture
@@ -109,15 +125,15 @@ class TestFailures:
         assert state_server.tasks["t1"].value["state"] == "input-required"
 
     async def test_a_row_that_does_not_decode_is_an_error_not_a_missing_task(self, store, state_server):
-        state_server.tasks["t1"] = Row({"task_id": "t1", "state": "working", "body": {"id": 12}}, 1, 1)
+        state_server.tasks["t1"] = stored_row("t1", tagged({"id": 12}))
 
-        with pytest.raises(NasikoStateError, match="t1"):
+        with pytest.raises(NasikoStateMalformedRow, match="t1"):
             await store.get("t1")
 
     async def test_an_empty_body_is_an_error_not_an_empty_task(self, store, state_server):
-        state_server.tasks["t1"] = Row({"task_id": "t1", "state": "working", "body": {}}, 1, 1)
+        state_server.tasks["t1"] = stored_row("t1", tagged({}))
 
-        with pytest.raises(NasikoStateError, match="t1"):
+        with pytest.raises(NasikoStateMalformedRow, match="t1"):
             await store.get("t1")
 
     async def test_a_body_for_another_task_is_an_error(self, store, state_server):
@@ -129,8 +145,59 @@ class TestFailures:
             1,
         )
 
-        with pytest.raises(NasikoStateError, match="someone-else"):
+        with pytest.raises(NasikoStateMalformedRow, match="someone-else"):
             await store.get("t1")
+
+
+# What each a2a-sdk major writes for the same working task, as the other major would find it.
+A2A_0_3_BODY = {"id": "t1", "contextId": "ctx-1", "kind": "task", "status": {"state": "working"}}
+A2A_1_BODY = {"id": "t1", "contextId": "ctx-1", "status": {"state": "TASK_STATE_WORKING"}}
+OTHER_MAJOR = (TASK_FORMAT_A2A_0_3, A2A_0_3_BODY) if A2A_V1 else (TASK_FORMAT_A2A_1, A2A_1_BODY)
+
+
+class TestStoredFormat:
+    async def test_what_is_written_is_tagged_with_this_sdk_majors_format(self, store, state_server):
+        await store.save(new_task("t1", "working"))
+
+        body = state_server.tasks["t1"].value["body"]
+        assert body["format"] == (TASK_FORMAT_A2A_1 if A2A_V1 else TASK_FORMAT_A2A_0_3)
+        assert body["task"]["id"] == "t1"
+
+    async def test_a_task_written_by_the_other_sdk_major_raises(self, store, state_server):
+        other_format, other_body = OTHER_MAJOR
+        state_server.tasks["t1"] = stored_row("t1", tagged(other_body, other_format))
+
+        with pytest.raises(NasikoStateMalformedRow, match=other_format):
+            await store.get("t1")
+
+    async def test_a_foreign_tag_is_refused_even_when_the_body_would_parse(self, store, state_server):
+        await store.save(new_task("t1", "working"))
+        native_body = state_server.tasks["t1"].value["body"]["task"]
+        other_format, _ = OTHER_MAJOR
+        state_server.tasks["t1"] = stored_row("t1", tagged(native_body, other_format), version=2)
+
+        with pytest.raises(NasikoStateMalformedRow, match=other_format):
+            await store.get("t1")
+
+    async def test_an_untagged_body_is_refused(self, store, state_server):
+        await store.save(new_task("t1", "working"))
+        native_body = state_server.tasks["t1"].value["body"]["task"]
+        state_server.tasks["t1"] = stored_row("t1", native_body, version=2)
+
+        with pytest.raises(NasikoStateMalformedRow, match="format None"):
+            await store.get("t1")
+
+    @pytest.mark.skipif(not A2A_V1, reason="0.3.x pydantic tasks have no unknown-field parsing mode")
+    async def test_an_unknown_field_is_refused_rather_than_dropped(self, store, state_server):
+        await store.save(new_task("t1", "working"))
+        native_body = state_server.tasks["t1"].value["body"]["task"]
+        state_server.tasks["t1"] = stored_row("t1", tagged({**native_body, "addedLater": 1}), version=2)
+
+        with pytest.raises(NasikoStateMalformedRow, match="addedLater"):
+            await store.get("t1")
+
+    async def test_a_malformed_row_is_still_a_state_error(self):
+        assert issubclass(NasikoStateMalformedRow, NasikoStateError)
 
 
 @pytest.mark.skipif(not A2A_V1, reason="tasks/list joined the TaskStore interface in a2a-sdk 1.x")

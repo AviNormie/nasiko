@@ -64,7 +64,7 @@ async def test_streamed_chunks_are_coalesced_into_a_few_writes(state_server):
     await store.aclose()
 
     writes = [r for r in state_server.writes("tasks") if r.path == f"/tasks/{task.id}"]
-    final_text = state_server.tasks[task.id].value["body"]["artifacts"][0]["parts"]
+    final_text = state_server.tasks[task.id].value["body"]["task"]["artifacts"][0]["parts"]
     assert state_server.tasks[task.id].value["state"] == "completed"
     assert "".join(part["text"] for part in final_text) == "".join(f"chunk{n} " for n in range(40))
     assert len(writes) <= 6  # submitted, working, completed, and at most a couple of flushes between
