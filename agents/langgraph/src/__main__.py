@@ -26,7 +26,7 @@ from starlette.applications import Starlette
 
 from agent import DeepAnalystAgent
 from agent_executor import DeepAnalystAgentExecutor
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def main(host: str, port: int):
 
     routes = create_agent_card_routes(agent_card) + create_jsonrpc_routes(handler, rpc_url="/")
     app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
     # Wrap with our ASGI middleware AFTER creating the Starlette app so it runs
     # first and populates request_otel_context for each incoming HTTP request.
     app = TraceparentMiddleware(app)

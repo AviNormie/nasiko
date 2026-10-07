@@ -27,7 +27,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from agent import ResearchAgent
 from agent_executor import ResearchAgentExecutor
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ def main(host, port):
     )
     server = A2AStarletteApplication(agent_card=agent_card, http_handler=request_handler)
     app = server.build()
+    install_shutdown_hooks(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,

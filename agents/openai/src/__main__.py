@@ -28,7 +28,7 @@ from agents import set_tracing_disabled
 
 from agent import ResearchAgent
 from agent_executor import ResearchAgentExecutor
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 set_tracing_disabled(True)
 logger = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ def main(host, port):
     routes.extend(create_jsonrpc_routes(request_handler, rpc_url="/"))
 
     app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=CORS_ORIGINS,

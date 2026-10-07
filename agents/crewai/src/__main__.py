@@ -34,7 +34,7 @@ from a2a.types import (
 )
 from agent import ImageGenerationAgent
 from agent_executor import ImageGenerationAgentExecutor
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 from starlette.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ def main(host, port):
 
         # Build the app and add CORS middleware
         app = server.build()
+        install_shutdown_hooks(app)
         app.add_middleware(
             CORSMiddleware,
             allow_origins=[

@@ -25,7 +25,7 @@ from openai import AsyncOpenAI
 from opentelemetry import context as otel_context, trace
 from starlette.applications import Starlette
 
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 from telemetry import TraceparentMiddleware, init_telemetry, request_otel_context
 
 logging.basicConfig(level=logging.INFO)
@@ -234,6 +234,7 @@ def main(host, port):
     routes.extend(create_jsonrpc_routes(handler, rpc_url="/"))
 
     app = Starlette(routes=routes)
+    install_shutdown_hooks(app)
     app = TraceparentMiddleware(app)
     uvicorn.run(app, host=host, port=port)
 

@@ -11,6 +11,8 @@ that keeps that state in the platform instead.
         task_store=make_task_store(),   # was: InMemoryTaskStore()
         agent_card=card,
     )
+    app = Starlette(routes=...)
+    install_shutdown_hooks(app)         # flush pending writes when the server stops
 
 Configuration comes from the environment the platform injects into the container:
 
@@ -22,8 +24,12 @@ Configuration comes from the environment the platform injects into the container
 
 Write guarantee (see NasikoTaskStore): a save that changes ``task.status.state`` is on the
 server before ``save()`` returns. Other saves are coalesced to at most one write per
-COALESCE_WINDOW_SECONDS per task. A hard crash (SIGKILL, power loss) can therefore lose at
-most that window of non-status updates; an orderly exit flushes everything.
+COALESCE_WINDOW_SECONDS per task and written on the next state change, by a background timer,
+and by ``aclose()``. Nothing calls ``aclose()`` on its own: ``install_shutdown_hooks(app)`` runs
+it when the server shuts down (uvicorn does that on SIGTERM and Ctrl-C), and an atexit hook
+covers a normal interpreter exit. A hard crash (SIGKILL, power loss), or a SIGTERM in a process
+without those hooks, can lose that window of non-status updates; so can an update the platform
+could not take for PENDING_MAX_AGE_SECONDS, which is discarded rather than written late.
 
 Both a2a-sdk majors are supported (0.3.x pydantic tasks and 1.x protobuf tasks). The langgraph
 checkpointer needs the optional langgraph-checkpoint package; nothing else does.
@@ -38,9 +44,11 @@ from __future__ import annotations
 import asyncio
 import atexit
 import base64
+import contextlib
 import json
 import logging
 import os
+import signal
 import threading
 import time
 from collections import OrderedDict
@@ -99,6 +107,8 @@ EXIT_FLUSH_BUDGET_SECONDS = 10.0
 # Bound on tasks whose write state is remembered. Forgetting an idle one costs its next write the
 # version check: having no version to match, that write is unconditional.
 MAX_TRACKED_TASKS = 4096
+# The status a shell reports for a process ended by SIGTERM; kept when SIGTERM becomes an exit.
+SIGTERM_EXIT_STATUS = 128 + signal.SIGTERM
 
 # The order the registration contract spells its capability lists in.
 CAPABILITY_ORDER = ("tasks", "kv")
@@ -846,6 +856,7 @@ class NasikoTaskStore(TaskStore):
         self._window = coalesce_window_seconds
         self._slots: OrderedDict[str, _TaskSlot] = OrderedDict()
         atexit.register(self.flush_sync)
+        _open_task_stores.add(self)
 
     async def save(self, task: Task, context: Any = None) -> None:
         snapshot = _snapshot(task)
@@ -890,6 +901,7 @@ class NasikoTaskStore(TaskStore):
     async def aclose(self) -> None:
         """Write everything pending, stop the background flushers and close the HTTP client."""
         atexit.unregister(self.flush_sync)
+        _open_task_stores.discard(self)
         flushers = [slot.flusher for slot in self._slots.values() if slot.flusher is not None]
         for flusher in flushers:
             flusher.cancel()
@@ -1098,6 +1110,10 @@ def _log_superseded(slot: _TaskSlot, conflict: NasikoStateConflict) -> None:
     )
 
 
+# Durable task stores this process opened and has not closed: what install_shutdown_hooks closes.
+_open_task_stores: set[NasikoTaskStore] = set()
+
+
 def make_task_store() -> TaskStore:
     """The task store an agent hands to its request handler.
 
@@ -1110,6 +1126,65 @@ def make_task_store() -> TaskStore:
         return InMemoryTaskStore()
     logger.info("task state is kept in the platform state API: %r", client)
     return NasikoTaskStore(client)
+
+
+def install_shutdown_hooks(app: Any) -> None:
+    """Flush durable task state when the server stops, instead of losing what is still pending.
+
+    Call it once on the Starlette application the agent serves, before wrapping it in any plain
+    ASGI middleware. It closes every NasikoTaskStore this process opened, which writes their
+    pending updates:
+
+      - from the application's lifespan shutdown, which uvicorn runs on SIGTERM and Ctrl-C;
+      - as a fallback when nothing else handles SIGTERM, by turning SIGTERM into a normal exit, so
+        the atexit flush runs instead of the process dying with writes pending.
+
+    Without NASIKO_STATE_URL the agent has no durable store, and both hooks find nothing to do.
+    """
+    router = getattr(app, "router", None)
+    if not hasattr(router, "lifespan_context"):
+        raise TypeError(
+            f"install_shutdown_hooks needs the Starlette application itself, got {type(app).__name__}; "
+            "call it before wrapping the application in middleware"
+        )
+    router.lifespan_context = _closing_task_stores(router.lifespan_context)
+    _exit_normally_on_sigterm()
+
+
+def _closing_task_stores(lifespan_context: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """The application's own lifespan, followed by closing the task stores on shutdown."""
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Any) -> AsyncIterator[Any]:
+        try:
+            async with lifespan_context(app) as state:
+                yield state
+        finally:
+            await _close_open_task_stores()
+
+    return lifespan
+
+
+async def _close_open_task_stores() -> None:
+    for store in list(_open_task_stores):
+        try:
+            await store.aclose()
+        except NasikoStateError as exc:
+            # Raising would only turn into a failed-shutdown log line from the server; say what failed.
+            logger.error("task state could not be flushed at shutdown: %s", exc)
+
+
+def _exit_normally_on_sigterm() -> None:
+    # Python's default SIGTERM action ends the process on the spot, skipping atexit and with it
+    # the last flush. uvicorn replaces any handler while it serves and re-raises the signal after
+    # its own shutdown, so this one only acts when nothing else did. A handler someone else
+    # installed is left alone.
+    if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+        signal.signal(signal.SIGTERM, _raise_system_exit)
+
+
+def _raise_system_exit(signum: int, frame: Any) -> None:
+    raise SystemExit(SIGTERM_EXIT_STATUS)
 
 
 # --- key-value ----------------------------------------------------------------------------------
