@@ -62,6 +62,10 @@ pub struct FlowAttribution {
     pub context_id: Option<String>,
     pub mode: Mode,
     pub source: AttributionSource,
+    /// The end user's raw message that opened the flow
+    /// (`flows.metadata->>'user_message'`) — the salience gate's and classifier's input,
+    /// independent of how the agent's framework wraps the prompt it sends to the LLM.
+    pub user_message: Option<String>,
 }
 
 /// A live flow as fetched by [`RegistryStore::fetch_live_flow`] — the flow's
@@ -71,6 +75,7 @@ pub struct LiveFlow {
     pub user_id: Option<Uuid>,
     pub context_id: Option<String>,
     pub mode: Option<String>,
+    pub user_message: Option<String>,
     /// Whether the calling agent has a `flow_participants` row for this flow.
     pub agent_is_participant: bool,
 }
@@ -168,6 +173,7 @@ pub async fn resolve(
             .map(Mode::from_label)
             .unwrap_or(Mode::FreeFlowing),
         source: AttributionSource::Traceparent,
+        user_message: flow.user_message,
     })
 }
 
@@ -210,11 +216,6 @@ mod tests {
         ) -> Result<Option<crate::resolver::CustomProvider>, sqlx::Error> {
             Ok(None)
         }
-        async fn fetch_org_embedding_default(
-            &self,
-        ) -> Result<Option<crate::resolver::OrgEmbeddingDefault>, sqlx::Error> {
-            Ok(None)
-        }
     }
 
     const AGENT: &str = "11111111-1111-1111-1111-111111111111";
@@ -224,6 +225,7 @@ mod tests {
             user_id: Some(Uuid::new_v4()),
             context_id: Some("ses_1".into()),
             mode: Some("free_flowing".into()),
+            user_message: Some("hi".into()),
             agent_is_participant: participant,
         }
     }
@@ -293,6 +295,7 @@ mod tests {
         assert_eq!(a.context_id.as_deref(), Some("ses_1"));
         assert_eq!(a.mode, Mode::FreeFlowing);
         assert_eq!(a.source, AttributionSource::Traceparent);
+        assert_eq!(a.user_message.as_deref(), Some("hi"));
     }
 
     #[tokio::test]
