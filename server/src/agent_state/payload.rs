@@ -1,24 +1,25 @@
-//! What is stored for a task body or key-value value: its JSON text, size-checked, then sealed.
+//! What is stored for a task body or key-value value: the JSON exactly as the agent sent it,
+//! size-checked, then sealed.
 
 use nasiko_secrets::SecretsCrypto;
-use serde_json::Value;
+use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use super::error::StateError;
 
-/// A JSON value rendered to the exact text that gets stored, already within the size cap.
+/// A task body or value as received, already within the size cap.
 ///
-/// The cap applies to this compact encoding rather than to the request as received, so it means
-/// the same thing however the client happened to format its JSON.
-pub(super) struct EncodedPayload(String);
+/// The server never parses it into a JSON tree: the agent SDK's serialization is the contract,
+/// so number precision, key order, escapes and whitespace all come back exactly as sent. The cap
+/// is measured on those received bytes, which are also what gets stored.
+pub(super) struct BoundedPayload<'a>(&'a str);
 
-impl EncodedPayload {
-    pub(super) fn new(value: &Value, max_bytes: usize) -> Result<Self, StateError> {
-        let text = serde_json::to_string(value)
-            .map_err(|e| StateError::Internal(format!("payload did not encode: {e}")))?;
+impl<'a> BoundedPayload<'a> {
+    pub(super) fn new(raw: &'a RawValue, max_bytes: usize) -> Result<Self, StateError> {
+        let text = raw.get();
         if text.len() > max_bytes {
             return Err(StateError::PayloadTooLarge(format!(
-                "encoded value is {} bytes; the limit is {max_bytes}",
+                "value is {} bytes as sent; the limit is {max_bytes}",
                 text.len()
             )));
         }
@@ -40,56 +41,58 @@ impl PayloadCipher {
             .map_err(|e| StateError::Internal(format!("agent key unavailable: {e}")))
     }
 
-    pub(super) fn seal(&self, payload: &EncodedPayload) -> String {
-        self.0.encrypt(&payload.0)
+    pub(super) fn seal(&self, payload: &BoundedPayload<'_>) -> String {
+        self.0.encrypt(payload.0)
     }
 
-    pub(super) fn open(&self, sealed: &str) -> Result<Value, StateError> {
+    /// The stored JSON text, as it was received. It is checked to still be JSON, so a damaged
+    /// row is an error here rather than malformed output.
+    pub(super) fn open(&self, sealed: &str) -> Result<Box<RawValue>, StateError> {
         let text = self
             .0
             .decrypt(sealed)
             .map_err(|e| StateError::Internal(format!("stored payload did not decrypt: {e}")))?;
-        serde_json::from_str(&text)
+        RawValue::from_string(text)
             .map_err(|e| StateError::Internal(format!("stored payload is not JSON: {e}")))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
+
+    fn raw(text: &str) -> Box<RawValue> {
+        RawValue::from_string(text.to_string()).unwrap()
+    }
 
     #[test]
     fn a_value_at_the_cap_is_accepted_and_one_byte_over_is_not() {
-        // A JSON string of n characters encodes to n + 2 bytes (the quotes).
-        let at_cap = json!("x".repeat(98));
-        assert!(EncodedPayload::new(&at_cap, 100).is_ok());
-        let over_cap = json!("x".repeat(99));
+        // A JSON string of n characters is n + 2 bytes (the quotes).
+        let at_cap = raw(&format!("\"{}\"", "x".repeat(98)));
+        assert!(BoundedPayload::new(&at_cap, 100).is_ok());
+        let over_cap = raw(&format!("\"{}\"", "x".repeat(99)));
         assert!(matches!(
-            EncodedPayload::new(&over_cap, 100),
+            BoundedPayload::new(&over_cap, 100),
             Err(StateError::PayloadTooLarge(_))
         ));
     }
 
     #[test]
-    fn the_cap_counts_the_compact_encoding_not_the_clients_formatting() {
-        let value: Value = serde_json::from_str("{\n  \"a\": 1,\n  \"b\": [ 1, 2 ]\n}").unwrap();
-        let compact = serde_json::to_string(&value).unwrap();
-        assert!(EncodedPayload::new(&value, compact.len()).is_ok());
+    fn the_cap_counts_the_bytes_as_sent_whitespace_and_escapes_included() {
+        let padded = raw("{ \"a\" : 1 }");
+        assert!(BoundedPayload::new(&padded, 11).is_ok());
+        assert!(BoundedPayload::new(&padded, 10).is_err());
+
+        // `\u00e9` is six bytes on the wire for a character that is two bytes of UTF-8.
+        let escaped = raw("\"\\u00e9\"");
+        assert!(BoundedPayload::new(&escaped, 8).is_ok());
+        assert!(BoundedPayload::new(&escaped, 7).is_err());
     }
 
     #[test]
-    fn any_json_value_is_a_payload() {
-        for value in [
-            json!(null),
-            json!(true),
-            json!(3.5),
-            json!("s"),
-            json!([]),
-            json!({}),
-        ] {
-            assert!(EncodedPayload::new(&value, 64).is_ok());
-        }
+    fn the_payload_is_the_text_as_received() {
+        let text = "{\"z\":1, \"a\":123456789012345678901234567890,\"e\":\"\\u00e9\"}";
+        let value = raw(text);
+        assert_eq!(BoundedPayload::new(&value, 1024).unwrap().0, text);
     }
 }

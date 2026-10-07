@@ -33,7 +33,9 @@
 //!   before it committed and two writers never both claim the same version.
 //! - **Expiring.** Every write sets `expires_at` to now plus `AGENT_STATE_TTL_DAYS`. An expired
 //!   row reads as absent at once, and the [`sweeper`] deletes it later.
-//! - **Bounded.** An encoded value over `AGENT_STATE_MAX_BODY_BYTES` is a 413, and an agent
+//! - **Opaque.** A task body or value is stored and returned byte for byte as the agent sent it,
+//!   never parsed into a JSON tree and re-encoded (`payload`).
+//! - **Bounded.** A value over `AGENT_STATE_MAX_BODY_BYTES` as sent is a 413, and an agent
 //!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429.
 //! - **Encrypted at rest.** Task bodies and values are stored as AES-256-GCM ciphertext under the
 //!   agent's own derived key (`payload`); the database never holds them in the clear.
