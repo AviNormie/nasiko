@@ -18,6 +18,7 @@ pub mod chat;
 pub mod coding_agent_otlp;
 pub mod coding_agent_telemetry;
 pub mod context_selection;
+pub mod embedding_change;
 pub mod flows;
 pub mod github;
 pub mod hitl;
@@ -341,7 +342,10 @@ where
     // record — both validated inside the handler itself
     // (docs/MCP_GATEWAY_AGENT_AUTH.md).
     let mcp_agent_gateway = Router::new()
-        .nest("/api", mcp::agent_gateway_router())
+        .nest(
+            "/api",
+            mcp::agent_gateway_router(state.config.mcp_gateway_max_body_bytes),
+        )
         .with_state(state.clone());
 
     let oci_state = nasiko_oci::OciState::new(state.db.clone(), state.oci_storage.clone());
