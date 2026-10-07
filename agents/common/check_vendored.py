@@ -9,6 +9,7 @@ those copies honest:
   - a copy that differs from the canonical file fails the check;
   - an agent source file that imports a vendored module, with no copy beside it, fails the check
     (the image would crash on startup with ImportError);
+  - so does an agent whose Dockerfile builds the image without copying that copy in;
   - an entry in KNOWN_DIVERGENT that no longer needs to be there fails the check, so the list can
     only shrink.
 
@@ -19,6 +20,8 @@ Standard library only, so CI runs it without installing anything:
 
 from __future__ import annotations
 
+import fnmatch
+import json
 import os
 import re
 import sys
@@ -66,7 +69,9 @@ def check(
         exempt = known_divergent.get(module, frozenset())
         problems += _drifted_copies(agents_dir, canonical, exempt)
         problems += _stale_exemptions(agents_dir, canonical, exempt)
-        problems += _imports_without_copy(agents_dir, module)
+        importers = _importers(agents_dir, module)
+        problems += _imports_without_copy(agents_dir, module, importers)
+        problems += _copies_left_out_of_images(agents_dir, module, importers)
     return problems
 
 
@@ -99,21 +104,85 @@ def _stale_exemptions(agents_dir: Path, canonical: Path, exempt: frozenset[str])
     return problems
 
 
-def _imports_without_copy(agents_dir: Path, module: str) -> list[Problem]:
+def _importers(agents_dir: Path, module: str) -> list[Path]:
+    """Every agent source file that imports the module."""
     name = module.removesuffix(".py")
     imports = re.compile(rf"^\s*(?:from\s+{name}\s+import|import\s+{name}\b)", re.MULTILINE)
+    return [source for source in _python_sources(agents_dir) if _imports(source, imports)]
+
+
+def _imports_without_copy(agents_dir: Path, module: str, importers: list[Path]) -> list[Problem]:
     canonical = agents_dir / COMMON_DIR_NAME / module
     problems = []
-    for source in _python_sources(agents_dir):
-        if not _imports(source, imports) or (source.parent / module).is_file():
+    for source in importers:
+        if (source.parent / module).is_file():
             continue
         problems.append(
             Problem(
-                f"{_shown(source)} imports {name} but {module} is not beside it; the image would not start",
+                f"{_shown(source)} imports {module.removesuffix('.py')} but {module} is not beside it; "
+                "the image would not start",
                 fix=f"cp {_shown(canonical)} {_shown(source.parent / module)}",
             )
         )
     return problems
+
+
+def _copies_left_out_of_images(agents_dir: Path, module: str, importers: list[Path]) -> list[Problem]:
+    """Copies an agent imports that its Dockerfile never puts into the image."""
+    problems = []
+    checked: set[Path] = set()
+    for source in importers:
+        copy = source.parent / module
+        dockerfile = _dockerfile_of(agents_dir, source)
+        if copy in checked or not copy.is_file() or dockerfile is None:
+            continue
+        checked.add(copy)
+        if _dockerfile_copies(dockerfile, agents_dir, copy):
+            continue
+        problems.append(
+            Problem(
+                f"{_shown(dockerfile)} does not copy {_shown(copy)} into the image; the image would not start",
+                fix=f"add a COPY of {_relative(dockerfile.parent, copy)} to {_shown(dockerfile)}",
+            )
+        )
+    return problems
+
+
+def _dockerfile_of(agents_dir: Path, source: Path) -> Path | None:
+    """The Dockerfile at the root of the agent the source belongs to, if it has one."""
+    agent_dir = agents_dir / source.relative_to(agents_dir).parts[0]
+    dockerfile = agent_dir / "Dockerfile"
+    return dockerfile if dockerfile.is_file() else None
+
+
+def _dockerfile_copies(dockerfile: Path, agents_dir: Path, copy: Path) -> bool:
+    # The build context is the agent's directory, or (for a few agents) the agents directory above it.
+    candidates = {_relative(dockerfile.parent, copy), _relative(agents_dir, copy)}
+    return any(_covers(source, path) for source in _copied_sources(dockerfile) for path in candidates)
+
+
+def _copied_sources(dockerfile: Path) -> list[str]:
+    """The source paths of every COPY or ADD that takes files from the build context."""
+    text = dockerfile.read_text(encoding="utf-8", errors="replace").replace("\\\n", " ")
+    sources: list[str] = []
+    for line in text.splitlines():
+        instruction, _, rest = line.strip().partition(" ")
+        if instruction.upper() not in ("COPY", "ADD"):
+            continue
+        words = rest.split()
+        if any(word.startswith("--from") for word in words):
+            continue  # copies out of another build stage, not out of the build context
+        arguments = " ".join(word for word in words if not word.startswith("--"))
+        paths = json.loads(arguments) if arguments.startswith("[") else arguments.split()
+        sources += paths[:-1]  # the last path is the destination
+    return sources
+
+
+def _covers(source: str, path: str) -> bool:
+    source = source.removeprefix("./").rstrip("/")
+    if source in ("", "."):
+        return True
+    return path == source or path.startswith(source + "/") or fnmatch.fnmatchcase(path, source)
 
 
 def _imports(source: Path, pattern: re.Pattern[str]) -> bool:
