@@ -156,6 +156,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         agent_state_ttl_days: 7,
         agent_state_max_body_bytes: 1_048_576,
         agent_state_rate_limit_per_minute: 600,
+        agent_state_list_bytes_budget: 8 * 1024 * 1024,
         github_client_id: None,
         github_client_secret: None,
         router_shortlist_threshold: 15,

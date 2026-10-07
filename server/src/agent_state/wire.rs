@@ -7,7 +7,7 @@ use serde_json::value::RawValue;
 
 use super::cursor::{KeyCursor, TaskCursor};
 use super::error::StateError;
-use super::payload::PayloadCipher;
+use super::page::ListedRow;
 use super::repo::{KvQuery, KvRow, Stamp, TaskQuery, TaskRow};
 use super::validation::{
     MAX_CLIENT_NAME_BYTES, MAX_CONTEXT_ID_BYTES, MAX_KEY_BYTES, MAX_TASK_STATE_BYTES, check_name,
@@ -177,17 +177,31 @@ pub(super) struct TaskView {
     expires_at: DateTime<Utc>,
 }
 
-impl TaskView {
-    pub(super) fn open(row: TaskRow, cipher: &PayloadCipher) -> Result<Self, StateError> {
-        Ok(Self {
-            body: cipher.open(&row.sealed_body)?,
-            task_id: row.task_id,
-            context_id: row.context_id,
-            state: row.state,
-            version: row.version,
-            updated_at: row.updated_at,
-            expires_at: row.expires_at,
-        })
+impl ListedRow for TaskRow {
+    type View = TaskView;
+
+    fn name(&self) -> &str {
+        &self.task_id
+    }
+
+    fn resume_after(&self) -> String {
+        TaskCursor {
+            updated_at: self.updated_at,
+            task_id: self.task_id.clone(),
+        }
+        .encode()
+    }
+
+    fn into_view(self, body: Box<RawValue>) -> TaskView {
+        TaskView {
+            body,
+            task_id: self.task_id,
+            context_id: self.context_id,
+            state: self.state,
+            version: self.version,
+            updated_at: self.updated_at,
+            expires_at: self.expires_at,
+        }
     }
 }
 
@@ -221,23 +235,29 @@ pub(super) struct KvView {
     expires_at: DateTime<Utc>,
 }
 
-impl KvView {
-    pub(super) fn open(row: KvRow, cipher: &PayloadCipher) -> Result<Self, StateError> {
-        Ok(Self {
-            value: cipher.open(&row.sealed_value)?,
-            key: row.key,
-            version: row.version,
-            updated_at: row.updated_at,
-            expires_at: row.expires_at,
-        })
-    }
-}
+impl ListedRow for KvRow {
+    type View = KvView;
 
-/// One page of a listing. `next_cursor` is `null` on the last page.
-#[derive(Debug, Serialize)]
-pub(super) struct Page<T> {
-    pub(super) items: Vec<T>,
-    pub(super) next_cursor: Option<String>,
+    fn name(&self) -> &str {
+        &self.key
+    }
+
+    fn resume_after(&self) -> String {
+        KeyCursor {
+            key: self.key.clone(),
+        }
+        .encode()
+    }
+
+    fn into_view(self, value: Box<RawValue>) -> KvView {
+        KvView {
+            value,
+            key: self.key,
+            version: self.version,
+            updated_at: self.updated_at,
+            expires_at: self.expires_at,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,6 +477,45 @@ mod tests {
         }
     }
 
+    fn at(micros: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp_micros(micros).unwrap()
+    }
+
+    #[test]
+    fn a_listing_resumes_just_past_the_task_its_page_ended_on() {
+        let row = TaskRow {
+            task_id: "b".into(),
+            context_id: None,
+            state: "working".into(),
+            sealed_body: String::new(),
+            version: 1,
+            updated_at: at(10),
+            expires_at: at(11),
+        };
+        assert_eq!(
+            TaskCursor::decode(&row.resume_after()).unwrap(),
+            TaskCursor {
+                updated_at: at(10),
+                task_id: "b".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_listing_resumes_just_past_the_key_its_page_ended_on() {
+        let row = KvRow {
+            key: "b".into(),
+            sealed_value: String::new(),
+            version: 1,
+            updated_at: at(1),
+            expires_at: at(2),
+        };
+        assert_eq!(
+            KeyCursor::decode(&row.resume_after()).unwrap(),
+            KeyCursor { key: "b".into() }
+        );
+    }
+
     #[test]
     fn only_a_task_store_makes_an_agent_durable() {
         let stores_tasks = |capabilities: Value| {
@@ -467,17 +526,5 @@ mod tests {
         assert!(stores_tasks(json!(["tasks"])));
         assert!(stores_tasks(json!(["kv", "tasks"])));
         assert!(!stores_tasks(json!(["kv"])));
-    }
-
-    #[test]
-    fn a_page_serializes_to_the_contract_shape() {
-        let page = Page {
-            items: vec![1, 2],
-            next_cursor: None,
-        };
-        assert_eq!(
-            serde_json::to_value(page).unwrap(),
-            json!({"items": [1, 2], "next_cursor": null})
-        );
     }
 }
