@@ -144,6 +144,57 @@ def test_the_canonical_directory_and_its_tests_are_not_treated_as_copies(agents)
     assert check(agents, known_divergent={}) == []
 
 
+class TestDockerfiles:
+    """An agent with a Dockerfile must copy every vendored module it imports into its image."""
+
+    def test_a_dockerfile_that_leaves_the_copy_out_is_reported(self, agents):
+        write(agents / "alpha" / "Dockerfile", "FROM python:3.12-slim\nCOPY src/__main__.py /app/\n")
+
+        problems = check(agents, known_divergent={})
+
+        assert len(problems) == 2  # nasiko_state.py and telemetry.py
+        shown = messages(problems).replace("\\", "/")
+        assert "alpha/Dockerfile does not copy" in shown and "alpha/src/nasiko_state.py" in shown
+        assert "would not start" in problems[0].message
+
+    @pytest.mark.parametrize(
+        "copy_line",
+        [
+            "COPY src/ /app",
+            "COPY ./src /app",
+            "COPY . .",
+            "COPY src/nasiko_state.py src/telemetry.py src/__main__.py /app/",
+            "COPY src/*.py /app/",
+            'COPY ["src/", "/app"]',
+            "COPY --chown=app:app src/ /app",
+            "COPY \\\n    src/ \\\n    /app",
+            "COPY alpha/src/ /app",  # built with the agents directory as its context
+        ],
+    )
+    def test_any_copy_that_covers_the_file_satisfies_the_check(self, agents, copy_line):
+        write(agents / "alpha" / "Dockerfile", f"FROM python:3.12-slim\n{copy_line}\n")
+
+        assert check(agents, known_divergent={}) == []
+
+    def test_a_copy_from_another_build_stage_does_not_count(self, agents):
+        write(agents / "alpha" / "Dockerfile", "FROM python:3.12-slim\nCOPY --from=builder src/ /app\n")
+
+        assert len(check(agents, known_divergent={})) == 2
+
+    def test_each_copy_is_reported_once_however_many_files_import_it(self, agents):
+        write(agents / "alpha" / "src" / "agent.py", "from nasiko_state import make_checkpointer\n")
+        write(agents / "alpha" / "Dockerfile", "FROM python:3.12-slim\nCOPY src/__main__.py /app/\n")
+
+        problems = check(agents, modules=["nasiko_state.py"], known_divergent={})
+
+        assert len(problems) == 1
+
+    def test_an_agent_without_a_dockerfile_is_not_checked(self, agents):
+        assert not (agents / "alpha" / "Dockerfile").exists()
+
+        assert check(agents, known_divergent={}) == []
+
+
 def test_the_repository_itself_is_in_sync():
     """What CI runs, against the real tree: every vendored copy matches, none is missing."""
     problems = check(check_vendored.AGENTS_DIR)
