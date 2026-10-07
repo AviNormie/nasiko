@@ -2,8 +2,14 @@
 //! answer back onto the same A2A `taskId`/`contextId` the agent paused on. Shape mirrors
 //! `agents/build_worker.rs`: poll/notify, atomically claim one row, execute in a panic-isolated
 //! spawned task.
+//!
+//! A claimed delivery either releases the claim for a retry or ends in a terminal `resume_status`:
+//! `completed`, `failed`, `delivery_outcome_unknown`, or `agent_lost_task` when the agent no longer
+//! holds the paused task (see `lost_task`). `mcp_tool` rows resume through `nasiko-hitl`'s own
+//! dispatcher, not this one.
 
 pub mod continuation;
+mod lost_task;
 
 use std::time::Duration;
 
@@ -18,6 +24,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::hitl::continuation::ContinuationGuard;
+use crate::hitl::lost_task::LostTaskSignal;
 use crate::router::a2a_dispatch::{
     OrchestratorTurn, build_hitl_stream_data, build_pause_question, normalize_agent_event,
     orchestrator_stream, pause_kind, resolve_endpoint,
@@ -469,6 +476,9 @@ async fn deliver(state: AppState, row: HitlRequest) {
     // Matches `agent_proxy.rs`'s own placement: one invocation in, one return out, regardless
     // of the agent's own business outcome (paused/failed/completed) below.
     state.flow_guard.record_return(&flow_ctx).await;
+    if let Some(signal) = LostTaskSignal::from_status(response.status()) {
+        return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, signal).await;
+    }
     if !response.status().is_success() {
         let status = response.status();
         let _ = state
@@ -525,6 +535,13 @@ async fn deliver(state: AppState, row: HitlRequest) {
         }
         return;
     };
+
+    // An error reply saying the task is unknown means the answer reached no task, which is not
+    // "delivered" even though a response came back. Checked before the delivery is recorded as
+    // succeeded below.
+    if let Some(signal) = last_data.as_deref().and_then(LostTaskSignal::from_reply) {
+        return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, signal).await;
+    }
 
     // Delivery succeeded — a response was received and classified — regardless of the agent's
     // own business outcome (§3.2: "peer confirmed receipt").
@@ -680,6 +697,48 @@ async fn deliver(state: AppState, row: HitlRequest) {
             }
         }
     }
+}
+
+/// The agent answered the resume with "no such task" (see [`LostTaskSignal`]): its paused task is
+/// gone, so the human's answer reached nothing. Records the terminal `agent_lost_task` and closes
+/// out the resume's trail the way an ordinary failed reply would.
+///
+/// Not retried: re-sending the answer cannot find a task that is gone, so unlike an unclassifiable
+/// reply (`mark_resume_unknown`) there is no double delivery to avoid. Not treated as a reply
+/// either: nothing is saved to the chat and nothing is fed back to the orchestrator, because there
+/// is nothing to relay. Clients learn of it from `resume_status` and tell the requester that the
+/// answer was not delivered and they can ask again.
+async fn finish_agent_lost_task(
+    state: &AppState,
+    row: &HitlRequest,
+    flow_ctx: &FlowContext,
+    agent_name: &str,
+    signal: LostTaskSignal,
+) {
+    tracing::warn!(
+        id = %row.id, agent_id = %row.agent_id, task_id = ?row.task_id,
+        signal = signal.describe(),
+        "hitl dispatcher: the agent no longer holds the paused task, so the human's answer could \
+         not be delivered"
+    );
+    if let Err(e) = state
+        .hitl_store
+        .mark_resume_agent_lost_task(row.id, signal.describe())
+        .await
+    {
+        // Left to retry: the claim lapses with its lease and the answer is sent again, which is
+        // harmless here (the agent has no task for it to land on) and ends up back in this
+        // function.
+        tracing::error!(
+            id = %row.id, %e,
+            "hitl dispatcher: could not record agent_lost_task; the row stays claimed until its \
+             lease lapses, then is retried"
+        );
+        return;
+    }
+    record_resume_trail(state, StreamDisposition::Failed, flow_ctx).await;
+    // The pause is over as far as the flow timeline is concerned: the human has answered it.
+    close_resumed_flow_step(state, row, agent_name).await;
 }
 
 /// MAF resume. Unlike `deliver()`'s direct-chat
