@@ -391,6 +391,111 @@ class TestFromEnv:
         assert NasikoStateClient.from_env()._headers["Authorization"] == "Bearer from-os-environ"
 
 
+class TestOutcomeUnknown:
+    """A request that failed after it went out may have been applied by the server."""
+
+    async def test_a_conditional_write_is_not_retried_after_a_read_timeout(self, client, state_server, style):
+        await put_task(client, style)
+        state_server.requests.clear()
+        state_server.disconnect(error=httpx.ReadTimeout("no answer"), when=lambda r: r.method == "PUT")
+
+        with pytest.raises(NasikoStateError) as raised:
+            await put_task(client, style, if_match=1)
+
+        assert raised.value.status is None
+        assert len(state_server.requests) == 1
+
+    async def test_an_unconditional_write_is_retried_after_a_read_timeout(self, client, state_server, style):
+        await put_task(client, style)
+        state_server.requests.clear()
+        state_server.disconnect(error=httpx.ReadTimeout("no answer"), when=lambda r: r.method == "PUT")
+
+        receipt = await put_task(client, style)
+
+        assert receipt.version == 2
+        assert len(state_server.requests) == 2
+
+    async def test_a_conditional_write_is_still_retried_when_it_never_left(self, client, state_server, style):
+        await put_task(client, style)
+        state_server.requests.clear()
+        state_server.disconnect(when=lambda r: r.method == "PUT")  # connection refused: not sent
+
+        assert (await put_task(client, style, if_match=1)).version == 2
+
+
+class TestDeadlines:
+    async def test_each_request_is_given_only_the_time_left(self, state_server, style):
+        timeouts = []
+
+        def record(request):
+            timeouts.append(request.extensions["timeout"]["read"])
+            return state_server.handle(request)
+
+        timed = NasikoStateClient(
+            BASE_URL, TOKEN, transport=httpx.MockTransport(record), retry_backoff_seconds=0
+        )
+
+        await call(
+            timed,
+            style,
+            "put_task",
+            "t1",
+            context_id=None,
+            state="working",
+            body={},
+            deadline=time.monotonic() + 3,
+        )
+
+        assert 0 < timeouts[-1] <= 3
+
+    async def test_no_attempt_is_made_once_the_deadline_has_passed(self, client, state_server, style):
+        with pytest.raises(NasikoStateError, match="ran out of time"):
+            await put_task(client, style, deadline=time.monotonic() - 1)
+
+        assert state_server.writes("tasks") == []
+
+    async def test_a_retry_that_would_end_after_the_deadline_is_not_made(
+        self, client, state_server, style, slept
+    ):
+        state_server.fail(429, times=5, headers={"Retry-After": "2"}, when=lambda r: r.method == "PUT")
+
+        with pytest.raises(NasikoStateError) as raised:
+            await put_task(client, style, deadline=time.monotonic() + 1)
+
+        assert raised.value.status == 429
+        assert slept == []  # a 2 s wait cannot fit in the 1 s left
+        assert len(state_server.writes("tasks")) == 1
+
+
+class TestThreads:
+    def test_threads_share_one_sync_http_client(self, client, monkeypatch):
+        import threading
+
+        created = []
+        real_client = httpx.Client
+
+        class SlowToBuild(real_client):
+            def __init__(self, *args, **kwargs):
+                time.sleep(0.05)  # widens the window two threads could both see "no client yet"
+                created.append(self)
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", SlowToBuild)
+        start = threading.Barrier(4)
+
+        def build():
+            start.wait()
+            client._sync_http()
+
+        threads = [threading.Thread(target=build) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(created) == 1
+
+
 class TestLifecycle:
     async def test_closed_clients_reopen_on_next_use(self, client, state_server):
         await put_task(client, "async")

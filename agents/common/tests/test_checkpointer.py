@@ -559,6 +559,46 @@ def react_agent_with_one_tool_call(checkpointer):
         )
 
 
+class TestMalformedRecords:
+    """A damaged record is reported as such, typed, never as a bare KeyError from inside the saver."""
+
+    async def test_a_head_without_a_checkpoint_id(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        state_server.kv["lgh:thread-1:"].value["value"] = {"unexpected": True}
+
+        with pytest.raises(NasikoStateMalformedRow):
+            await call(saver, style, "get_tuple", config_for())
+
+    async def test_a_checkpoint_record_missing_fields(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        del state_server.kv["lg:thread-1::cp-1"].value["value"]["metadata"]
+
+        with pytest.raises(NasikoStateMalformedRow, match="metadata"):
+            await call(saver, style, "get_tuple", config_for())
+
+    async def test_a_payload_that_is_not_base64(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        state_server.kv["lg:thread-1::cp-1"].value["value"]["checkpoint"]["data"] = "not base64!"
+
+        with pytest.raises(NasikoStateMalformedRow):
+            await call(saver, style, "get_tuple", config_for())
+
+    async def test_a_writes_record_without_writes(self, saver, style, state_server):
+        saved = await put(saver, style, config_for(), "cp-1")
+        await call(saver, style, "put_writes", saved, [("a", 1)], "task-1")
+        del state_server.kv["lgw:thread-1::cp-1:task-1:0"].value["value"]["writes"]
+
+        with pytest.raises(NasikoStateMalformedRow):
+            await call(saver, style, "get_tuple", saved)
+
+    async def test_a_malformed_record_in_a_listing(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        state_server.kv["lg:thread-1::cp-1"].value["value"] = ["not", "a", "record"]
+
+        with pytest.raises(NasikoStateMalformedRow):
+            await listing(saver, style, config_for())
+
+
 class TestSerialization:
     async def test_pickle_is_never_written(self, client, style):
         saver = NasikoCheckpointSaver(NasikoKV(client), serde=JsonPlusSerializer(pickle_fallback=True))

@@ -82,9 +82,15 @@ class FakeStateServer:
         response = (status, {"error": f"injected {status}"}, headers or {})
         self._injections.append(_Injection(times, response, None, when or (lambda _: True)))
 
-    def disconnect(self, *, times: int = 1, when: Callable[[Recorded], bool] | None = None) -> None:
-        """Raise a connection error for the next `times` matching requests."""
-        error = httpx.ConnectError("connection refused")
+    def disconnect(
+        self,
+        *,
+        times: int = 1,
+        when: Callable[[Recorded], bool] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        """Raise a transport error (a refused connection by default) for the next `times` matching requests."""
+        error = error or httpx.ConnectError("connection refused")
         self._injections.append(_Injection(times, None, error, when or (lambda _: True)))
 
     def writes(self, kind: str) -> list[Recorded]:
