@@ -1656,6 +1656,57 @@ async fn a_delete_waits_for_a_concurrent_writer_of_the_same_entry() {
     server.cleanup().await;
 }
 
+#[tokio::test]
+#[serial]
+async fn a_write_that_waited_for_the_lock_continues_the_version_and_is_stamped_after_it() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "lock-order-agent").await;
+    let peer = peer_pool(&server).await;
+
+    // A first writer holds the entry's lock, and the second begins while it does.
+    let mut first = peer.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+        .bind(ENTRY_LOCK_CLASS)
+        .bind(format!("{}/task/ordered", agent.id))
+        .execute(&mut *first)
+        .await
+        .unwrap();
+    let request = call(&server, &agent, Method::PUT, "/tasks/ordered")
+        .json(&json!({"context_id": null, "state": "working", "body": "second"}));
+    let second = tokio::spawn(async move { request.send().await.unwrap() });
+    wait_for_a_blocked_writer(&peer).await;
+
+    // The first writer commits its version 1 while the second is already in flight.
+    let first_stamped_at: DateTime<Utc> = sqlx::query_scalar(
+        "INSERT INTO agent_tasks (agent_id, task_id, state, body, version, updated_at, expires_at)
+         VALUES ($1, 'ordered', 'working', 'placeholder', 1, clock_timestamp(),
+                 clock_timestamp() + interval '7 days')
+         RETURNING updated_at",
+    )
+    .bind(agent.id)
+    .fetch_one(&mut *first)
+    .await
+    .unwrap();
+    first.commit().await.unwrap();
+
+    // The second one saw it: it is version 2, and stamped after the write it waited for, not at
+    // the moment its transaction began (which was before that write existed).
+    let res = tokio::time::timeout(Duration::from_secs(10), second)
+        .await
+        .expect("the second write must proceed once the first commits")
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let stamp: Value = res.json().await.unwrap();
+    assert_eq!(stamp["version"], 2);
+    assert!(
+        timestamp(&stamp, "updated_at") > first_stamped_at,
+        "a later version must not be stamped earlier than the one before it"
+    );
+
+    peer.close().await;
+    server.cleanup().await;
+}
+
 // ─── When an agent goes away ────────────────────────────────────────────────
 
 #[tokio::test]
