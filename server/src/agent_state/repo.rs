@@ -210,8 +210,9 @@ const GET_TASK: &str =
     FROM agent_tasks
     WHERE agent_id = $1 AND task_id = $2 AND deleted_at IS NULL AND expires_at > now()";
 
-/// Newest first. The `COLLATE "C"` on the id makes the tie-break byte order, so the sequence a
-/// caller pages through does not depend on the database's locale.
+/// Newest first, then by id. `task_id` is a `COLLATE "C"` column, so the tie-break is byte order
+/// whatever the database's locale, and `idx_agent_tasks_listing` serves this order and the
+/// cursor's range without a sort.
 const LIST_TASKS: &str =
     "SELECT task_id, context_id, state, body AS sealed_body, version, updated_at, expires_at
     FROM agent_tasks
@@ -222,8 +223,8 @@ const LIST_TASKS: &str =
       AND ($3::text IS NULL OR state = $3)
       AND ($4::timestamptz IS NULL
            OR updated_at < $4
-           OR (updated_at = $4 AND task_id COLLATE \"C\" > $5))
-    ORDER BY updated_at DESC, task_id COLLATE \"C\" ASC
+           OR (updated_at = $4 AND task_id > $5))
+    ORDER BY updated_at DESC, task_id ASC
     LIMIT $6";
 
 /// Stamps with `clock_timestamp()`, not `now()`: `now()` is when the transaction began, which can
@@ -335,15 +336,17 @@ const GET_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, ex
     WHERE agent_id = $1 AND key = $2 AND deleted_at IS NULL AND expires_at > now()";
 
 /// `starts_with`, not `LIKE`: a prefix is a literal, and `%` or `_` in it must not act as
-/// wildcards. Byte-order collation for the same reason as `LIST_TASKS`.
+/// wildcards. `key` is a `COLLATE "C"` column, so the order is bytes, as in `LIST_TASKS`, and the
+/// primary key serves the order, the cursor's range and the prefix (Postgres can use a btree for
+/// `starts_with` only under the C collation).
 const LIST_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, expires_at
     FROM agent_kv
     WHERE agent_id = $1
       AND deleted_at IS NULL
       AND expires_at > now()
       AND ($2::text IS NULL OR starts_with(key, $2))
-      AND ($3::text IS NULL OR key COLLATE \"C\" > $3)
-    ORDER BY key COLLATE \"C\" ASC
+      AND ($3::text IS NULL OR key > $3)
+    ORDER BY key ASC
     LIMIT $4";
 
 /// Stamps as `UPSERT_TASK` does, for the same reasons.

@@ -2594,6 +2594,93 @@ async fn a_ciphertext_moved_onto_another_row_does_not_open_there() {
     server.cleanup().await;
 }
 
+// ─── Indexes ────────────────────────────────────────────────────────────────
+
+/// The plan Postgres picks for `query` with sorts and every non-index scan priced out, so that an
+/// empty test table still shows whether an index can serve the query and its order at all: if
+/// none can, the plan sorts anyway.
+async fn plan_of(server: &TestServer, query: &str) -> String {
+    let mut tx = server.db.begin().await.unwrap();
+    for setting in ["enable_seqscan", "enable_bitmapscan", "enable_sort"] {
+        sqlx::query(&format!("SET LOCAL {setting} = off"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    let lines: Vec<String> = sqlx::query_scalar(&format!("EXPLAIN {query}"))
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    lines.join("\n")
+}
+
+#[tokio::test]
+#[serial]
+async fn names_compare_as_bytes_whatever_the_database_locale() {
+    let server = TestServer::start().await;
+    for (table, column) in [("agent_tasks", "task_id"), ("agent_kv", "key")] {
+        let collation: Option<String> = sqlx::query_scalar(
+            "SELECT collation_name FROM information_schema.columns
+             WHERE table_name = $1 AND column_name = $2",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(&server.db)
+        .await
+        .unwrap();
+        assert_eq!(collation.as_deref(), Some("C"), "{table}.{column}");
+    }
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_task_listing_is_served_in_order_by_its_index() {
+    let server = TestServer::start().await;
+    // The listing's shape: one agent's live rows, newest first, resuming from a cursor.
+    let plan = plan_of(
+        &server,
+        "SELECT task_id FROM agent_tasks
+         WHERE agent_id = '00000000-0000-0000-0000-000000000001'
+           AND deleted_at IS NULL AND expires_at > now()
+           AND (updated_at < now() OR (updated_at = now() AND task_id > 'a'))
+         ORDER BY updated_at DESC, task_id ASC
+         LIMIT 51",
+    )
+    .await;
+    assert!(plan.contains("idx_agent_tasks_listing"), "{plan}");
+    assert!(
+        !plan.contains("Sort"),
+        "the index must give the order: {plan}"
+    );
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn the_kv_listing_is_served_in_order_by_the_primary_key_prefix_included() {
+    let server = TestServer::start().await;
+    let plan = plan_of(
+        &server,
+        "SELECT key FROM agent_kv
+         WHERE agent_id = '00000000-0000-0000-0000-000000000001'
+           AND deleted_at IS NULL AND expires_at > now()
+           AND starts_with(key, 'app/') AND key > 'app/a'
+         ORDER BY key ASC
+         LIMIT 51",
+    )
+    .await;
+    assert!(plan.contains("agent_kv_pkey"), "{plan}");
+    assert!(
+        !plan.contains("Sort"),
+        "the key must give the order: {plan}"
+    );
+    // Under the C collation the prefix becomes a range on the key rather than a filter.
+    assert!(plan.contains("key >= 'app/'"), "{plan}");
+    server.cleanup().await;
+}
+
 // ─── What the API refuses to accept ─────────────────────────────────────────
 
 #[tokio::test]
