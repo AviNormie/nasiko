@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::hitl::continuation::ContinuationGuard;
-use crate::hitl::lost_task::LostTaskSignal;
+use crate::hitl::lost_task::is_task_not_found;
 use crate::router::a2a_dispatch::{
     OrchestratorTurn, build_hitl_stream_data, build_pause_question, normalize_agent_event,
     orchestrator_stream, pause_kind, resolve_endpoint,
@@ -47,15 +47,28 @@ const RETRYABLE: FailureKind = FailureKind::Retryable {
 /// turn lets a second replica steal the lease mid-delivery and re-send the human's answer a
 /// second time, double-executing whatever the agent does with it.
 const AGENT_RESUME_REQUEST_TIMEOUT_SECS: i64 = 300;
+/// `flow_steps.status` of a paused step whose answer reached the agent.
+const RESUMED_FLOW_STEP_STATUS: &str = "resumed";
+/// `flow_steps.status` of a paused step whose agent no longer held the task: the step never ran
+/// on, which `failed` says and `resumed` would contradict.
+const LOST_TASK_FLOW_STEP_STATUS: &str = "failed";
+/// Pause before re-sending a resume the agent answered with "task not found" - long enough for a
+/// restarting replica or a round-robin Service to settle, short enough that a genuinely lost task
+/// is concluded within seconds.
+const LOST_TASK_REDELIVERY_BACKOFF: Duration = Duration::from_millis(500);
 /// How long a claim is honored before another dispatcher process may steal it (§3.2's exact
 /// claim query, implemented in `HitlStore::claim_for_resume`). Sourced from the same
 /// `HITL_RESUME_LEASE_MINUTES` knob the sibling `mcp_tool` dispatcher uses
 /// (`nasiko_hitl::dispatcher::DispatcherConfig::effective_lease_minutes`) — this dispatcher
 /// claims exactly once per delivery attempt (unlike that one, which holds a single claim across
-/// its own in-process retry loop), so the floor here only needs to clear one request's timeout
-/// plus margin, not the sum of every retry.
+/// its own in-process retry loop). Within one claim only the "task not found" re-sends repeat the
+/// request, so the floor is `HITL_LOST_TASK_RETRIES + 1` request timeouts plus their backoffs and
+/// a margin.
 fn lease_secs(config: &nasiko_config::Config) -> i64 {
-    (config.hitl_resume_lease_minutes * 60).max(AGENT_RESUME_REQUEST_TIMEOUT_SECS + 60)
+    let posts = i64::from(config.hitl_lost_task_retries) + 1;
+    let worst_delivery = posts * AGENT_RESUME_REQUEST_TIMEOUT_SECS
+        + (posts - 1) * LOST_TASK_REDELIVERY_BACKOFF.as_secs().max(1) as i64;
+    (config.hitl_resume_lease_minutes * 60).max(worst_delivery + 60)
 }
 /// Concurrent in-flight deliveries, mirroring `build_worker::run`'s own `tasks` cap on the same
 /// claim/spawn shape. `deliver()` can drive an entire ReAct turn for an `orchestrator`-origin row
@@ -506,86 +519,84 @@ async fn deliver(state: AppState, row: HitlRequest) {
             .json(body)
     };
 
-    let response = match build_req(&req_body).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            // Pre-flight failure — never left Nasiko. Retried via the lease under the cap.
+    // A "task not found" answer is re-sent a bounded number of times before it concludes anything:
+    // a round-robin Service can route the resume to a replica that never saw the task while
+    // another replica holds it (see `lost_task`).
+    let mut redeliveries = 0u32;
+    let attempt = loop {
+        let attempt = post_resume(
+            &build_req,
+            &req_body,
+            &task_id,
+            &context_id,
+            &answer,
+            &continuation,
+        )
+        .await;
+        let exhausted = redeliveries >= state.config.hitl_lost_task_retries;
+        if !matches!(attempt, ResumeAttempt::TaskNotFound) || exhausted {
+            break attempt;
+        }
+        redeliveries += 1;
+        tracing::info!(
+            id = %row.id, agent_id = %row.agent_id, redeliveries,
+            "hitl dispatcher: the agent reported the paused task as not found; re-sending the resume"
+        );
+        tokio::time::sleep(LOST_TASK_REDELIVERY_BACKOFF).await;
+    };
+    let posts = redeliveries + 1;
+    // Matches `agent_proxy.rs`'s own placement: one invocation in, one return out, regardless
+    // of the agent's own business outcome (paused/failed/completed) below.
+    if !matches!(attempt, ResumeAttempt::SendFailed(_)) {
+        state.flow_guard.record_return(&flow_ctx).await;
+    }
+    let (disposition, last_data, reply_text) = match attempt {
+        ResumeAttempt::Reply(terminal) => terminal,
+        ResumeAttempt::SendFailed(error) => {
+            // Pre-flight failure - never left Nasiko. Retried via the lease under the cap.
             let _ = state
                 .hitl_store
-                .mark_resume_failed(row.id, &format!("agent request failed: {e}"), RETRYABLE)
+                .mark_resume_failed(row.id, &format!("agent request failed: {error}"), RETRYABLE)
                 .await;
             return;
         }
-    };
-    // Matches `agent_proxy.rs`'s own placement: one invocation in, one return out, regardless
-    // of the agent's own business outcome (paused/failed/completed) below.
-    state.flow_guard.record_return(&flow_ctx).await;
-    if let Some(signal) = LostTaskSignal::from_status(response.status()) {
-        return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, signal).await;
-    }
-    if !response.status().is_success() {
-        let status = response.status();
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(row.id, &format!("agent HTTP {status}"), RETRYABLE)
-            .await;
-        return;
-    }
-
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let outcome = if content_type.contains("text/event-stream") {
-        consume_sse_to_terminal(response, &task_id, &context_id, &continuation).await
-    } else {
-        consume_json_to_terminal(
-            response,
-            &context_id,
-            &task_id,
-            &answer,
-            &build_req,
-            &continuation,
-        )
-        .await
-    };
-
-    let Some((disposition, last_data, reply_text)) = outcome else {
-        // By this point the HTTP response was already received (`response.status().is_success()`
-        // above already passed) — the agent has the resumed message and may already have acted on
-        // it before the transport broke mid-body (`consume_sse_to_terminal`'s `chunk.ok()?`) or
-        // the reply failed to parse (`consume_json_to_terminal`'s `response.json().await.ok()?`).
-        // Unlike the true pre-flight failures above (`build_req(...).send()` erroring, or a
-        // non-success status — neither ever got this far), retrying here would re-POST the human's
-        // answer to an agent that may have already consumed and acted on it once, double-executing
-        // it. Same reasoning as `mark_resume_completed`'s own failure handling just below:
-        // `mark_resume_unknown` takes the row out of the claimable pool instead of leaving it
-        // reclaimable once the lease expires.
-        tracing::error!(
-            id = %row.id,
-            "hitl dispatcher: agent response could not be classified after the request was \
-             already sent — marking delivery outcome unknown rather than retrying, to avoid \
-             re-delivering to the agent"
-        );
-        if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
-            tracing::error!(
-                id = %row.id, %e,
-                "hitl dispatcher: mark_resume_unknown itself failed — row stays reclaimable \
-                 once its lease expires, reopening the double-delivery this call exists to prevent"
-            );
+        ResumeAttempt::HttpFailure(status) => {
+            let _ = state
+                .hitl_store
+                .mark_resume_failed(row.id, &format!("agent HTTP {status}"), RETRYABLE)
+                .await;
+            return;
         }
-        return;
+        ResumeAttempt::TaskNotFound => {
+            return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, posts).await;
+        }
+        ResumeAttempt::Unclassified => {
+            // By this point the HTTP response was already received - the agent has the resumed
+            // message and may already have acted on it before the transport broke mid-body
+            // (`consume_sse_to_terminal`'s `chunk.ok()?`) or the reply failed to parse
+            // (`consume_json_to_terminal`'s `response.json().await.ok()?`). Unlike the true
+            // pre-flight failures above, retrying here would re-POST the human's answer to an
+            // agent that may have already consumed and acted on it once, double-executing it.
+            // Same reasoning as `mark_resume_completed`'s own failure handling just below:
+            // `mark_resume_unknown` takes the row out of the claimable pool instead of leaving it
+            // reclaimable once the lease expires.
+            tracing::error!(
+                id = %row.id,
+                "hitl dispatcher: agent response could not be classified after the request was \
+                 already sent - marking delivery outcome unknown rather than retrying, to avoid \
+                 re-delivering to the agent"
+            );
+            if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
+                tracing::error!(
+                    id = %row.id, %e,
+                    "hitl dispatcher: mark_resume_unknown itself failed - row stays reclaimable \
+                     once its lease expires, reopening the double-delivery this call exists to \
+                     prevent"
+                );
+            }
+            return;
+        }
     };
-
-    // An error reply saying the task is unknown means the answer reached no task, which is not
-    // "delivered" even though a response came back. Checked before the delivery is recorded as
-    // succeeded below.
-    if let Some(signal) = last_data.as_deref().and_then(LostTaskSignal::from_reply) {
-        return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, signal).await;
-    }
 
     // Delivery succeeded — a response was received and classified — regardless of the agent's
     // own business outcome (§3.2: "peer confirmed receipt").
@@ -610,7 +621,7 @@ async fn deliver(state: AppState, row: HitlRequest) {
     record_resume_trail(&state, disposition, &flow_ctx).await;
     // Unconditional on `disposition`: the agent received the answer, which is what ends the pause.
     // A follow-up pause gets its own row and its own step in its own flow.
-    close_resumed_flow_step(&state, &row, &agent_name).await;
+    close_resumed_flow_step(&state, &row, &agent_name, RESUMED_FLOW_STEP_STATUS).await;
 
     if disposition != StreamDisposition::Paused {
         if row.origin == HitlOrigin::Orchestrator {
@@ -743,7 +754,7 @@ async fn deliver(state: AppState, row: HitlRequest) {
     }
 }
 
-/// The agent answered the resume with "no such task" (see [`LostTaskSignal`]): its paused task is
+/// The agent answered every one of `posts` resume attempts with "no such task" (see `lost_task`): its paused task is
 /// gone, so the human's answer reached nothing. Records the terminal `agent_lost_task` and closes
 /// out the resume's trail the way an ordinary failed reply would.
 ///
@@ -757,32 +768,47 @@ async fn finish_agent_lost_task(
     row: &HitlRequest,
     flow_ctx: &FlowContext,
     agent_name: &str,
-    signal: LostTaskSignal,
+    posts: u32,
 ) {
     tracing::warn!(
-        id = %row.id, agent_id = %row.agent_id, task_id = ?row.task_id,
-        signal = signal.describe(),
+        id = %row.id, agent_id = %row.agent_id, task_id = ?row.task_id, posts,
         "hitl dispatcher: the agent no longer holds the paused task, so the human's answer could \
          not be delivered"
     );
-    if let Err(e) = state
+    let recorded = match state
         .hitl_store
-        .mark_resume_agent_lost_task(row.id, signal.describe())
+        .mark_resume_agent_lost_task(
+            row.id,
+            row.resume_dispatch_attempts,
+            &lost_task::describe(posts),
+        )
         .await
     {
-        // Left to retry: the claim lapses with its lease and the answer is sent again, which is
-        // harmless here (the agent has no task for it to land on) and ends up back in this
-        // function.
-        tracing::error!(
-            id = %row.id, %e,
-            "hitl dispatcher: could not record agent_lost_task; the row stays claimed until its \
-             lease lapses, then is retried"
+        Ok(recorded) => recorded,
+        Err(e) => {
+            // Left to retry: the claim lapses with its lease and the answer is sent again, which
+            // is harmless here (the agent has no task for it to land on) and ends up back in this
+            // function.
+            tracing::error!(
+                id = %row.id, %e,
+                "hitl dispatcher: could not record agent_lost_task; the row stays claimed until \
+                 its lease lapses, then is retried"
+            );
+            return;
+        }
+    };
+    if !recorded {
+        // Another claim owns the row now (this attempt's lease lapsed): it reports the outcome,
+        // and closing the trail or the flow step here could contradict what it recorded.
+        tracing::warn!(
+            id = %row.id,
+            "hitl dispatcher: agent_lost_task not recorded, the row is no longer this claim's"
         );
         return;
     }
     record_resume_trail(state, StreamDisposition::Failed, flow_ctx).await;
-    // The pause is over as far as the flow timeline is concerned: the human has answered it.
-    close_resumed_flow_step(state, row, agent_name).await;
+    // The paused step never ran on, so it is `failed`, not `resumed`.
+    close_resumed_flow_step(state, row, agent_name, LOST_TASK_FLOW_STEP_STATUS).await;
 }
 
 /// MAF resume. Unlike `deliver()`'s direct-chat
@@ -1024,6 +1050,76 @@ pub(crate) fn answer_text(row: &HitlRequest) -> String {
     }
 }
 
+/// What the agent's reply to one resume POST amounted to.
+enum ResumeAttempt {
+    /// The agent replied and the reply was classified.
+    Reply(ResumeReply),
+    /// The agent said the paused task does not exist (see `lost_task`).
+    TaskNotFound,
+    /// The request never reached the agent.
+    SendFailed(String),
+    /// The agent answered with a non-success HTTP status that says nothing about the task.
+    HttpFailure(reqwest::StatusCode),
+    /// The request went out and was answered, but the body could not be read or parsed.
+    Unclassified,
+}
+
+/// Disposition, the raw payload that produced it, and the reply text, as the two body consumers
+/// below return them.
+type ResumeReply = (StreamDisposition, Option<String>, Option<String>);
+
+/// Sends the resume once and classifies the answer.
+///
+/// An HTTP 404 is a lost task only when its body is the JSON-RPC `TaskNotFoundError`: a proxy or an
+/// ingress answers 404 too, and that is an ordinary retryable failure.
+async fn post_resume(
+    build_req: &impl Fn(&nasiko_types::a2a::JsonRpcRequest) -> reqwest::RequestBuilder,
+    req_body: &nasiko_types::a2a::JsonRpcRequest,
+    task_id: &str,
+    context_id: &str,
+    answer: &str,
+    continuation: &ContinuationGuard,
+) -> ResumeAttempt {
+    let response = match build_req(req_body).send().await {
+        Ok(response) => response,
+        Err(e) => return ResumeAttempt::SendFailed(e.to_string()),
+    };
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return match response.text().await {
+            Ok(body) if is_task_not_found(&body) => ResumeAttempt::TaskNotFound,
+            _ => ResumeAttempt::HttpFailure(status),
+        };
+    }
+    if !status.is_success() {
+        return ResumeAttempt::HttpFailure(status);
+    }
+
+    let is_sse = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/event-stream"));
+    let reply = if is_sse {
+        consume_sse_to_terminal(response, task_id, context_id, continuation).await
+    } else {
+        consume_json_to_terminal(
+            response,
+            context_id,
+            task_id,
+            answer,
+            build_req,
+            continuation,
+        )
+        .await
+    };
+    match reply {
+        None => ResumeAttempt::Unclassified,
+        Some((_, Some(data), _)) if is_task_not_found(&data) => ResumeAttempt::TaskNotFound,
+        Some(reply) => ResumeAttempt::Reply(reply),
+    }
+}
+
 /// Reads the agent's streaming reply to its first terminal or paused event — no client to relay
 /// to, so unlike `agent_stream()` this only classifies, it doesn't yield SSE frames. Returns the
 /// disposition, the raw `data:` payload of the event that produced it (used to extract a failure
@@ -1068,6 +1164,10 @@ async fn consume_sse_to_terminal(
                 continue;
             }
             last_data = Some(data.to_string());
+            // Not relayed: see `consume_json_to_terminal`'s note on the "task not found" reply.
+            if is_task_not_found(data) {
+                return Some((StreamDisposition::Failed, last_data, None));
+            }
             // The real agent event, verbatim — normalized to the exact same wire shape a live
             // turn's own `agent_stream()` already emits, so a reconnecting client's existing SSE
             // parser needs no reconnect-specific branch.
@@ -1118,7 +1218,11 @@ async fn consume_json_to_terminal(
 ) -> Option<(StreamDisposition, Option<String>, Option<String>)> {
     let mut body: serde_json::Value = response.json().await.ok()?;
 
-    if body.get("error").is_some() {
+    // Checked on the FIRST reply, before the `message/send` retry below: that retry is a different
+    // request and may fail differently, which would mask the agent's "task not found". Not pushed
+    // to the continuation buffer either: the dispatcher may re-send, and a client replaying the
+    // buffer must not see an error frame for an answer that is then delivered after all.
+    if body.get("error").is_some() && !is_task_not_found(&body.to_string()) {
         let retry_body =
             nasiko_types::a2a::build_send_request_for_task(answer, context_id, task_id);
         if let Ok(retry_response) = build_req(&retry_body).send().await
@@ -1129,6 +1233,9 @@ async fn consume_json_to_terminal(
     }
 
     let data = body.to_string();
+    if is_task_not_found(&data) {
+        return Some((StreamDisposition::Failed, Some(data), None));
+    }
     // Single reply, not a chunked stream — one push covers the whole non-streaming path, same
     // normalization as the streaming path above so a reconnect sees a consistent shape either way.
     continuation.push(normalize_agent_event(&data, task_id, context_id));
@@ -1147,15 +1254,21 @@ async fn consume_json_to_terminal(
     Some((disposition, Some(data), reply_text))
 }
 
-/// Flip the `flow_steps` row this pause interrupted out of `awaiting_human` once the answer has
-/// reached the agent. `'resumed'`, not `completed`/`failed`: no `ToolResult` ever arrives for a
-/// paused step, so either would misreport the original call's own outcome. Only
+/// Flip the `flow_steps` row this pause interrupted out of `awaiting_human` to `status` once the
+/// pause is over. `resumed` when the answer reached the agent, not `completed`/`failed`: no
+/// `ToolResult` ever arrives for a paused step, so either would misreport the original call's own
+/// outcome. `failed` when the agent no longer held the task and the answer reached nothing. Only
 /// `orchestrator_stream` writes `awaiting_human` steps, hence the origin guard.
 ///
 /// Keyed through `session_traces`, not this resume's `flow_ctx`: the paused step belongs to the
 /// turn that paused, and `deliver()` opens a fresh root flow, so the two ids never match.
 /// Owner-scoped for free — both columns reference `chat_sessions(session_id)`.
-async fn close_resumed_flow_step(state: &AppState, row: &HitlRequest, agent_name: &str) {
+async fn close_resumed_flow_step(
+    state: &AppState,
+    row: &HitlRequest,
+    agent_name: &str,
+    status: &str,
+) {
     if row.origin != HitlOrigin::Orchestrator {
         return;
     }
@@ -1173,7 +1286,7 @@ async fn close_resumed_flow_step(state: &AppState, row: &HitlRequest, agent_name
     // one flip *both* `awaiting_human` rows to `resumed`, falsely reporting a still-paused step
     // as resumed in the flow timeline (found in review).
     if let Err(e) = sqlx::query(
-        "UPDATE flow_steps SET status = 'resumed'
+        "UPDATE flow_steps SET status = $3
           WHERE id = (
               SELECT id FROM flow_steps
                WHERE status = 'awaiting_human' AND agent_name = $2
@@ -1184,6 +1297,7 @@ async fn close_resumed_flow_step(state: &AppState, row: &HitlRequest, agent_name
     )
     .bind(chat_session_id)
     .bind(&display_name)
+    .bind(status)
     .execute(&state.db)
     .await
     {

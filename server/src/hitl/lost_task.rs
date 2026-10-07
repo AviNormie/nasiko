@@ -2,88 +2,49 @@
 //!
 //! A paused A2A task lives in the agent's own memory: an `InMemoryTaskStore` loses it on restart,
 //! and an answer that reaches a replica that never saw the task finds nothing to continue. The
-//! agent says so in one of two ways, and the resume dispatcher treats either as the same fact:
+//! agent says so with A2A's `TaskNotFoundError`, JSON-RPC code -32001, carried in the reply: an
+//! SSE `data:` frame or a JSON body at HTTP 200 (the Python a2a-sdk), or the body of an HTTP 404
+//! (the Rust a2a-server, which maps the error to that status,
+//! `oss/docs/A2A_PROTOCOL.md` "HTTP Status Code Mapping").
 //!
-//! * a JSON-RPC `error` with code -32001, A2A's `TaskNotFoundError`, in the reply (an SSE `data:`
-//!   frame or a JSON body, at HTTP 200). This is what the Python a2a-sdk sends;
-//! * HTTP 404, the status the Rust a2a-server maps the same error to
-//!   (`oss/docs/A2A_PROTOCOL.md`, "HTTP Status Code Mapping"). The resume is a POST to the agent's
-//!   own JSON-RPC endpoint, which exists for any live A2A agent, so a 404 on it is the agent
-//!   answering about the task, not a missing route.
+//! The code is the only signal. A bare 404 is not one: a proxy, an ingress or a mid-rollout
+//! replica answers 404 with an HTML or empty body while the agent still holds the task, and
+//! concluding "lost" from it would throw away an answer that a retry could still deliver.
 //!
-//! Anything else, any other status or any other JSON-RPC code, is not this outcome and keeps its
-//! own handling.
-
-use reqwest::StatusCode;
+//! A single -32001 does not conclude anything either. A round-robin Service can route the resume
+//! to a replica that never saw the task while another replica holds it, so the dispatcher re-sends
+//! the resume a bounded number of times (`HITL_LOST_TASK_RETRIES`) before it records
+//! `agent_lost_task`.
 
 /// JSON-RPC code of A2A's `TaskNotFoundError`.
 const TASK_NOT_FOUND_CODE: i64 = -32001;
 
-/// Which of the two ways the agent said its paused task is gone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LostTaskSignal {
-    /// The resume POST was answered with HTTP 404.
-    HttpNotFound,
-    /// The reply carried a JSON-RPC `error` with code -32001.
-    TaskNotFoundError,
+/// Whether `data`, one SSE `data:` payload or a whole JSON body, is a JSON-RPC error carrying
+/// A2A's `TaskNotFoundError` code. Reads only `error.code`: a -32001 mentioned anywhere else in a
+/// reply (agent text, say) is not the agent reporting anything.
+pub(super) fn is_task_not_found(data: &str) -> bool {
+    let Ok(reply) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    reply
+        .pointer("/error/code")
+        .and_then(serde_json::Value::as_i64)
+        == Some(TASK_NOT_FOUND_CODE)
 }
 
-impl LostTaskSignal {
-    /// `Some` when `status` is the agent's HTTP-level "no such task".
-    pub(super) fn from_status(status: StatusCode) -> Option<Self> {
-        (status == StatusCode::NOT_FOUND).then_some(Self::HttpNotFound)
-    }
-
-    /// `Some` when `data`, one SSE `data:` payload or a whole JSON body, is a JSON-RPC error
-    /// carrying A2A's `TaskNotFoundError` code. Reads only `error.code`: a -32001 mentioned
-    /// anywhere else in a reply (agent text, say) is not the agent reporting anything.
-    pub(super) fn from_reply(data: &str) -> Option<Self> {
-        let reply: serde_json::Value = serde_json::from_str(data).ok()?;
-        let code = reply.pointer("/error/code")?.as_i64()?;
-        (code == TASK_NOT_FOUND_CODE).then_some(Self::TaskNotFoundError)
-    }
-
-    /// What `resume_last_error` records, so an operator can see which signal classified the row.
-    pub(super) fn describe(self) -> &'static str {
-        match self {
-            Self::HttpNotFound => "agent no longer holds the paused task (HTTP 404)",
-            Self::TaskNotFoundError => {
-                "agent no longer holds the paused task (A2A TaskNotFoundError, JSON-RPC -32001)"
-            }
-        }
-    }
+/// What `resume_last_error` records, so an operator can see how many times the agent said it had
+/// no such task before the row was concluded lost.
+pub(super) fn describe(attempts: u32) -> String {
+    format!(
+        "agent no longer holds the paused task (A2A TaskNotFoundError, JSON-RPC -32001, on all \
+         {attempts} delivery attempts)"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn an_http_404_is_the_agent_reporting_a_missing_task() {
-        assert_eq!(
-            LostTaskSignal::from_status(StatusCode::NOT_FOUND),
-            Some(LostTaskSignal::HttpNotFound)
-        );
-    }
-
-    #[test]
-    fn no_other_http_status_is_a_lost_task() {
-        for status in [
-            StatusCode::OK,
-            StatusCode::BAD_REQUEST,
-            StatusCode::UNAUTHORIZED,
-            StatusCode::FORBIDDEN,
-            StatusCode::REQUEST_TIMEOUT,
-            StatusCode::CONFLICT,
-            StatusCode::TOO_MANY_REQUESTS,
-            StatusCode::INTERNAL_SERVER_ERROR,
-            StatusCode::BAD_GATEWAY,
-            StatusCode::SERVICE_UNAVAILABLE,
-        ] {
-            assert_eq!(LostTaskSignal::from_status(status), None, "{status}");
-        }
-    }
 
     #[test]
     fn a_json_rpc_task_not_found_error_is_a_lost_task() {
@@ -93,10 +54,7 @@ mod tests {
             "error": { "code": -32001, "message": "Task not found" },
         })
         .to_string();
-        assert_eq!(
-            LostTaskSignal::from_reply(&reply),
-            Some(LostTaskSignal::TaskNotFoundError)
-        );
+        assert!(is_task_not_found(&reply));
     }
 
     #[test]
@@ -108,11 +66,7 @@ mod tests {
             json!({ "id": null, "error": { "code": -32001, "message": "no such task: t-1" } }),
             json!({ "error": { "code": -32001, "message": "", "data": { "taskId": "t-1" } } }),
         ] {
-            assert_eq!(
-                LostTaskSignal::from_reply(&reply.to_string()),
-                Some(LostTaskSignal::TaskNotFoundError),
-                "{reply}"
-            );
+            assert!(is_task_not_found(&reply.to_string()), "{reply}");
         }
     }
 
@@ -122,7 +76,7 @@ mod tests {
             -32700, -32600, -32601, -32602, -32603, -32002, -32006, -32009, 0, 404,
         ] {
             let reply = json!({ "id": 1, "error": { "code": code, "message": "x" } }).to_string();
-            assert_eq!(LostTaskSignal::from_reply(&reply), None, "code {code}");
+            assert!(!is_task_not_found(&reply), "code {code}");
         }
     }
 
@@ -137,11 +91,7 @@ mod tests {
             json!({ "error": { "message": "Task not found" } }),
             json!({ "error": null }),
         ] {
-            assert_eq!(
-                LostTaskSignal::from_reply(&reply.to_string()),
-                None,
-                "{reply}"
-            );
+            assert!(!is_task_not_found(&reply.to_string()), "{reply}");
         }
     }
 
@@ -154,29 +104,28 @@ mod tests {
             json!([-32001]),
         ] {
             let reply = json!({ "error": { "code": code } }).to_string();
-            assert_eq!(LostTaskSignal::from_reply(&reply), None, "{reply}");
+            assert!(!is_task_not_found(&reply), "{reply}");
         }
     }
 
     #[test]
-    fn a_reply_that_is_not_json_is_not_a_lost_task() {
+    fn a_body_that_is_not_json_is_not_a_lost_task() {
+        // An HTTP 404 from a proxy or an ingress, which says nothing about the task.
         for reply in [
             "",
             "not json",
+            "<html><body><h1>404 Not Found</h1></body></html>",
             "data: {\"error\":{\"code\":-32001}}",
             "{\"error\":",
         ] {
-            assert_eq!(LostTaskSignal::from_reply(reply), None, "{reply:?}");
+            assert!(!is_task_not_found(reply), "{reply:?}");
         }
     }
 
     #[test]
-    fn each_signal_describes_itself_distinctly() {
-        assert!(LostTaskSignal::HttpNotFound.describe().contains("404"));
-        assert!(
-            LostTaskSignal::TaskNotFoundError
-                .describe()
-                .contains("-32001")
-        );
+    fn the_description_names_the_signal_and_the_attempts() {
+        let text = describe(4);
+        assert!(text.contains("-32001"));
+        assert!(text.contains("4 delivery attempts"));
     }
 }

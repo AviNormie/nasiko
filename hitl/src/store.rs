@@ -160,9 +160,16 @@ pub trait HitlStore: Send + Sync {
     /// `resume_status = 'agent_lost_task'`, releases the lease and stores `error` (which signal
     /// said so) in `resume_last_error`. Terminal and never retried: re-sending the answer cannot
     /// find a task that is gone, so unlike `mark_resume_unknown` there is no double-delivery to
-    /// guard against. Only acts on a row still `not_started`, so a late or duplicate attempt can
-    /// never overwrite an outcome another attempt already recorded.
-    async fn mark_resume_agent_lost_task(&self, id: Uuid, error: &str) -> Result<(), HitlError>;
+    /// guard against. Only acts on a row still `not_started` AND still on claim number `attempt`
+    /// (`resume_dispatch_attempts`), so neither a late duplicate nor an attempt whose lease lapsed
+    /// and was taken over by a later claim can overwrite an outcome the live claim owns. Returns
+    /// whether this call wrote the outcome; the caller skips every follow-up side effect when not.
+    async fn mark_resume_agent_lost_task(
+        &self,
+        id: Uuid,
+        attempt: i32,
+        error: &str,
+    ) -> Result<bool, HitlError>;
     /// Records that the human clicked "start authorization" (§7/Phase 4) — an in-place,
     /// non-terminal annotation on `human_response.auth_outcome`, deliberately **not** a call to
     /// `resolve()`: the row stays `pending` (the human hasn't actually completed the external
@@ -829,18 +836,24 @@ impl HitlStore for PgHitlStore {
         Ok(())
     }
 
-    async fn mark_resume_agent_lost_task(&self, id: Uuid, error: &str) -> Result<(), HitlError> {
-        sqlx::query(
+    async fn mark_resume_agent_lost_task(
+        &self,
+        id: Uuid,
+        attempt: i32,
+        error: &str,
+    ) -> Result<bool, HitlError> {
+        let result = sqlx::query(
             "UPDATE hitl_requests
-                SET resume_status = $3, resume_claimed_at = NULL, resume_last_error = $2
-              WHERE id = $1 AND resume_status = 'not_started'",
+                SET resume_status = $4, resume_claimed_at = NULL, resume_last_error = $3
+              WHERE id = $1 AND resume_status = 'not_started' AND resume_dispatch_attempts = $2",
         )
         .bind(id)
+        .bind(attempt)
         .bind(error)
         .bind(ResumeStatus::AgentLostTask.as_str())
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     async fn record_auth_start(&self, id: Uuid) -> Result<Option<HitlRequest>, HitlError> {
@@ -1025,8 +1038,9 @@ mod resolve_display_row_tests {
         async fn mark_resume_agent_lost_task(
             &self,
             _id: Uuid,
+            _attempt: i32,
             _error: &str,
-        ) -> Result<(), HitlError> {
+        ) -> Result<bool, HitlError> {
             unimplemented!("not exercised by resolve_display_row")
         }
         async fn record_auth_start(&self, _id: Uuid) -> Result<Option<HitlRequest>, HitlError> {

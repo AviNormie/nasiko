@@ -779,10 +779,21 @@ async fn mark_resume_agent_lost_task_is_terminal_and_releases_the_lease() {
     let store = PgHitlStore::new(pool.clone());
     let id = claimed_row(&store, &pool).await;
 
-    store
-        .mark_resume_agent_lost_task(id, "agent no longer holds the paused task (HTTP 404)")
+    let attempt = store
+        .get(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .resume_dispatch_attempts;
+    let written = store
+        .mark_resume_agent_lost_task(
+            id,
+            attempt,
+            "agent no longer holds the paused task (HTTP 404)",
+        )
         .await
         .unwrap();
+    assert!(written, "the live claim must be able to record its outcome");
 
     let after = store.get(id).await.unwrap().unwrap();
     assert_eq!(
@@ -811,14 +822,56 @@ async fn mark_resume_agent_lost_task_never_overwrites_an_outcome() {
     let store = PgHitlStore::new(pool.clone());
     let id = claimed_row(&store, &pool).await;
     store.mark_resume_completed(id).await.unwrap();
+    let attempt = store
+        .get(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .resume_dispatch_attempts;
 
-    store
-        .mark_resume_agent_lost_task(id, "agent no longer holds the paused task (HTTP 404)")
+    let written = store
+        .mark_resume_agent_lost_task(
+            id,
+            attempt,
+            "agent no longer holds the paused task (HTTP 404)",
+        )
         .await
         .unwrap();
 
+    assert!(!written, "nothing was written, so the caller must be told");
     let after = store.get(id).await.unwrap().unwrap();
     assert_eq!(after.resume_status, nasiko_hitl::ResumeStatus::Completed);
+    assert_eq!(after.resume_last_error, None);
+}
+
+/// An attempt whose lease lapsed and was taken over by a later claim (a higher
+/// `resume_dispatch_attempts`) must not record an outcome the live claim owns.
+#[tokio::test]
+#[ignore = "requires PostgreSQL (DATABASE_URL)"]
+async fn mark_resume_agent_lost_task_ignores_a_superseded_claim() {
+    let pool = pool().await;
+    let store = PgHitlStore::new(pool.clone());
+    let id = claimed_row(&store, &pool).await;
+    let stale_attempt = store
+        .get(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .resume_dispatch_attempts;
+    sqlx::query("UPDATE hitl_requests SET resume_dispatch_attempts = resume_dispatch_attempts + 1 WHERE id = $1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let written = store
+        .mark_resume_agent_lost_task(id, stale_attempt, "stale claim")
+        .await
+        .unwrap();
+
+    assert!(!written);
+    let after = store.get(id).await.unwrap().unwrap();
+    assert_eq!(after.resume_status, nasiko_hitl::ResumeStatus::NotStarted);
     assert_eq!(after.resume_last_error, None);
 }
 

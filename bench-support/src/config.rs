@@ -152,6 +152,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         hitl_resume_lease_minutes: 2,
         hitl_resume_max_attempts: 3,
         hitl_resume_retry_delay_secs: 2,
+        hitl_lost_task_retries: 3,
         github_client_id: None,
         github_client_secret: None,
         router_shortlist_threshold: 15,
