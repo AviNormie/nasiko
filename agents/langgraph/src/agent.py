@@ -127,7 +127,7 @@ class DeepAnalystAgent:
         # One checkpoint per turn, not per step: a turn then costs a handful of calls against the
         # platform's per-agent rate limit, and a crash mid-turn resumes from the previous turn
         # instead of from a half-finished tool call no new message could follow.
-        for item in self.graph.stream(inputs, config, stream_mode="values", durability="exit"):
+        async for item in self.graph.astream(inputs, config, stream_mode="values", durability="exit"):
             message = item["messages"][-1]
             if isinstance(message, AIMessage) and message.tool_calls:
                 tool_names = [tc["name"] for tc in message.tool_calls]
@@ -143,10 +143,10 @@ class DeepAnalystAgent:
                     "content": "Processing data...",
                 }
 
-        yield self._get_response(config)
+        yield await self._get_response(config)
 
-    def _get_response(self, config) -> dict[str, Any]:
-        current_state = self.graph.get_state(config)
+    async def _get_response(self, config) -> dict[str, Any]:
+        current_state = await self.graph.aget_state(config)
         structured_response = current_state.values.get("structured_response")
         if structured_response and isinstance(structured_response, ResponseFormat):
             return {
