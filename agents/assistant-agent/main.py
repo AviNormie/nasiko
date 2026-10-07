@@ -35,7 +35,6 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
-from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
@@ -45,6 +44,8 @@ from a2a.types import (
 )
 from openai import AsyncOpenAI
 from starlette.applications import Starlette
+
+from nasiko_state import make_task_store
 
 DISCOVERY_URL = os.environ.get("A2A_DISCOVERY_URL", "")
 
@@ -294,7 +295,7 @@ def main(host, port):
 
     handler = DefaultRequestHandler(
         agent_executor=AssistantExecutor(llm, model),
-        task_store=InMemoryTaskStore(),
+        task_store=make_task_store(),
         agent_card=agent_card,
     )
 

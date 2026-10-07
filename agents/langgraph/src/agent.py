@@ -7,11 +7,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 # [nasiko:imports]
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from nasiko_state import make_checkpointer
 from pydantic import BaseModel
 
-memory = MemorySaver()
+memory = make_checkpointer()
 
 
 @tool

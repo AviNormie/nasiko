@@ -21,7 +21,6 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
-from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
@@ -34,6 +33,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from agent import run
+from nasiko_state import make_task_store
 
 _CARD_PATH = Path(__file__).parent.parent / "AgentCard.json"
 
@@ -105,7 +105,7 @@ def main() -> None:
 
     handler = DefaultRequestHandler(
         agent_executor=EchoExecutor(),
-        task_store=InMemoryTaskStore(),
+        task_store=make_task_store(),
         agent_card=agent_card,
     )
     routes = [Route("/health", health)]

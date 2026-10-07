@@ -21,11 +21,11 @@ import click
 import uvicorn
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
-from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
 from starlette.applications import Starlette
 
 from agent_executor import TranslatorExecutor
+from nasiko_state import make_task_store
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def main(host: str, port: int):
 
     handler = DefaultRequestHandler(
         agent_executor=TranslatorExecutor(),
-        task_store=InMemoryTaskStore(),
+        task_store=make_task_store(),
         agent_card=agent_card,
     )
 
