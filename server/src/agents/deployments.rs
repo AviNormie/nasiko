@@ -419,7 +419,6 @@ pub(crate) async fn restart_deployment(
             writable_path: info.writable_path.clone(),
             owner_id: info.owner_id,
             force_pull: false,
-            health_path: None,
         };
 
         match state.runtime.deploy(&spec).await {

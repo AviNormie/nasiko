@@ -331,13 +331,6 @@ pub struct DeploymentSpec {
     /// defaults this to `false` (unchanged behavior: reuse the local cache).
     /// `DockerRuntime` reads this; `KubeRuntime` does not use it yet.
     pub force_pull: bool,
-    /// An HTTP path that answers 2xx once the agent can serve. Runtimes that
-    /// probe a container for readiness may use it instead of only testing that
-    /// the primary port accepts connections. `None` (the default) means no such
-    /// path is known, so a runtime falls back to its connection-level check.
-    /// Ignored by `DockerRuntime`.
-    #[serde(default)]
-    pub health_path: Option<String>,
 }
 
 /// Validates a `--writable-path` mount target. Both backends consume the path
