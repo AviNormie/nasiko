@@ -288,16 +288,19 @@ The platform injects the store's address and your credential into every deployme
 | `NASIKO_AGENT_TOKEN` | Your agent's credential, sent as a `Bearer` token. Falls back to `MCP_GATEWAY_TOKEN`, which holds the same value. |
 
 **Python (`a2a-sdk` 0.3.x and 1.x).** An image is built from your agent's directory only, so copy
-`oss/agents/common/nasiko_state.py` next to your `main.py` and change one constructor argument:
+`oss/agents/common/nasiko_state.py` next to your `main.py`, change one constructor argument and
+hook the store into the server's shutdown:
 
 ```python
-from nasiko_state import make_task_store
+from nasiko_state import install_shutdown_hooks, make_task_store
 
 handler = DefaultRequestHandler(
     agent_executor=MyExecutor(),
     task_store=make_task_store(),  # was InMemoryTaskStore()
     agent_card=card,
 )
+app = Starlette(routes=routes)
+install_shutdown_hooks(app)  # flushes pending writes when the server stops
 ```
 
 `make_task_store()` returns the SDK's in-memory store when `NASIKO_STATE_URL` is unset, so the
@@ -310,8 +313,8 @@ same code runs unchanged on your laptop. A LangGraph agent swaps `MemorySaver()`
 - A save that changes `task.status.state` (a task's first save, `input-required`, every terminal
   state) is on the server before `save()` returns.
 - Any other save, such as streamed artifact chunks, is coalesced to at most one write per 500 ms
-  per task. Pending writes are flushed when the task changes state, on `aclose()` and when the
-  interpreter exits.
+  per task. A pending write goes out when its window ends, when the task changes state, and when
+  the server shuts down through `install_shutdown_hooks` (uvicorn shuts down on SIGTERM).
 - After a hard crash (SIGKILL, power loss) at most the last 500 ms of those non-status updates
   is lost. A state change that `save()` returned for always survives.
 
