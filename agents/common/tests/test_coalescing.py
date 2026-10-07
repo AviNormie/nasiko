@@ -217,12 +217,13 @@ class TestOrdering:
                 await release.wait()
 
         state_server.gate = hold_the_next_put
-        await store.save(with_artifact_text(task, "2"))  # deferred: its timer will start a write
-        await asyncio.wait_for(entered.wait(), 3)  # that write is now in flight and held
+        # Saves run as tasks so a regression shows up as a failed assertion, never as a hung test.
+        deferred = asyncio.create_task(store.save(with_artifact_text(task, "2")))
+        await asyncio.wait_for(entered.wait(), 3)  # the write of "2" is now in flight and held
         change = asyncio.create_task(store.save(with_artifact_text(with_state(task, "input-required"), "3")))
         await asyncio.sleep(0.1)
         release.set()
-        await change
+        await asyncio.wait_for(asyncio.gather(deferred, change), 5)
         await store.aclose()
 
         assert written_texts(state_server) == ["1", "2", "3"]
