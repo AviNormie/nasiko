@@ -6,7 +6,6 @@ import {
 } from '@tanstack/react-router'
 import { act, render, waitFor } from '@testing-library/react'
 import { expect, it } from 'vitest'
-import '@/features/agents/search' // augments HistoryState with agentDeleted
 import { useSetSearch } from './search'
 
 it('useSetSearch keeps the sibling list across a search change and drops other state', async () => {
@@ -24,6 +23,7 @@ it('useSetSearch keeps the sibling list across a search change and drops other s
   await act(() =>
     router.navigate({
       to: '/',
+      // agentDeleted: an agents HistoryState key (features/agents/search.ts)
       state: { siblings: ['a', 'b'], agentDeleted: { name: 'x', errors: [], stopped: 0 } },
     }),
   )
