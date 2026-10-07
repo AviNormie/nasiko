@@ -8,11 +8,12 @@
  * failing, then most tokens, then slowest. `?span=` is the HEX span id.
  */
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, useRouter } from '@tanstack/react-router'
+import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { Link2, ListTree, Table2, Workflow } from 'lucide-react'
 import { useDeferredValue, useMemo, useState } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
 import { EmptyState } from '@/components/shared/state-card'
 import { SearchInput } from '@/components/shared/search-input'
 import {
@@ -25,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/toggle'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
+import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import {
   Select,
   SelectContent,
@@ -62,6 +64,7 @@ import { requestSpanOf } from '@/features/optimization/logic'
 import { sessionKeys, useSessionDetail } from '@/features/sessions/api'
 import type { SessionsSearch, TraceSearch } from '@/features/sessions/search'
 import { fmtLatency, fmtMoney, fmtShortDay, fmtTokens, fmtUtcDayTime } from '@/lib/format'
+import { useSiblings } from '@/lib/siblings'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useAgentCallTargets, useKnownFailing, useTraceDetail, useWasteCosts } from './api'
 import { SessionOptimisation } from './SessionOptimisation'
@@ -69,6 +72,41 @@ import { SpanPanel, type SpanTab } from './SpanPanel'
 import { Legend, SpanTable, Waterfall } from './Waterfall'
 import { useCopy } from '@/lib/useCopy'
 import { useFrozenNow } from '@/lib/useReturnTick'
+
+/**
+ * Previous/Next through the Sessions rows this trace was opened from (lib/siblings.ts). The list's window and filters
+ * go along; the trace and span are this session's own, so they don't. Replaced: Back still returns to the list.
+ */
+function SessionSiblings({
+  sessionId,
+  back,
+}: {
+  sessionId: string
+  back: Partial<SessionsSearch>
+}) {
+  const navigate = useNavigate()
+  const around = useSiblings(sessionId)
+  if (!around) return null
+  const go = (id: string | undefined) => {
+    if (id)
+      void navigate({
+        to: '/sessions/$sessionId',
+        params: { sessionId: id },
+        search: back,
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="session"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+    />
+  )
+}
 
 type SetTraceSearch = (patch: Partial<TraceSearch>, opts?: { replace?: boolean }) => void
 
@@ -337,7 +375,10 @@ export function SessionTracePage({
         }
         actions={
           <>
+            <SessionSiblings sessionId={sessionId} back={back} />
             <OpenChatLink sessionId={sessionId} />
+            {/* The selected trace's flow: a flow's id is its trace id (plans/feat-flows.md F19). */}
+            {traceId ? <OpenFlowLink flowId={traceId} /> : null}
             {firstStart ? (
               <Button asChild variant="outline" size="sm">
                 <Link
