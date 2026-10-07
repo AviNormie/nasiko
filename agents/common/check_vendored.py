@@ -31,7 +31,7 @@ from pathlib import Path
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 COMMON_DIR_NAME = "common"
-VENDORED_MODULES = ("telemetry.py", "nasiko_state.py")
+VENDORED_MODULES = ("telemetry.py", "nasiko_state.py", "nasiko_adk_sessions.py")
 SKIPPED_DIRECTORIES = frozenset({"node_modules", "target", ".venv", "__pycache__", ".git"})
 
 # Copies that predate this check and carry agent-specific additions on top of the canonical file

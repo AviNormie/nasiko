@@ -13,9 +13,10 @@ CANONICAL = "# canonical\nVALUE = 1\n"
 
 @pytest.fixture
 def agents(tmp_path: Path) -> Path:
-    """An agents tree with canonical modules and one agent that vendors both of them correctly."""
+    """An agents tree with the canonical modules and one agent that vendors the first two correctly."""
     write(tmp_path / "common" / "nasiko_state.py", CANONICAL)
     write(tmp_path / "common" / "telemetry.py", CANONICAL)
+    write(tmp_path / "common" / "nasiko_adk_sessions.py", CANONICAL)
     write(tmp_path / "alpha" / "src" / "nasiko_state.py", CANONICAL)
     write(tmp_path / "alpha" / "src" / "telemetry.py", CANONICAL)
     write(
@@ -220,3 +221,12 @@ def test_main_exits_zero_when_in_sync_and_nonzero_otherwise(agents, monkeypatch,
     write(agents / "alpha" / "src" / "nasiko_state.py", "stale\n")
     assert check_vendored.main() == 1
     assert "differs" in capsys.readouterr().out
+
+
+def test_the_adk_session_module_is_vendored_and_checked_like_the_others(agents):
+    write(agents / "beta" / "src" / "agent.py", "from nasiko_adk_sessions import session_service_from_env\n")
+
+    problems = check(agents, known_divergent={})
+
+    assert len(problems) == 1
+    assert "beta/src/agent.py imports nasiko_adk_sessions" in problems[0].message.replace("\\", "/")
