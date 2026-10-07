@@ -12,7 +12,7 @@ use super::page::{ListedRow, Page, build_page};
 use super::payload::{BoundedPayload, PayloadCipher};
 use super::precondition::Precondition;
 use super::repo::{
-    self, DeleteOutcome, KvQuery, NewEntry, NewTask, PutOutcome, Stamp, Store, TaskQuery,
+    self, DeleteOutcome, Entry, KvQuery, NewEntry, NewTask, PutOutcome, Stamp, Store, TaskQuery,
 };
 use super::request::{KvKey, StateJson, StateQuery, TaskId};
 use super::wire::{
@@ -128,15 +128,13 @@ async fn delete_task(
     task_id: TaskId,
     precondition: Precondition,
 ) -> Result<StatusCode, StateError> {
-    let outcome = repo::delete(
-        &state.db,
+    let entry = Entry {
         agent_id,
-        Store::Tasks,
-        task_id.as_str(),
-        precondition,
-        state.config.agent_state_ttl_days,
-    )
-    .await?;
+        store: Store::Tasks,
+        name: task_id.as_str(),
+    };
+    let ttl_days = state.config.agent_state_ttl_days;
+    let outcome = repo::delete(&state.db, entry, precondition, ttl_days).await?;
     deleted(outcome, "task")
 }
 
@@ -198,15 +196,13 @@ async fn delete_kv(
     key: KvKey,
     precondition: Precondition,
 ) -> Result<StatusCode, StateError> {
-    let outcome = repo::delete(
-        &state.db,
+    let entry = Entry {
         agent_id,
-        Store::Kv,
-        key.as_str(),
-        precondition,
-        state.config.agent_state_ttl_days,
-    )
-    .await?;
+        store: Store::Kv,
+        name: key.as_str(),
+    };
+    let ttl_days = state.config.agent_state_ttl_days;
+    let outcome = repo::delete(&state.db, entry, precondition, ttl_days).await?;
     deleted(outcome, "key")
 }
 
