@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -134,13 +133,14 @@ pub trait HitlStore: Send + Sync {
     async fn mark_resume_completed(&self, id: Uuid) -> Result<(), HitlError>;
     /// Delivery failed before or during the attempt. Releases the lease for a retry unless
     /// `resume_dispatch_attempts` has reached `failure`'s threshold, in which case `resume_status`
-    /// becomes the terminal `failed`.
+    /// becomes the terminal `failed`. Returns the `resume_status` the row holds afterwards, so the
+    /// caller knows whether this failure was terminal without reading the row back.
     async fn mark_resume_failed(
         &self,
         id: Uuid,
         error: &str,
         failure: FailureKind,
-    ) -> Result<(), HitlError>;
+    ) -> Result<ResumeStatus, HitlError>;
     /// Flips every `pending` row whose `expires_at` has passed to `expired`. Called once per
     /// dispatcher poll tick (`hitl/mod.rs::run`) — cheap, since `idx_hitl_pending_owner` already
     /// covers `status = 'pending'`. Returns the number of rows expired, for logging.
@@ -374,16 +374,11 @@ impl TryFrom<HitlRequestRow> for HitlRequest {
     }
 }
 
-/// Called with each row [`PgHitlStore::create`] newly inserts; see
-/// [`PgHitlStore::with_pause_hook`].
-pub type PauseHook = Arc<dyn Fn(&HitlRequest) + Send + Sync>;
-
 pub struct PgHitlStore {
     pool: PgPool,
     /// Applied at row-creation time (`create`) as `now() + interval 'N days'`. Configurable so an
     /// operator can tune it without a code change — see `with_ttl_days`.
     ttl_days: i64,
-    on_pause: Option<PauseHook>,
 }
 
 impl PgHitlStore {
@@ -396,23 +391,7 @@ impl PgHitlStore {
     }
 
     pub fn with_ttl_days(pool: PgPool, ttl_days: i64) -> Self {
-        Self {
-            pool,
-            ttl_days,
-            on_pause: None,
-        }
-    }
-
-    /// Calls `hook` with every row `create` newly inserts, so the host can count pauses without
-    /// this crate knowing how. `create` is the one funnel every conversational and MAF pause goes
-    /// through (the chat dispatch paths, the resume dispatcher's follow-up pause, the MAF worker),
-    /// which is why the hook lives here rather than at each call site. The MCP gateway's own
-    /// `mcp_tool` rows are inserted by `repo::create_pending_*` instead and never reach it. The
-    /// hook does not fire when `create` returns the already-pending row an idempotent re-create
-    /// collided with: no row was created. Runs inline after the insert and must not block.
-    pub fn with_pause_hook(mut self, hook: PauseHook) -> Self {
-        self.on_pause = Some(hook);
-        self
+        Self { pool, ttl_days }
     }
 
     /// Re-fetch the pending row a unique-violation on `create` must have collided with — either
@@ -513,10 +492,11 @@ impl HitlStore for PgHitlStore {
 
         match result {
             Ok(row) => {
+                // `create` is the one funnel every conversational and MAF pause goes through; the
+                // `mcp_tool` rows are counted where `repo` inserts them. Not reached when the
+                // insert collided with an already-pending row below: no row was created.
                 let created: HitlRequest = row.try_into()?;
-                if let Some(hook) = &self.on_pause {
-                    hook(&created);
-                }
+                crate::observer::pause_recorded(&created);
                 Ok(created)
             }
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
@@ -778,20 +758,26 @@ impl HitlStore for PgHitlStore {
         id: Uuid,
         error: &str,
         failure: FailureKind,
-    ) -> Result<(), HitlError> {
-        sqlx::query(
+    ) -> Result<ResumeStatus, HitlError> {
+        let status: Option<String> = sqlx::query_scalar(
             "UPDATE hitl_requests
                 SET resume_last_error = $2,
                     resume_claimed_at = NULL,
                     resume_status = CASE WHEN resume_dispatch_attempts >= $3 THEN 'failed' ELSE resume_status END
-              WHERE id = $1",
+              WHERE id = $1
+          RETURNING resume_status",
         )
         .bind(id)
         .bind(error)
         .bind(failure.threshold())
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        Ok(())
+        let status = status.ok_or(HitlError::NotFound(id))?;
+        status.parse().map_err(|_| {
+            HitlError::CorruptRow(format!(
+                "resume_status column holds unrecognized value {status:?}"
+            ))
+        })
     }
 
     async fn expire_stale(&self) -> Result<u64, HitlError> {
@@ -1023,7 +1009,7 @@ mod resolve_display_row_tests {
             _id: Uuid,
             _error: &str,
             _failure: FailureKind,
-        ) -> Result<(), HitlError> {
+        ) -> Result<ResumeStatus, HitlError> {
             unimplemented!("not exercised by resolve_display_row")
         }
         async fn expire_stale(&self) -> Result<u64, HitlError> {

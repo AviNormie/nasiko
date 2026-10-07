@@ -5,10 +5,11 @@
 //!
 //! A claimed delivery either releases the claim for a retry or ends in a terminal `resume_status`:
 //! `completed`, `failed`, `delivery_outcome_unknown`, or `agent_lost_task` when the agent no longer
-//! holds the paused task (see `lost_task`). `deliver_and_meter` reads that terminal outcome back
-//! from the row and records it on the `nasiko.hitl.*` metrics (`telemetry/genai.rs`); pauses are
-//! counted by the store when it creates the row. `mcp_tool` rows resume through `nasiko-hitl`'s
-//! own dispatcher, not this one.
+//! holds the paused task (see `lost_task`). Each terminal write is metered right after it, through
+//! `nasiko_hitl::observer`, onto the `nasiko.hitl.*` metrics (`telemetry/genai.rs`). Pauses are
+//! counted where rows are inserted (`nasiko-hitl`'s store and `repo`), which also covers the MCP
+//! gateway's `mcp_tool` rows; those resume through `nasiko-hitl`'s own dispatcher, not this one,
+//! and that dispatcher meters its own outcomes through the same observer.
 
 pub mod continuation;
 mod lost_task;
@@ -151,7 +152,7 @@ pub async fn run(state: AppState, mut notify: mpsc::Receiver<()>) {
             };
 
             let state_clone = state.clone();
-            deliveries.spawn(async move { deliver_and_meter(state_clone, claimed).await });
+            deliveries.spawn(async move { deliver(state_clone, claimed).await });
         }
 
         // Reap whatever has finished without blocking this tick — a still-running delivery is
@@ -168,46 +169,60 @@ pub async fn run(state: AppState, mut notify: mpsc::Receiver<()>) {
     }
 }
 
-/// One claimed delivery attempt, then the metering of whatever terminal outcome it reached.
-///
-/// The outcome is read back from the row rather than reported by each of `deliver`'s many exits:
-/// the row is the source of truth (a retryable failure leaves it `not_started`, which is not an
-/// outcome yet), and an exit added to `deliver` later is metered without anyone having to
-/// remember to.
-async fn deliver_and_meter(state: AppState, claimed: HitlRequest) {
-    let (id, attempt) = (claimed.id, claimed.resume_dispatch_attempts);
-    deliver(state.clone(), claimed).await;
-    meter_resume_outcome(&state, id, attempt).await;
+/// Reports a terminal outcome the moment it has been written, so it is counted before any
+/// follow-up work (an orchestrator turn can run for tens of seconds) and so its resume duration
+/// ends at the write, not at the end of that work.
+fn meter_outcome(row: &HitlRequest, outcome: ResumeStatus) {
+    nasiko_hitl::observer::resume_finished(row, outcome, chrono::Utc::now());
 }
 
-/// Records the terminal outcome `deliver` left on row `id`, if claim number `attempt` is the one
-/// that left it.
-async fn meter_resume_outcome(state: &AppState, id: Uuid, attempt: i32) {
-    let row = match state.hitl_store.get(id).await {
-        Ok(Some(row)) => row,
-        // Deleted since (its agent was removed): nothing left to attribute an outcome to.
-        Ok(None) => return,
-        Err(e) => {
-            // Telemetry only. The outcome itself is already durable, so a failed read-back must
-            // not touch delivery; it just leaves this one outcome unmetered.
-            tracing::warn!(
-                %id, %e,
-                "hitl dispatcher: could not read the row back to meter its resume outcome"
-            );
-            return;
-        }
-    };
-    if outcome_recorded_by_attempt(&row, attempt) {
-        state.genai_metrics.record_hitl_resume_finished(&row);
+/// Records a failed delivery and, when that failure was the terminal one (the cap was reached or
+/// it was permanent), meters it. A retryable failure that leaves the row `not_started` is not an
+/// outcome yet.
+async fn fail_resume(state: &AppState, row: &HitlRequest, error: &str, failure: FailureKind) {
+    match state
+        .hitl_store
+        .mark_resume_failed(row.id, error, failure)
+        .await
+    {
+        Ok(ResumeStatus::Failed) => meter_outcome(row, ResumeStatus::Failed),
+        Ok(_) => {}
+        Err(e) => tracing::error!(
+            id = %row.id, %e,
+            "hitl dispatcher: could not record the failed delivery; the claim lapses with its lease"
+        ),
     }
 }
 
-/// Whether `row` holds a terminal outcome written by claim number `attempt`. `not_started` means a
-/// retryable failure released the claim, so there is no outcome yet; a different attempt count
-/// means a later claim took the row over (a lease lapsed on a slow delivery), and that claim
-/// reports the outcome, not this one.
-fn outcome_recorded_by_attempt(row: &HitlRequest, attempt: i32) -> bool {
-    row.resume_status != ResumeStatus::NotStarted && row.resume_dispatch_attempts == attempt
+/// Takes the row out of the claimable pool as `delivery_outcome_unknown` because the agent may
+/// already have acted on the answer, so a retry could double-deliver it.
+async fn quarantine_unknown(state: &AppState, row: &HitlRequest) {
+    if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
+        tracing::error!(
+            id = %row.id, %e,
+            "hitl dispatcher: mark_resume_unknown itself failed - row stays reclaimable once its \
+             lease expires, reopening the double-delivery this call exists to prevent"
+        );
+        return;
+    }
+    meter_outcome(row, ResumeStatus::DeliveryOutcomeUnknown);
+}
+
+/// Records that the agent received the answer. If the write fails the agent already has the
+/// resume, so retrying would deliver it a second time (a duplicate MAF job for that origin):
+/// the row is quarantined as unknown instead.
+async fn complete_resume(state: &AppState, row: &HitlRequest) {
+    match state.hitl_store.mark_resume_completed(row.id).await {
+        Ok(()) => meter_outcome(row, ResumeStatus::Completed),
+        Err(e) => {
+            tracing::error!(
+                id = %row.id, %e,
+                "hitl dispatcher: resume delivered but mark_resume_completed failed - marking \
+                 delivery outcome unknown to avoid re-delivering to the agent"
+            );
+            quarantine_unknown(state, row).await;
+        }
+    }
 }
 
 async fn deliver(state: AppState, row: HitlRequest) {
@@ -270,13 +285,7 @@ async fn deliver(state: AppState, row: HitlRequest) {
             attempts = row.resume_dispatch_attempts,
             "hitl dispatcher: giving up after repeated crash-interrupted attempts"
         );
-        if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
-            tracing::error!(
-                id = %row.id, %e,
-                "hitl dispatcher: mark_resume_unknown itself failed — row stays reclaimable \
-                 once its lease expires, reopening the double-delivery this call exists to prevent"
-            );
-        }
+        quarantine_unknown(&state, &row).await;
         return;
     }
     if row.origin == HitlOrigin::Maf {
@@ -293,25 +302,23 @@ async fn deliver(state: AppState, row: HitlRequest) {
         // instead. Defensive, not a real path; stays correct only as long as that query's origin
         // list is never widened to include `mcp_tool` without updating this arm too.
         tracing::warn!(id = %row.id, origin = ?row.origin, "hitl dispatcher: unsupported origin");
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                "origin not yet supported by the resume dispatcher",
-                FailureKind::Permanent,
-            )
-            .await;
+        fail_resume(
+            &state,
+            &row,
+            "origin not yet supported by the resume dispatcher",
+            FailureKind::Permanent,
+        )
+        .await;
         return;
     }
     let (Some(task_id), Some(context_id)) = (row.task_id.clone(), row.context_id.clone()) else {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                "row is missing task_id/context_id",
-                FailureKind::Permanent,
-            )
-            .await;
+        fail_resume(
+            &state,
+            &row,
+            "row is missing task_id/context_id",
+            FailureKind::Permanent,
+        )
+        .await;
         return;
     };
 
@@ -326,32 +333,25 @@ async fn deliver(state: AppState, row: HitlRequest) {
     {
         Ok(name) => name,
         Err(e) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(
-                    row.id,
-                    &format!("database error resolving agent name: {e}"),
-                    RETRYABLE,
-                )
-                .await;
+            fail_resume(
+                &state,
+                &row,
+                &format!("database error resolving agent name: {e}"),
+                RETRYABLE,
+            )
+            .await;
             return;
         }
     };
     let Some(agent_name) = agent_name else {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(row.id, "agent no longer exists", RETRYABLE)
-            .await;
+        fail_resume(&state, &row, "agent no longer exists", RETRYABLE).await;
         return;
     };
 
     let endpoint = match resolve_endpoint(&state, &row.agent_id.to_string(), &agent_name).await {
         Ok(e) => e,
         Err(e) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(row.id, &e, RETRYABLE)
-                .await;
+            fail_resume(&state, &row, &e, RETRYABLE).await;
             return;
         }
     };
@@ -373,14 +373,13 @@ async fn deliver(state: AppState, row: HitlRequest) {
     let agent_id_str = row.agent_id.to_string();
     state.flow_guard.init_flow(&flow_ctx, &agent_name).await;
     if let Err(rejection) = state.flow_guard.check(&flow_ctx, &agent_id_str).await {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                &format!("flow guard rejected resume: {rejection}"),
-                RETRYABLE,
-            )
-            .await;
+        fail_resume(
+            &state,
+            &row,
+            &format!("flow guard rejected resume: {rejection}"),
+            RETRYABLE,
+        )
+        .await;
         return;
     }
     if let Err(rejection) = state
@@ -388,14 +387,13 @@ async fn deliver(state: AppState, row: HitlRequest) {
         .record_invocation(&flow_ctx, &agent_id_str)
         .await
     {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                &format!("flow guard rejected resume: {rejection}"),
-                RETRYABLE,
-            )
-            .await;
+        fail_resume(
+            &state,
+            &row,
+            &format!("flow guard rejected resume: {rejection}"),
+            RETRYABLE,
+        )
+        .await;
         return;
     }
 
@@ -554,17 +552,17 @@ async fn deliver(state: AppState, row: HitlRequest) {
         ResumeAttempt::Reply(terminal) => terminal,
         ResumeAttempt::SendFailed(error) => {
             // Pre-flight failure - never left Nasiko. Retried via the lease under the cap.
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(row.id, &format!("agent request failed: {error}"), RETRYABLE)
-                .await;
+            fail_resume(
+                &state,
+                &row,
+                &format!("agent request failed: {error}"),
+                RETRYABLE,
+            )
+            .await;
             return;
         }
         ResumeAttempt::HttpFailure(status) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(row.id, &format!("agent HTTP {status}"), RETRYABLE)
-                .await;
+            fail_resume(&state, &row, &format!("agent HTTP {status}"), RETRYABLE).await;
             return;
         }
         ResumeAttempt::TaskNotFound => {
@@ -586,38 +584,14 @@ async fn deliver(state: AppState, row: HitlRequest) {
                  already sent - marking delivery outcome unknown rather than retrying, to avoid \
                  re-delivering to the agent"
             );
-            if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
-                tracing::error!(
-                    id = %row.id, %e,
-                    "hitl dispatcher: mark_resume_unknown itself failed - row stays reclaimable \
-                     once its lease expires, reopening the double-delivery this call exists to \
-                     prevent"
-                );
-            }
+            quarantine_unknown(&state, &row).await;
             return;
         }
     };
 
     // Delivery succeeded — a response was received and classified — regardless of the agent's
     // own business outcome (§3.2: "peer confirmed receipt").
-    if let Err(e) = state.hitl_store.mark_resume_completed(row.id).await {
-        // The agent already received and answered this resume — retrying would POST the human's
-        // answer to it a second time, same double-delivery risk `deliver_maf` guards against
-        // above. `mark_resume_unknown` takes the row out of the claimable pool instead of
-        // leaving it reclaimable once the lease expires.
-        tracing::error!(
-            id = %row.id, %e,
-            "hitl dispatcher: resume delivered but mark_resume_completed failed — \
-             marking delivery outcome unknown to avoid re-delivering to the agent"
-        );
-        if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
-            tracing::error!(
-                id = %row.id, %e,
-                "hitl dispatcher: mark_resume_unknown itself failed — row stays reclaimable \
-                 once its lease expires, reopening the double-delivery this call exists to prevent"
-            );
-        }
-    }
+    complete_resume(&state, &row).await;
     record_resume_trail(&state, disposition, &flow_ctx).await;
     // Unconditional on `disposition`: the agent received the answer, which is what ends the pause.
     // A follow-up pause gets its own row and its own step in its own flow.
@@ -754,8 +728,8 @@ async fn deliver(state: AppState, row: HitlRequest) {
     }
 }
 
-/// The agent answered every one of `posts` resume attempts with "no such task" (see `lost_task`): its paused task is
-/// gone, so the human's answer reached nothing. Records the terminal `agent_lost_task` and closes
+/// The agent answered every one of `posts` resume attempts with "no such task" (see `lost_task`):
+/// its paused task is gone, so the human's answer reached nothing. Records the terminal `agent_lost_task` and closes
 /// out the resume's trail the way an ordinary failed reply would.
 ///
 /// Not retried: re-sending the answer cannot find a task that is gone, so unlike an unclassifiable
@@ -806,6 +780,7 @@ async fn finish_agent_lost_task(
         );
         return;
     }
+    meter_outcome(row, ResumeStatus::AgentLostTask);
     record_resume_trail(state, StreamDisposition::Failed, flow_ctx).await;
     // The paused step never ran on, so it is `failed`, not `resumed`.
     close_resumed_flow_step(state, row, agent_name, LOST_TASK_FLOW_STEP_STATUS).await;
@@ -820,25 +795,23 @@ async fn finish_agent_lost_task(
 /// stated confirmation-of-receipt for this origin.
 async fn deliver_maf(state: &AppState, row: HitlRequest) {
     let (Some(task_id), Some(execution_id)) = (row.task_id.clone(), row.maf_execution_id) else {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                "row is missing task_id/maf_execution_id",
-                FailureKind::Permanent,
-            )
-            .await;
+        fail_resume(
+            state,
+            &row,
+            "row is missing task_id/maf_execution_id",
+            FailureKind::Permanent,
+        )
+        .await;
         return;
     };
     let Some(step_index) = row.maf_step_index else {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                "row is missing maf_step_index",
-                FailureKind::Permanent,
-            )
-            .await;
+        fail_resume(
+            state,
+            &row,
+            "row is missing maf_step_index",
+            FailureKind::Permanent,
+        )
+        .await;
         return;
     };
 
@@ -857,26 +830,24 @@ async fn deliver_maf(state: &AppState, row: HitlRequest) {
     {
         Ok(json) => json,
         Err(e) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(
-                    row.id,
-                    &format!("database error resolving maf execution snapshot: {e}"),
-                    RETRYABLE,
-                )
-                .await;
+            fail_resume(
+                state,
+                &row,
+                &format!("database error resolving maf execution snapshot: {e}"),
+                RETRYABLE,
+            )
+            .await;
             return;
         }
     };
     let Some(maf_json) = maf_json else {
-        let _ = state
-            .hitl_store
-            .mark_resume_failed(
-                row.id,
-                "maf execution or its snapshot no longer exists",
-                RETRYABLE,
-            )
-            .await;
+        fail_resume(
+            state,
+            &row,
+            "maf execution or its snapshot no longer exists",
+            RETRYABLE,
+        )
+        .await;
         return;
     };
 
@@ -885,10 +856,13 @@ async fn deliver_maf(state: &AppState, row: HitlRequest) {
     let mut conn = match state.redis.get_multiplexed_async_connection().await {
         Ok(c) => c,
         Err(e) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(row.id, &format!("redis connection failed: {e}"), RETRYABLE)
-                .await;
+            fail_resume(
+                state,
+                &row,
+                &format!("redis connection failed: {e}"),
+                RETRYABLE,
+            )
+            .await;
             return;
         }
     };
@@ -924,38 +898,16 @@ async fn deliver_maf(state: &AppState, row: HitlRequest) {
                 .bind(execution_id)
                 .execute(&state.db)
                 .await;
-            if let Err(e) = state.hitl_store.mark_resume_completed(row.id).await {
-                // The continuation job is already durably enqueued (XADD acked) — retrying this
-                // resume would XADD a *second* one for the same `taskId`, re-running every step
-                // after the resume point and overwriting whatever the first continuation already
-                // produced. `mark_resume_unknown` takes the row out of the claimable pool into
-                // the terminal `delivery_outcome_unknown` state instead of leaving it reclaimable
-                // once the lease expires, same tool `deliver()` uses for its own
-                // crash-mid-delivery case above.
-                tracing::error!(
-                    id = %row.id, %e,
-                    "hitl dispatcher: MAF resume enqueued but mark_resume_completed failed — \
-                     marking delivery outcome unknown to avoid a duplicate XADD"
-                );
-                if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
-                    tracing::error!(
-                        id = %row.id, %e,
-                        "hitl dispatcher: mark_resume_unknown itself failed — row stays \
-                         reclaimable once its lease expires, reopening the double-XADD risk \
-                         this call exists to prevent"
-                    );
-                }
-            }
+            complete_resume(state, &row).await;
         }
         Err(e) => {
-            let _ = state
-                .hitl_store
-                .mark_resume_failed(
-                    row.id,
-                    &format!("failed to enqueue MAF resume job: {e}"),
-                    RETRYABLE,
-                )
-                .await;
+            fail_resume(
+                state,
+                &row,
+                &format!("failed to enqueue MAF resume job: {e}"),
+                RETRYABLE,
+            )
+            .await;
         }
     }
 }
@@ -1580,7 +1532,7 @@ mod answer_text_tests {
     use super::*;
     use nasiko_hitl::{HitlKind, HitlOrigin, HitlStatus, ResumeStatus};
 
-    pub(super) fn row_with_response(human_response: Option<serde_json::Value>) -> HitlRequest {
+    fn row_with_response(human_response: Option<serde_json::Value>) -> HitlRequest {
         let now = chrono::Utc::now();
         HitlRequest {
             id: Uuid::new_v4(),
@@ -1700,55 +1652,5 @@ mod answer_text_tests {
     fn no_human_response_fails_closed_to_denied() {
         let row = row_with_response(None);
         assert_eq!(answer_text(&row), "denied");
-    }
-}
-
-#[cfg(test)]
-mod outcome_metering_tests {
-    use super::answer_text_tests::row_with_response;
-    use super::*;
-
-    const ATTEMPT: i32 = 2;
-
-    fn row_after(resume_status: ResumeStatus, attempts: i32) -> HitlRequest {
-        HitlRequest {
-            resume_status,
-            resume_dispatch_attempts: attempts,
-            ..row_with_response(None)
-        }
-    }
-
-    #[test]
-    fn an_attempt_that_only_released_the_claim_has_no_outcome_to_meter() {
-        // A retryable failure leaves the row `not_started` for the next claim to retry.
-        assert!(!outcome_recorded_by_attempt(
-            &row_after(ResumeStatus::NotStarted, ATTEMPT),
-            ATTEMPT
-        ));
-    }
-
-    #[test]
-    fn every_terminal_status_the_attempt_wrote_is_metered() {
-        for status in [
-            ResumeStatus::Completed,
-            ResumeStatus::Failed,
-            ResumeStatus::DeliveryOutcomeUnknown,
-            ResumeStatus::Skipped,
-            ResumeStatus::AgentLostTask,
-        ] {
-            assert!(
-                outcome_recorded_by_attempt(&row_after(status, ATTEMPT), ATTEMPT),
-                "{status}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_outcome_written_by_a_later_claim_is_left_to_that_claim() {
-        // This attempt outlived its lease; a second claim took the row over and finished it.
-        assert!(!outcome_recorded_by_attempt(
-            &row_after(ResumeStatus::Completed, ATTEMPT + 1),
-            ATTEMPT
-        ));
     }
 }
