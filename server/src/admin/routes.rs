@@ -173,6 +173,7 @@ async fn deploy(
         writable_path,
         owner_id,
         force_pull: false,
+        health_path: None,
     };
     // Only a name that already maps to a registered catalog agent has an
     // `agents` row to scope a pull credential to (see pull_credentials'
