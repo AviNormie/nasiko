@@ -60,7 +60,9 @@ def checkpoint(checkpoint_id: str, *, version: int = 1, **values) -> dict:
 async def put(saver, style, config, checkpoint_id: str, *, step: int = 0, source: str = "loop", **values):
     metadata = {"source": source, "step": step, "parents": {}}
     new_versions = {name: 1 for name in values}  # what langgraph passes: the channels this step changed
-    return await call(saver, style, "put", config, checkpoint(checkpoint_id, **values), metadata, new_versions)
+    return await call(
+        saver, style, "put", config, checkpoint(checkpoint_id, **values), metadata, new_versions
+    )
 
 
 class TestCheckpoints:
@@ -90,7 +92,9 @@ class TestCheckpoints:
         assert newest.checkpoint["channel_values"] == {"n": 2}
         assert newest.config == config_for(checkpoint_id="cp-2")
 
-    async def test_an_explicit_checkpoint_id_reads_that_one_and_returns_the_callers_config(self, saver, style):
+    async def test_an_explicit_checkpoint_id_reads_that_one_and_returns_the_callers_config(
+        self, saver, style
+    ):
         first = await put(saver, style, config_for(), "cp-1", n=1)
         await put(saver, style, first, "cp-2", n=2)
         asked = config_for(checkpoint_id="cp-1")
@@ -139,13 +143,18 @@ class TestCheckpoints:
         assert (await call(saver, style, "get_tuple", config)).checkpoint["id"] == "cp-1"
 
     async def test_metadata_from_the_config_is_merged_like_the_in_memory_saver_does(self, saver, style):
-        config = {"configurable": {"thread_id": "t", "checkpoint_ns": "", "user": "ada"}, "metadata": {"run": "r1"}}
+        config = {
+            "configurable": {"thread_id": "t", "checkpoint_ns": "", "user": "ada"},
+            "metadata": {"run": "r1"},
+        }
 
         saved = await put(saver, style, config, "cp-1")
         loaded = await call(saver, style, "get_tuple", saved)
 
         expected = MemorySaver()
-        memory_saved = expected.put(config, checkpoint("cp-1"), {"source": "loop", "step": 0, "parents": {}}, {})
+        memory_saved = expected.put(
+            config, checkpoint("cp-1"), {"source": "loop", "step": 0, "parents": {}}, {}
+        )
         assert loaded.metadata == expected.get_tuple(memory_saved).metadata
 
 
@@ -161,12 +170,18 @@ class TestPendingWrites:
 
     async def test_special_channels_use_their_own_negative_indexes(self, saver, style):
         saved = await put(saver, style, config_for(), "cp-1")
-        await call(saver, style, "put_writes", saved, [("a", 1), (INTERRUPT, "pause"), (ERROR, "boom")], "task-1")
+        await call(
+            saver, style, "put_writes", saved, [("a", 1), (INTERRUPT, "pause"), (ERROR, "boom")], "task-1"
+        )
 
         loaded = await call(saver, style, "get_tuple", saved)
 
         # ERROR is -1 and INTERRUPT is -3, so sorted by index the interrupt comes first.
-        assert loaded.pending_writes == [("task-1", INTERRUPT, "pause"), ("task-1", ERROR, "boom"), ("task-1", "a", 1)]
+        assert loaded.pending_writes == [
+            ("task-1", INTERRUPT, "pause"),
+            ("task-1", ERROR, "boom"),
+            ("task-1", "a", 1),
+        ]
 
     async def test_all_regular_writes_of_a_call_land_in_one_record(self, saver, style, state_server):
         saved = await put(saver, style, config_for(), "cp-1")
@@ -233,7 +248,9 @@ class TestListing:
     async def history(self, saver, style):
         config = config_for()
         for step in range(1, 6):
-            config = await put(saver, style, config, f"cp-{step}", step=step, source="loop" if step > 1 else "input")
+            config = await put(
+                saver, style, config, f"cp-{step}", step=step, source="loop" if step > 1 else "input"
+            )
         return config
 
     async def test_lists_newest_first(self, saver, style, history):
@@ -308,7 +325,9 @@ class TestListing:
 
 
 class TestDeletion:
-    async def test_delete_thread_removes_its_checkpoints_writes_and_head_only(self, saver, style, state_server):
+    async def test_delete_thread_removes_its_checkpoints_writes_and_head_only(
+        self, saver, style, state_server
+    ):
         for thread in ("doomed", "kept"):
             saved = await put(saver, style, config_for(thread), "cp-1")
             await call(saver, style, "put_writes", saved, [("a", 1)], "task-1")
@@ -316,7 +335,9 @@ class TestDeletion:
         await call(saver, style, "delete_thread", "doomed")
 
         assert await call(saver, style, "get_tuple", config_for("doomed")) is None
-        assert (await call(saver, style, "get_tuple", config_for("kept"))).pending_writes == [("task-1", "a", 1)]
+        assert (await call(saver, style, "get_tuple", config_for("kept"))).pending_writes == [
+            ("task-1", "a", 1)
+        ]
         assert not [key for key in state_server.kv if key.split(":")[1] == "doomed"]
 
     async def test_deleting_a_thread_that_does_not_exist_is_fine(self, saver, style):
@@ -384,7 +405,9 @@ class TestCallCounts:
 
         assert [r.method for r in state_server.requests] == ["GET", "GET", "GET"]
 
-    async def test_put_writes_of_regular_writes_checks_once_then_writes_once(self, saver, style, state_server):
+    async def test_put_writes_of_regular_writes_checks_once_then_writes_once(
+        self, saver, style, state_server
+    ):
         saved = await put(saver, style, config_for(), "cp-1")
         state_server.requests.clear()
 
@@ -400,7 +423,9 @@ class TestSerialization:
         with pytest.raises(NasikoStateError, match="pickle"):
             await put(saver, style, config_for(), "cp-1", unserializable=object())
 
-    async def test_a_stored_pickle_is_refused_even_by_a_serde_that_allows_it(self, client, style, state_server):
+    async def test_a_stored_pickle_is_refused_even_by_a_serde_that_allows_it(
+        self, client, style, state_server
+    ):
         saver = NasikoCheckpointSaver(NasikoKV(client), serde=JsonPlusSerializer(pickle_fallback=True))
         await put(saver, style, config_for(), "cp-1")
         record = state_server.kv["lg:thread-1::cp-1"].value["value"]
@@ -415,7 +440,12 @@ class TestSerialization:
         record = state_server.kv["lg:thread-1::cp-1"].value["value"]
 
         assert set(record) == {
-            "thread_id", "checkpoint_ns", "checkpoint_id", "parent_checkpoint_id", "checkpoint", "metadata",
+            "thread_id",
+            "checkpoint_ns",
+            "checkpoint_id",
+            "parent_checkpoint_id",
+            "checkpoint",
+            "metadata",
         }
         assert set(record["checkpoint"]) == {"type", "data"}
         assert record["checkpoint"]["type"] == "msgpack"
@@ -498,7 +528,9 @@ class TestPausedGraphsSurviveARestart:
         list(graph.stream({"topic": "tides"}, config, stream_mode="values"))
 
         assert len([key for key in state_server.kv if key.startswith("lg:report-4:")]) >= 2
-        history = [snapshot.config["configurable"]["checkpoint_id"] for snapshot in graph.get_state_history(config)]
+        history = [
+            snapshot.config["configurable"]["checkpoint_id"] for snapshot in graph.get_state_history(config)
+        ]
         stored = [item.config["configurable"]["checkpoint_id"] for item in graph.checkpointer.list(config)]
         assert history == stored
 
@@ -533,10 +565,17 @@ class TestConstruction:
 async def test_concurrent_async_checkpoint_writes_do_not_interfere(client):
     saver = NasikoCheckpointSaver(NasikoKV(client))
 
-    await asyncio.gather(*(
-        saver.aput(config_for(f"thread-{n}"), checkpoint(f"cp-{n}", n=n), {"source": "loop", "step": n, "parents": {}}, {})
-        for n in range(20)
-    ))
+    await asyncio.gather(
+        *(
+            saver.aput(
+                config_for(f"thread-{n}"),
+                checkpoint(f"cp-{n}", n=n),
+                {"source": "loop", "step": n, "parents": {}},
+                {},
+            )
+            for n in range(20)
+        )
+    )
 
     for n in range(20):
         assert (await saver.aget_tuple(config_for(f"thread-{n}"))).checkpoint["channel_values"] == {"n": n}

@@ -1,4 +1,4 @@
-"""make_task_store: the in-memory store when the platform provides no state API, the durable one when it does."""
+"""The factories: in-memory stores without the platform's state API, durable ones with it."""
 
 from __future__ import annotations
 

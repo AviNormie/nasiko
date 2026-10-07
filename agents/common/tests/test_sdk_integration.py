@@ -13,8 +13,12 @@ pytestmark = pytest.mark.anyio
 
 def replica(server: FakeStateServer, executor, **store_options) -> tuple:
     """A fresh agent process: its own client, store and handler, sharing only the platform's state."""
-    client = NasikoStateClient("http://state.test/api/agent-state", "test-agent-token",
-                               transport=server.transport, retry_backoff_seconds=0)
+    client = NasikoStateClient(
+        "http://state.test/api/agent-state",
+        "test-agent-token",
+        transport=server.transport,
+        retry_backoff_seconds=0,
+    )
     store = NasikoTaskStore(client, **store_options)
     return store, build_handler(executor, store)
 
@@ -28,7 +32,9 @@ async def test_a_paused_task_survives_a_restart_and_resumes(state_server):
     await first_store.aclose()  # the replica is gone; only the platform's state remains
 
     second_store, second_handler = replica(state_server, AskThenAnswer())
-    done = await send(second_handler, user_message("acme/api", task_id=paused.id, context_id=paused.context_id))
+    done = await send(
+        second_handler, user_message("acme/api", task_id=paused.id, context_id=paused.context_id)
+    )
 
     assert state_name(done) == "completed"
     assert state_server.tasks[paused.id].value["state"] == "completed"
@@ -42,7 +48,9 @@ async def test_a_second_replica_sees_a_task_the_first_one_started(state_server):
     paused = await send(first_handler, user_message("start"))
 
     other_store, other_handler = replica(state_server, AskThenAnswer())
-    done = await send(other_handler, user_message("elsewhere", task_id=paused.id, context_id=paused.context_id))
+    done = await send(
+        other_handler, user_message("elsewhere", task_id=paused.id, context_id=paused.context_id)
+    )
 
     assert state_name(done) == "completed"  # the first replica is still alive and untouched
     await first_store.aclose()
