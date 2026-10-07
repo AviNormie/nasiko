@@ -40,7 +40,8 @@
 //! - **Bounded.** A value over `AGENT_STATE_MAX_BODY_BYTES` as sent is a 413, and an agent
 //!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429.
 //! - **Encrypted at rest.** Task bodies and values are stored as AES-256-GCM ciphertext under the
-//!   agent's own derived key (`payload`); the database never holds them in the clear.
+//!   agent's own state key, bound to the row they were written for (`payload`); the database
+//!   never holds them in the clear, and a ciphertext moved to another row does not open there.
 
 mod auth;
 mod cursor;

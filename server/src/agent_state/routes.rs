@@ -87,7 +87,8 @@ async fn put_task(
 ) -> Result<Json<TaskStamp>, StateError> {
     request.check()?;
     let payload = BoundedPayload::new(&request.body, state.config.agent_state_max_body_bytes)?;
-    let sealed_body = PayloadCipher::for_agent(agent_id)?.seal(&payload);
+    let sealed_body =
+        PayloadCipher::for_agent(agent_id)?.seal(Store::Tasks, task_id.as_str(), &payload);
     let task = NewTask {
         task_id: task_id.as_str(),
         context_id: request.context_id.as_deref(),
@@ -116,7 +117,8 @@ async fn get_task(
     let row = repo::get_task(&state.db, agent_id, task_id.as_str())
         .await?
         .ok_or(StateError::NotFound { what: "task" })?;
-    let body = PayloadCipher::for_agent(agent_id)?.open(&row.sealed_body)?;
+    let body =
+        PayloadCipher::for_agent(agent_id)?.open(Store::Tasks, &row.task_id, &row.sealed_body)?;
     Ok(Json(row.into_view(body)))
 }
 
@@ -147,7 +149,7 @@ async fn list_tasks(
     let cipher = PayloadCipher::for_agent(agent_id)?;
     let budget = state.config.agent_state_list_bytes_budget;
     Ok(Json(build_page(rows, budget, |row| {
-        cipher.open(&row.sealed_body)
+        cipher.open(Store::Tasks, &row.task_id, &row.sealed_body)
     })))
 }
 
@@ -161,7 +163,7 @@ async fn put_kv(
     StateJson(request): StateJson<PutKvRequest>,
 ) -> Result<Json<KvStamp>, StateError> {
     let payload = BoundedPayload::new(&request.value, state.config.agent_state_max_body_bytes)?;
-    let sealed_value = PayloadCipher::for_agent(agent_id)?.seal(&payload);
+    let sealed_value = PayloadCipher::for_agent(agent_id)?.seal(Store::Kv, key.as_str(), &payload);
     let entry = NewEntry {
         key: key.as_str(),
         sealed_value: &sealed_value,
@@ -185,7 +187,7 @@ async fn get_kv(
     let row = repo::get_kv(&state.db, agent_id, key.as_str())
         .await?
         .ok_or(StateError::NotFound { what: "key" })?;
-    let value = PayloadCipher::for_agent(agent_id)?.open(&row.sealed_value)?;
+    let value = PayloadCipher::for_agent(agent_id)?.open(Store::Kv, &row.key, &row.sealed_value)?;
     Ok(Json(row.into_view(value)))
 }
 
@@ -209,7 +211,7 @@ async fn list_kv(
     let cipher = PayloadCipher::for_agent(agent_id)?;
     let budget = state.config.agent_state_list_bytes_budget;
     Ok(Json(build_page(rows, budget, |row| {
-        cipher.open(&row.sealed_value)
+        cipher.open(Store::Kv, &row.key, &row.sealed_value)
     })))
 }
 

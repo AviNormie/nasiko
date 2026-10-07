@@ -45,8 +45,10 @@ impl Store {
         }
     }
 
-    /// Names the store inside a lock key, so a task and a key of the same name never contend.
-    fn lock_label(self) -> &'static str {
+    /// Names the store inside a row's lock key and its ciphertext's associated data, so a task and
+    /// a key of the same name never contend and never open as each other. Part of the stored
+    /// format: changing it makes every stored row unreadable.
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Tasks => "task",
             Self::Kv => "kv",
@@ -407,7 +409,7 @@ async fn begin_locked(
     let mut tx = db.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
         .bind(ENTRY_LOCK_CLASS)
-        .bind(format!("{agent_id}/{}/{name}", store.lock_label()))
+        .bind(format!("{agent_id}/{}/{name}", store.label()))
         .execute(&mut *tx)
         .await?;
     Ok(tx)
