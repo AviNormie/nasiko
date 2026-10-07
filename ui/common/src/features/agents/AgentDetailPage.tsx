@@ -75,8 +75,9 @@ function Redirect({ id, tab }: { id: string; tab?: string }) {
   return <PageLoader label={copy.loadingAgent} />
 }
 
-function NotFound() {
-  return (
+/** `id`: a gone agent stepped to from a list keeps its arrows, so the user can step on. */
+function NotFound({ id }: { id?: string }) {
+  const card = (
     <StateCard
       title={copy.notFound}
       fix={copy.notFoundFix}
@@ -90,6 +91,13 @@ function NotFound() {
         </Link>
       }
     />
+  )
+  if (!id) return card
+  return (
+    <div className="space-y-2">
+      <AgentSiblings id={id} className="justify-end" />
+      {card}
+    </div>
   )
 }
 
@@ -195,7 +203,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   if (detail.isError) {
     return detail.error instanceof ApiError &&
       (detail.error.status === 404 || detail.error.status === 403) ? (
-      <NotFound />
+      <NotFound id={id} />
     ) : (
       <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
     )
@@ -362,7 +370,7 @@ function Header({
           </span>
         }
         actions={
-          <div className="flex items-start gap-2">
+          <div className="flex flex-wrap items-start justify-end gap-2">
             <AgentSiblings id={agent.id} />
             <TryItLink
               id={agent.id}
@@ -428,7 +436,7 @@ function Header({
 }
 
 /** Previous/Next through the list this agent was opened from (lib/siblings.ts); nothing on a deep link. */
-function AgentSiblings({ id }: { id: string }) {
+function AgentSiblings({ id, className }: { id: string; className?: string }) {
   const navigate = useNavigate()
   const around = useSiblings(id)
   if (!around) return null
@@ -450,6 +458,7 @@ function AgentSiblings({ id }: { id: string }) {
       count={around.count}
       onPrev={() => go(around.prev)}
       onNext={() => go(around.next)}
+      className={className}
     />
   )
 }
