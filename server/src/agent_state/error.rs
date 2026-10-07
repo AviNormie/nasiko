@@ -1,5 +1,7 @@
 //! The one error type every agent state handler returns.
 
+use std::time::Duration;
+
 use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -19,6 +21,8 @@ pub(super) enum StateError {
     /// No live row under that name for this agent. Another agent's row is indistinguishable
     /// from a missing one on purpose.
     NotFound { what: &'static str },
+    /// The route exists but does not take this method.
+    MethodNotAllowed,
     /// The request is well-formed HTTP but unacceptable: bad body, name, query or header.
     BadRequest { code: &'static str, message: String },
     /// The value as sent, or the request carrying it, is over the configured cap.
@@ -34,6 +38,15 @@ impl StateError {
         Self::BadRequest {
             code: "invalid_request",
             message: message.into(),
+        }
+    }
+
+    /// Over a request budget, with `wait` left until it refills. `Retry-After` is whole seconds,
+    /// so the wait is rounded up, and never 0, which would invite an immediate retry that fails.
+    pub(super) fn rate_limited(wait: Duration) -> Self {
+        let whole_secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+        Self::RateLimited {
+            retry_after_secs: whole_secs.max(1),
         }
     }
 
@@ -74,6 +87,11 @@ impl IntoResponse for StateError {
                 StatusCode::NOT_FOUND,
                 "not_found",
                 &format!("{what} not found"),
+            ),
+            Self::MethodNotAllowed => error_response(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "method not allowed on this route",
             ),
             Self::BadRequest { code, message } => {
                 error_response(StatusCode::BAD_REQUEST, code, &message)
@@ -144,6 +162,19 @@ mod tests {
         assert_eq!(body["code"], "rate_limited");
     }
 
+    #[test]
+    fn retry_after_is_the_wait_rounded_up_to_a_whole_second_and_never_zero() {
+        let secs = |wait: Duration| match StateError::rate_limited(wait) {
+            StateError::RateLimited { retry_after_secs } => retry_after_secs,
+            other => panic!("expected a rate limit, got {other:?}"),
+        };
+        assert_eq!(secs(Duration::from_secs(60)), 60);
+        assert_eq!(secs(Duration::from_millis(59_001)), 60);
+        assert_eq!(secs(Duration::from_millis(1_500)), 2);
+        assert_eq!(secs(Duration::from_millis(1)), 1);
+        assert_eq!(secs(Duration::ZERO), 1);
+    }
+
     #[tokio::test]
     async fn internal_errors_never_leak_their_detail() {
         let (status, _, body) =
@@ -165,6 +196,11 @@ mod tests {
                 StateError::NotFound { what: "task" },
                 StatusCode::NOT_FOUND,
                 "not_found",
+            ),
+            (
+                StateError::MethodNotAllowed,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
             ),
             (
                 StateError::invalid("bad"),

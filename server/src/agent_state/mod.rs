@@ -41,7 +41,9 @@
 //! - **Opaque.** A task body or value is stored and returned byte for byte as the agent sent it,
 //!   never parsed into a JSON tree and re-encoded (`payload`).
 //! - **Bounded.** A value over `AGENT_STATE_MAX_BODY_BYTES` as sent is a 413, and an agent
-//!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429.
+//!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429, with
+//!   `Retry-After` set to what is left of the window. Before any credential is looked up, one
+//!   network address may make ten agents' worth of requests (`peer`).
 //! - **Encrypted at rest.** Task bodies and values are stored as AES-256-GCM ciphertext under the
 //!   agent's own state key, bound to the row they were written for (`payload`); the database
 //!   never holds them in the clear, and a ciphertext moved to another row does not open there.
@@ -51,6 +53,7 @@ mod cursor;
 mod error;
 mod page;
 mod payload;
+mod peer;
 mod precondition;
 mod repo;
 mod request;
@@ -61,3 +64,40 @@ mod wire;
 
 pub use auth::mint_state_token;
 pub use routes::router;
+
+use nasiko_config::Config;
+
+/// Warns, at startup, when agent state is configured to expire before a pending human-in-the-loop
+/// request does. A task paused for a human keeps its state here; if the state goes first, the
+/// human can still answer but the agent has nothing left to resume.
+pub fn warn_if_state_expires_before_hitl_requests(config: &Config) {
+    if expires_before(config.agent_state_ttl_days, config.hitl_request_ttl_days) {
+        tracing::warn!(
+            agent_state_ttl_days = config.agent_state_ttl_days,
+            hitl_request_ttl_days = config.hitl_request_ttl_days,
+            "AGENT_STATE_TTL_DAYS is shorter than HITL_REQUEST_TTL_DAYS: a task paused for a \
+             human can lose its stored state while the request is still answerable"
+        );
+    }
+}
+
+fn expires_before(agent_state_ttl_days: i32, hitl_request_ttl_days: i64) -> bool {
+    i64::from(agent_state_ttl_days) < hitl_request_ttl_days
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expires_before;
+
+    #[test]
+    fn state_that_outlives_or_matches_a_hitl_request_is_fine() {
+        assert!(!expires_before(7, 7));
+        assert!(!expires_before(30, 7));
+    }
+
+    #[test]
+    fn state_that_expires_first_is_flagged() {
+        assert!(expires_before(3, 7));
+        assert!(expires_before(1, 2));
+    }
+}

@@ -400,6 +400,7 @@ impl AppState {
         // Reclaims the storage of agent state no one can read any more: empties expired rows into
         // tombstones, forgets old tombstones, and removes the rows of deleted agents. Each process
         // runs one and `SKIP LOCKED` keeps several from colliding.
+        crate::agent_state::warn_if_state_expires_before_hitl_requests(&state.config);
         tokio::spawn(crate::agent_state::sweeper::run(
             state.db.clone(),
             state.config.agent_state_ttl_days,

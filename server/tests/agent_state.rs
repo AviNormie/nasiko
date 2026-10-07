@@ -1505,11 +1505,21 @@ async fn an_agent_over_its_per_minute_budget_is_told_to_slow_down() {
             .unwrap();
         assert_eq!(res.status(), 200, "request {attempt} is within the budget");
     }
+    // Part of the minute window has gone by, so the wait named is what is left of it.
+    tokio::time::sleep(Duration::from_millis(2_100)).await;
     let over = call(&server, &busy, Method::GET, "/tasks")
         .send()
         .await
         .unwrap();
-    assert_eq!(over.headers()["retry-after"], "60");
+    let retry_after: u64 = over.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        (50..=58).contains(&retry_after),
+        "Retry-After {retry_after} must be the rest of the window"
+    );
     expect_error(over, 429, "rate_limited").await;
 
     // The budget is per agent: the same traffic from another agent is unaffected.
@@ -1552,6 +1562,70 @@ async fn refused_credentials_do_not_spend_an_agents_budget() {
         .unwrap();
     assert_eq!(over.status(), 429);
 
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn an_address_over_its_allowance_is_refused_before_any_token_is_looked_up() {
+    // One agent may make 2 requests a minute, so one address may make 20 (ten agents' worth).
+    let server = TestServer::start_with(|c| c.agent_state_rate_limit_per_minute = 2).await;
+    let agent = new_agent(&server, "crowded-agent").await;
+
+    for attempt in 1..=20 {
+        let res = server
+            .client
+            .get(url(&server, "/tasks"))
+            .bearer_auth(format!("nst_guess_{attempt}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 401, "guess {attempt} is still looked up");
+    }
+    // The address has spent its allowance: even a valid credential from it is refused unread.
+    let refused = call(&server, &agent, Method::GET, "/tasks")
+        .send()
+        .await
+        .unwrap();
+    let retry_after: u64 = refused.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=60).contains(&retry_after), "{retry_after}");
+    expect_error(refused, 429, "rate_limited").await;
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_method_a_route_does_not_take_is_a_json_405() {
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "method-agent").await;
+    for (method, path) in [
+        (Method::POST, "/tasks/t1"),
+        (Method::PATCH, "/kv/k1"),
+        (Method::DELETE, "/tasks"),
+        (Method::GET, "/register"),
+    ] {
+        let res = call(&server, &agent, method.clone(), path)
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            res.headers().contains_key("allow"),
+            "{method} {path} names the methods it does take"
+        );
+        expect_error(res, 405, "method_not_allowed").await;
+    }
+    // Without a credential the route's existence is not confirmed either way.
+    let res = server
+        .client
+        .post(url(&server, "/tasks/t1"))
+        .send()
+        .await
+        .unwrap();
+    expect_error(res, 401, "unauthorized").await;
     server.cleanup().await;
 }
 

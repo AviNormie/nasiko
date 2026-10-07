@@ -10,6 +10,7 @@ use super::auth::{AgentAuth, AuthenticatedAgent, authenticate};
 use super::error::StateError;
 use super::page::{ListedRow, Page, build_page};
 use super::payload::{BoundedPayload, PayloadCipher};
+use super::peer::{PeerLimit, limit_by_peer};
 use super::precondition::Precondition;
 use super::repo::{
     self, DeleteOutcome, Entry, KvQuery, NewEntry, NewTask, PutOutcome, Stamp, Store, TaskQuery,
@@ -36,6 +37,7 @@ pub fn router(state: &AppState) -> Router<AppState> {
         state.db.clone(),
         state.config.agent_state_rate_limit_per_minute,
     );
+    let peer_limit = PeerLimit::new(state.config.agent_state_rate_limit_per_minute);
     let transport_limit = state
         .config
         .agent_state_max_body_bytes
@@ -52,8 +54,16 @@ pub fn router(state: &AppState) -> Router<AppState> {
             "/agent-state/kv/{key}",
             put(put_kv).get(get_kv).delete(delete_kv),
         )
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(transport_limit))
         .layer(middleware::from_fn_with_state(auth, authenticate))
+        .layer(middleware::from_fn_with_state(peer_limit, limit_by_peer))
+}
+
+/// A known route asked for with a method it does not take: the API's JSON error rather than the
+/// framework's empty body. The framework still adds the `Allow` header.
+async fn method_not_allowed() -> StateError {
+    StateError::MethodNotAllowed
 }
 
 // ─── Registration ───────────────────────────────────────────────────────────
