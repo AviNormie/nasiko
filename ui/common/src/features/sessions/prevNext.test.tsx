@@ -1,11 +1,15 @@
 /** Previous/Next on the session trace (docs/superpowers/plans/2026-10-06-prev-next.md). */
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
+import { copy } from '@/features/observability/copy'
+import { sessionKeys } from '@/features/sessions/api'
 import { configureMocks } from '@/mocks/handlers'
 import { SHOWCASE_SESSION } from '@/mocks/observability'
 import { setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
+import { server } from '@/test/setup'
 
 setupPinnedSeed()
 afterEach(() => configureMocks({ variant: null }))
@@ -51,10 +55,9 @@ describe('session Previous/Next', () => {
       expect((router.state.location.search as Record<string, unknown>).span).toBeDefined(),
     )
     expect(position(1, paths.length)).toBeInTheDocument()
-    const span = (router.state.location.search as Record<string, unknown>).span
     await userEvent.keyboard('j')
     await waitFor(() => expect(router.state.location.pathname).toBe(paths[1]))
-    expect((router.state.location.search as Record<string, unknown>).span).not.toBe(span)
+    expect((router.state.location.search as Record<string, unknown>).span).toBeUndefined()
     await waitFor(() => expect(position(2, paths.length)).toBeInTheDocument())
   })
 
@@ -69,6 +72,27 @@ describe('session Previous/Next', () => {
       'aria-disabled',
       'true',
     )
+  })
+
+  it('keeps the arrows on a session that fails to load', async () => {
+    const { router, queryClient } = renderApp('/sessions?live=paused')
+    const links = await rowLinks()
+    const paths = links.map((l) => pathOf(l.getAttribute('href')))
+    const gone = decodeURIComponent(paths[1]!.split('/').pop()!)
+    server.use(
+      http.get(
+        `/api/observability/session/${encodeURIComponent(gone)}`,
+        () => new HttpResponse('not found', { status: 404 }),
+      ),
+    )
+    // The list's status checks already read it; the trace page must read it again.
+    queryClient.removeQueries({ queryKey: sessionKeys.detail(gone) })
+    await userEvent.click(links[0]!)
+    await userEvent.click(await screen.findByRole('button', { name: 'Next session' }))
+    expect(await screen.findByText(copy.notFoundSession)).toBeInTheDocument()
+    expect(position(2, paths.length)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Next session' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe(paths[2]))
   })
 
   it('shows no arrows on a deep link', async () => {

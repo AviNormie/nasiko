@@ -320,7 +320,11 @@ export function SessionTracePage({
   if (session.isError) {
     return (
       <div className="flex flex-col gap-4">
-        <Crumbs back={back} day={search.day} title="Trace" />
+        {/* The arrows stay, so a session that fails to load isn't a dead end. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Crumbs back={back} day={search.day} title="Trace" />
+          <SessionSiblings sessionId={sessionId} back={back} />
+        </div>
         <ErrorState
           error={session.error}
           onRetry={() => void session.refetch()}
