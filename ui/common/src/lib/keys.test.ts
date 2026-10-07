@@ -29,7 +29,8 @@ describe('stepFromKey', () => {
     expect(step('j', body, control)).toBe(1)
     expect(step('k', body, control)).toBe(-1)
     expect(step('x', body, control)).toBe(0)
-    expect(step('J', body, control)).toBe(0)
+    expect(step('J', body, control)).toBe(1) // Caps Lock
+    expect(step('J', body, control, { shiftKey: true })).toBe(0)
   })
 
   it('ignores modifiers and key repeat', () => {
@@ -57,6 +58,48 @@ describe('stepFromKey', () => {
     const inDialog = body.querySelector('#b')!
     expect(step('j', inDialog, body.querySelector('#page'))).toBe(0)
     expect(step('j', inDialog, body.querySelector('#c'))).toBe(1)
+  })
+})
+
+describe('stepFromKey, more rules', () => {
+  it('ignores a handled key and IME composition', () => {
+    const body = el('<div id="c"></div>')
+    const control = body.querySelector('#c')
+    expect(step('j', body, control, { isComposing: true })).toBe(0)
+    let out: number | undefined
+    const first = (e: KeyboardEvent) => e.preventDefault()
+    const on = (e: KeyboardEvent) => {
+      out = stepFromKey(e, control)
+    }
+    document.addEventListener('keydown', first)
+    document.addEventListener('keydown', on)
+    body.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true }))
+    document.removeEventListener('keydown', first)
+    document.removeEventListener('keydown', on)
+    expect(out).toBe(0)
+  })
+
+  it('leaves combobox, menubar and menu item typeahead alone', () => {
+    const body = el(
+      '<div id="c"></div><div role="combobox"><span id="cb"></span></div><div role="menubar"><span id="mb"></span></div><div role="menu"><button id="mi"></button></div>',
+    )
+    const control = body.querySelector('#c')
+    for (const id of ['#cb', '#mb', '#mi'])
+      expect(step('j', body.querySelector(id)!, control)).toBe(0)
+  })
+
+  it('treats an alertdialog like a dialog, and no control as not inside one', () => {
+    const body = el('<div id="page"></div><div role="alertdialog"><button id="b"></button></div>')
+    const b = body.querySelector('#b')!
+    expect(step('j', b, body.querySelector('#page'))).toBe(0)
+    expect(step('j', b, null)).toBe(0)
+  })
+
+  it('ignores a control hidden behind a modal (aria-hidden or inert)', () => {
+    const body = el('<div aria-hidden="true"><div id="c"></div></div>')
+    expect(step('j', body, body.querySelector('#c'))).toBe(0)
+    const inert = el('<div inert><div id="c"></div></div>')
+    expect(step('j', inert, inert.querySelector('#c'))).toBe(0)
   })
 })
 
