@@ -155,8 +155,9 @@ pub trait HitlStore: Send + Sync {
     /// `mark_resume_failed`'s own cap check). Sets `resume_status = 'delivery_outcome_unknown'`
     /// and releases the lease so it stops being reclaimed.
     async fn mark_resume_unknown(&self, id: Uuid) -> Result<(), HitlError>;
-    /// The agent answered the resume with "no such task" (A2A `TaskNotFoundError`, or HTTP 404): it
-    /// no longer holds the paused task, so the human's answer reached no task. Sets
+    /// The agent answered every re-delivery of the resume with "no such task" (A2A
+    /// `TaskNotFoundError`, JSON-RPC -32001): it no longer holds the paused task, so the human's
+    /// answer reached no task. Sets
     /// `resume_status = 'agent_lost_task'`, releases the lease and stores `error` (which signal
     /// said so) in `resume_last_error`. Terminal and never retried: re-sending the answer cannot
     /// find a task that is gone, so unlike `mark_resume_unknown` there is no double-delivery to

@@ -82,8 +82,9 @@ db_enum!(HitlStatus {
 // `mcp_tool` row whose real resume happens on its linked `direct_chat`/`agent_proxy` row instead
 // — see `repo::skip_resume_for_mirrored_row`'s own doc comment); distinct from `Completed`
 // because no delivery attempt was ever made. `AgentLostTask` = the agent answered the resume with
-// A2A `TaskNotFoundError` (JSON-RPC -32001) or HTTP 404: it no longer holds the paused task (it
-// restarted, or the answer reached a replica that never saw it), so the answer reached no task.
+// A2A `TaskNotFoundError` (JSON-RPC -32001, also as the body of an HTTP 404) on every one of a
+// bounded number of re-deliveries: it no longer holds the paused task (it restarted, or the answer
+// never reached a replica that has it), so the answer reached no task.
 // Terminal and never retried or requeued, since re-sending cannot find a task that is gone;
 // distinct from `Failed` (delivery itself failed) and `Completed` (a live task got the answer).
 db_enum!(ResumeStatus {
