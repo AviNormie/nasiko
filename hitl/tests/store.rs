@@ -4,6 +4,8 @@
 //! truncates `hitl_requests` on entry, same `--test-threads=1` convention the repo's own
 //! `test-server-oss`/`test-one` recipes use).
 
+use std::sync::{Arc, Mutex};
+
 use nasiko_hitl::{HitlIdentity, HitlKind, HitlStatus, HitlStore, NewHitlRequest, PgHitlStore};
 use serde_json::json;
 use sqlx::PgPool;
@@ -818,6 +820,44 @@ async fn mark_resume_agent_lost_task_never_overwrites_an_outcome() {
     let after = store.get(id).await.unwrap().unwrap();
     assert_eq!(after.resume_status, nasiko_hitl::ResumeStatus::Completed);
     assert_eq!(after.resume_last_error, None);
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL (DATABASE_URL)"]
+async fn pause_hook_fires_once_per_inserted_row_and_not_for_an_idempotent_recreate() {
+    let pool = pool().await;
+    let seen = Arc::new(Mutex::new(Vec::<Uuid>::new()));
+    let store = PgHitlStore::new(pool.clone()).with_pause_hook({
+        let seen = seen.clone();
+        Arc::new(move |row| seen.lock().unwrap().push(row.id))
+    });
+    let owner = fixture_user(&pool).await;
+    let agent = fixture_agent(&pool, owner).await;
+    let task = format!("task-{}", Uuid::new_v4());
+    let pause = |task: &str| {
+        NewHitlRequest::direct_chat(
+            HitlKind::InputRequired,
+            agent,
+            owner,
+            task.to_string(),
+            "ctx-1",
+            json!({"message": "?"}),
+        )
+    };
+
+    let first = store.create(pause(&task)).await.unwrap();
+    // Same open pause again: `create` hands back the pending row it collided with.
+    let again = store.create(pause(&task)).await.unwrap();
+    assert_eq!(
+        again.id, first.id,
+        "the re-create must have been idempotent"
+    );
+    let other = store
+        .create(pause(&format!("task-{}", Uuid::new_v4())))
+        .await
+        .unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![first.id, other.id]);
 }
 
 #[tokio::test]

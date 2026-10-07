@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -366,11 +367,16 @@ impl TryFrom<HitlRequestRow> for HitlRequest {
     }
 }
 
+/// Called with each row [`PgHitlStore::create`] newly inserts; see
+/// [`PgHitlStore::with_pause_hook`].
+pub type PauseHook = Arc<dyn Fn(&HitlRequest) + Send + Sync>;
+
 pub struct PgHitlStore {
     pool: PgPool,
     /// Applied at row-creation time (`create`) as `now() + interval 'N days'`. Configurable so an
     /// operator can tune it without a code change — see `with_ttl_days`.
     ttl_days: i64,
+    on_pause: Option<PauseHook>,
 }
 
 impl PgHitlStore {
@@ -383,7 +389,23 @@ impl PgHitlStore {
     }
 
     pub fn with_ttl_days(pool: PgPool, ttl_days: i64) -> Self {
-        Self { pool, ttl_days }
+        Self {
+            pool,
+            ttl_days,
+            on_pause: None,
+        }
+    }
+
+    /// Calls `hook` with every row `create` newly inserts, so the host can count pauses without
+    /// this crate knowing how. `create` is the one funnel every conversational and MAF pause goes
+    /// through (the chat dispatch paths, the resume dispatcher's follow-up pause, the MAF worker),
+    /// which is why the hook lives here rather than at each call site. The MCP gateway's own
+    /// `mcp_tool` rows are inserted by `repo::create_pending_*` instead and never reach it. The
+    /// hook does not fire when `create` returns the already-pending row an idempotent re-create
+    /// collided with: no row was created. Runs inline after the insert and must not block.
+    pub fn with_pause_hook(mut self, hook: PauseHook) -> Self {
+        self.on_pause = Some(hook);
+        self
     }
 
     /// Re-fetch the pending row a unique-violation on `create` must have collided with — either
@@ -483,7 +505,13 @@ impl HitlStore for PgHitlStore {
         .await;
 
         match result {
-            Ok(row) => row.try_into(),
+            Ok(row) => {
+                let created: HitlRequest = row.try_into()?;
+                if let Some(hook) = &self.on_pause {
+                    hook(&created);
+                }
+                Ok(created)
+            }
             Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
                 match self.find_existing_pending(&req).await? {
                     Some(existing) => Ok(existing),
