@@ -45,6 +45,7 @@ import asyncio
 import atexit
 import base64
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -217,6 +218,8 @@ class _Operation:
     capability: str | None = None
     # What a 404 means. Left unset, a 404 is an error like any other status.
     when_missing: Any = _UNSET
+    # time.monotonic() by which the call, retries included, must be over. None means no deadline.
+    deadline: float | None = None
 
     def request_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"method": self.method, "url": self.path}
@@ -226,7 +229,13 @@ class _Operation:
             kwargs["json"] = self.json
         if self.if_match is not None:
             kwargs["headers"] = {"If-Match": str(self.if_match)}
+        if self.deadline is not None:
+            kwargs["timeout"] = min(self.seconds_left(), READ_TIMEOUT_SECONDS)
         return kwargs
+
+    def seconds_left(self) -> float:
+        """Time until the deadline; infinite without one."""
+        return float("inf") if self.deadline is None else self.deadline - time.monotonic()
 
 
 def _percent_encode(value: str) -> str:
@@ -288,15 +297,16 @@ def _register_op(capabilities: Sequence[str], client_name: str) -> _Operation:
 
 
 def _put_task_op(
-    task_id: str, context_id: str | None, state: str, body: Any, if_match: int | None
+    task_id: str, fields: Mapping[str, Any], if_match: int | None, deadline: float | None
 ) -> _Operation:
     return _Operation(
         "PUT",
         f"/tasks/{_percent_encode(task_id)}",
         parse=_record_parser(WriteReceipt),
-        json={"context_id": context_id, "state": state, "body": body},
+        json=dict(fields),
         if_match=if_match,
         capability="tasks",
+        deadline=deadline,
     )
 
 
@@ -404,6 +414,18 @@ def _is_final_attempt(attempt: int) -> bool:
     return attempt >= RETRY_ATTEMPTS
 
 
+# Failures after the request went out: the server may have applied it. Repeating a conditional
+# write then conflicts with its own first attempt, so those are not retried.
+_OUTCOME_UNKNOWN_ERRORS = (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError)
+
+
+def _check_deadline(operation: _Operation) -> None:
+    if operation.seconds_left() <= 0:
+        raise NasikoStateError(
+            f"state API {operation.method} {operation.path} ran out of time before it was sent"
+        )
+
+
 def _request_failed(operation: _Operation, exc: httpx.RequestError) -> NasikoStateError:
     return NasikoStateError(f"state API {operation.method} {operation.path} request failed: {exc!r}")
 
@@ -461,6 +483,8 @@ class NasikoStateClient:
         self._transport = transport
         self._retry_backoff = retry_backoff_seconds
         self._sync_client: httpx.Client | None = None
+        # Sync calls come from several threads (a sync langgraph run, the exit flush).
+        self._sync_client_lock = threading.Lock()
         self._async_client: httpx.AsyncClient | None = None
         self._registered: set[str] = set()
         self._register_lock = threading.Lock()
@@ -498,14 +522,31 @@ class NasikoStateClient:
     # --- tasks -----------------------------------------------------------------------------
 
     def put_task(
-        self, task_id: str, *, context_id: str | None, state: str, body: Any, if_match: int | None = None
+        self,
+        task_id: str,
+        *,
+        context_id: str | None,
+        state: str,
+        body: Any,
+        if_match: int | None = None,
+        deadline: float | None = None,
     ) -> WriteReceipt:
-        return self._run(_put_task_op(task_id, context_id, state, body, if_match))
+        """Create or replace a task. ``deadline`` (time.monotonic()) bounds the call, retries included."""
+        fields = {"context_id": context_id, "state": state, "body": body}
+        return self._run(_put_task_op(task_id, fields, if_match, deadline))
 
     async def aput_task(
-        self, task_id: str, *, context_id: str | None, state: str, body: Any, if_match: int | None = None
+        self,
+        task_id: str,
+        *,
+        context_id: str | None,
+        state: str,
+        body: Any,
+        if_match: int | None = None,
+        deadline: float | None = None,
     ) -> WriteReceipt:
-        return await self._arun(_put_task_op(task_id, context_id, state, body, if_match))
+        fields = {"context_id": context_id, "state": state, "body": body}
+        return await self._arun(_put_task_op(task_id, fields, if_match, deadline))
 
     def get_task(self, task_id: str) -> TaskRecord | None:
         return self._run(_get_task_op(task_id))
@@ -574,9 +615,10 @@ class NasikoStateClient:
     # --- lifecycle -------------------------------------------------------------------------
 
     def close(self) -> None:
-        if self._sync_client is not None:
-            self._sync_client.close()
-            self._sync_client = None
+        with self._sync_client_lock:
+            if self._sync_client is not None:
+                self._sync_client.close()
+                self._sync_client = None
 
     async def aclose(self) -> None:
         if self._async_client is not None:
@@ -613,11 +655,12 @@ class NasikoStateClient:
         http = self._sync_http()
         attempt = 1
         while True:
+            _check_deadline(operation)
             try:
                 outcome: httpx.Response | httpx.RequestError = http.request(**operation.request_kwargs())
             except httpx.RequestError as exc:
                 outcome = exc
-            delay = self._retry_delay(attempt, outcome)
+            delay = self._retry_delay(operation, attempt, outcome)
             if delay is None:
                 return _response_or_raise(operation, outcome)
             time.sleep(delay)
@@ -627,25 +670,40 @@ class NasikoStateClient:
         http = self._async_http()
         attempt = 1
         while True:
+            _check_deadline(operation)
             try:
                 outcome: httpx.Response | httpx.RequestError = await http.request(
                     **operation.request_kwargs()
                 )
             except httpx.RequestError as exc:
                 outcome = exc
-            delay = self._retry_delay(attempt, outcome)
+            delay = self._retry_delay(operation, attempt, outcome)
             if delay is None:
                 return _response_or_raise(operation, outcome)
             await asyncio.sleep(delay)
             attempt += 1
 
-    def _retry_delay(self, attempt: int, outcome: httpx.Response | httpx.RequestError) -> float | None:
+    def _retry_delay(
+        self, operation: _Operation, attempt: int, outcome: httpx.Response | httpx.RequestError
+    ) -> float | None:
         """Seconds to wait before trying again, or None when this outcome is the answer."""
         if _is_final_attempt(attempt):
             return None
+        delay = self._delay_before_retrying(operation, attempt, outcome)
+        if delay is None or delay >= operation.seconds_left():
+            return None
+        return delay
+
+    def _delay_before_retrying(
+        self, operation: _Operation, attempt: int, outcome: httpx.Response | httpx.RequestError
+    ) -> float | None:
         if isinstance(outcome, httpx.RequestError):
             # Only transport failures are transient; an undecodable answer or a redirect loop is not.
-            return self._backoff(attempt) if isinstance(outcome, httpx.TransportError) else None
+            if not isinstance(outcome, httpx.TransportError):
+                return None
+            if operation.if_match is not None and isinstance(outcome, _OUTCOME_UNKNOWN_ERRORS):
+                return None
+            return self._backoff(attempt)
         if outcome.status_code == 429:
             return _retry_after_seconds(outcome, default=self._backoff(attempt))
         return self._backoff(attempt) if outcome.status_code >= 500 else None
@@ -676,14 +734,15 @@ class NasikoStateClient:
         return known + sorted(wanted.difference(CAPABILITY_ORDER))
 
     def _sync_http(self) -> httpx.Client:
-        if self._sync_client is None:
-            self._sync_client = httpx.Client(
-                base_url=self._base_url,
-                headers=self._headers,
-                timeout=_timeout(),
-                transport=self._transport,
-            )
-        return self._sync_client
+        with self._sync_client_lock:
+            if self._sync_client is None:
+                self._sync_client = httpx.Client(
+                    base_url=self._base_url,
+                    headers=self._headers,
+                    timeout=_timeout(),
+                    transport=self._transport,
+                )
+            return self._sync_client
 
     def _async_http(self) -> httpx.AsyncClient:
         if self._async_client is None:
@@ -736,7 +795,6 @@ if _a2a_pb2 is None:
 
 else:
     from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
-    from a2a.utils.errors import UnsupportedOperationError
 
     TASK_FORMAT = TASK_FORMAT_A2A_1
     _DECODE_ERRORS = (ParseError, ValueError, TypeError, AttributeError)
@@ -759,10 +817,6 @@ else:
 
     def _list_arguments(params: Any) -> dict[str, Any]:
         """Map a ListTasksRequest onto the state API's listing filters."""
-        if params.HasField("status_timestamp_after"):
-            raise UnsupportedOperationError(
-                message="tasks/list cannot filter by status_timestamp_after on the platform state store"
-            )
         return {
             "context_id": params.context_id or None,
             "state": _proto_state_name(params.status) if params.status else None,
@@ -770,10 +824,21 @@ else:
             "cursor": params.page_token or None,
         }
 
+    def _status_changed_since(task: Task, params: Any) -> bool:
+        """tasks/list's status_timestamp_after, applied here: the state API cannot filter on it."""
+        if not params.HasField("status_timestamp_after"):
+            return True
+        if not task.status.HasField("timestamp"):
+            return False
+        after, stamp = params.status_timestamp_after, task.status.timestamp
+        return (stamp.seconds, stamp.nanos) >= (after.seconds, after.nanos)
+
     def _list_response(tasks: list[Task], page: Page[TaskRecord], limit: int) -> Any:
-        # The state API reports no totals, so total_size is the size of this page.
+        # total_size stays unset: the state API reports no totals, and this page's own size would
+        # be a wrong one. A page the timestamp filter thinned out is short, and its token still
+        # leads to the next.
         return _a2a_pb2.ListTasksResponse(
-            tasks=tasks, next_page_token=page.next_cursor or "", page_size=limit, total_size=len(tasks)
+            tasks=tasks, next_page_token=page.next_cursor or "", page_size=limit
         )
 
 
@@ -923,7 +988,8 @@ class NasikoTaskStore(TaskStore):
             arguments = _list_arguments(params)
             page = await self._client.alist_tasks(**arguments)
             tasks = [_decode_stored_task(record.body, record.task_id) for record in page.items]
-            return _list_response(tasks, page, arguments["limit"])
+            recent = [task for task in tasks if _status_changed_since(task, params)]
+            return _list_response(recent, page, arguments["limit"])
 
     async def aclose(self) -> None:
         """Write everything pending, stop the background flushers and close the HTTP client."""
@@ -948,7 +1014,11 @@ class NasikoTaskStore(TaskStore):
             raise failures[0]
 
     def flush_sync(self) -> None:
-        """Write every pending snapshot, blocking. Registered with atexit, when no event loop is left."""
+        """Write every pending snapshot, blocking. Registered with atexit, when no event loop is left.
+
+        EXIT_FLUSH_BUDGET_SECONDS bounds the whole flush, each request and its retries included, so
+        an unreachable platform cannot hold up the exit.
+        """
         deadline = time.monotonic() + EXIT_FLUSH_BUDGET_SECONDS
         for slot in list(self._slots.values()):
             if not self._owes_a_write(slot):
@@ -958,7 +1028,7 @@ class NasikoTaskStore(TaskStore):
                     "exit flush budget spent; task %s and any after it were not written", slot.task_id
                 )
                 return
-            self._write_pending_sync(slot)
+            self._write_pending_sync(slot, deadline)
 
     # --- writing ---------------------------------------------------------------------------
 
@@ -984,7 +1054,7 @@ class NasikoTaskStore(TaskStore):
                 raise
             self._confirm(slot, snapshot, receipt.version)
 
-    def _write_pending_sync(self, slot: _TaskSlot) -> None:
+    def _write_pending_sync(self, slot: _TaskSlot, deadline: float) -> None:
         """The exit-time twin of _write_pending: no event loop, so no lock and no re-read."""
         snapshot = slot.pending
         assert snapshot is not None, "callers check _owes_a_write first"
@@ -995,6 +1065,7 @@ class NasikoTaskStore(TaskStore):
                 state=snapshot.state,
                 body=snapshot.body,
                 if_match=slot.version,
+                deadline=deadline,
             )
         except NasikoStateConflict as exc:
             slot.pending = None
@@ -1269,6 +1340,24 @@ class NasikoKV:
 
 # --- langgraph checkpointer ---------------------------------------------------------------------
 
+
+def _reads_stored_records(function: Callable[..., T]) -> Callable[..., T]:
+    """Report a damaged stored record as NasikoStateMalformedRow, not as a bare KeyError.
+
+    Only for helpers that parse records already fetched: they make no requests, so every one of
+    these exceptions comes from the record's shape or encoding.
+    """
+
+    @functools.wraps(function)
+    def parse(*args: Any, **kwargs: Any) -> T:
+        try:
+            return function(*args, **kwargs)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise NasikoStateMalformedRow(f"a stored checkpoint record is malformed: {exc!r}") from exc
+
+    return parse
+
+
 CHECKPOINT_FAMILY = "lg"
 HEAD_FAMILY = "lgh"
 WRITES_FAMILY = "lgw"
@@ -1357,7 +1446,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             head = self._kv.get(_key(HEAD_FAMILY, thread_id, namespace))
             if head is None:
                 return None
-            checkpoint_id = head.value["checkpoint_id"]
+            checkpoint_id = _head_checkpoint_id(head)
         record = self._kv.get(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
         if record is None:
             return None
@@ -1374,7 +1463,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             head = await self._kv.aget(_key(HEAD_FAMILY, thread_id, namespace))
             if head is None:
                 return None
-            checkpoint_id = head.value["checkpoint_id"]
+            checkpoint_id = _head_checkpoint_id(head)
         record = await self._kv.aget(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
         if record is None:
             return None
@@ -1513,6 +1602,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             (_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]}),
         ]
 
+    @_reads_stored_records
     def _tuple(
         self,
         record: dict[str, Any],
@@ -1585,6 +1675,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         plan = [planned(regular)] if regular else []
         return plan + [planned([entry]) for entry in special.values()]
 
+    @_reads_stored_records
     def _writes_by_checkpoint(
         self, write_records: list[KVRecord]
     ) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
@@ -1593,6 +1684,7 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             grouped.setdefault(_checkpoint_identity(item.value), []).append(item.value)
         return grouped
 
+    @_reads_stored_records
     def _select(
         self,
         records: list[dict[str, Any]],
@@ -1645,6 +1737,12 @@ def _split_channel_values(values: Mapping[str, Any]) -> tuple[dict[str, Any], di
     return inline, blobs
 
 
+@_reads_stored_records
+def _head_checkpoint_id(head: KVRecord) -> str:
+    return head.value["checkpoint_id"]
+
+
+@_reads_stored_records
 def _blob_keys(record: Mapping[str, Any]) -> dict[str, str]:
     thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
     return {
