@@ -39,16 +39,23 @@ impl RateLimiter {
     /// Records one request for `key`; returns `false` if it exceeds the
     /// limit for the current window.
     pub fn allow(&self, key: &str) -> bool {
+        self.check(key).is_ok()
+    }
+
+    /// [`allow`](Self::allow), saying on refusal how long remains until
+    /// `key`'s window resets, which is when a retry can first succeed.
+    pub(crate) fn check(&self, key: &str) -> Result<(), Duration> {
         let now = Instant::now();
         let mut entry = self.buckets.entry(key.to_owned()).or_insert((now, 0));
-        if now.duration_since(entry.0) > self.window {
+        let elapsed = now.duration_since(entry.0);
+        if elapsed > self.window {
             *entry = (now, 1);
-            true
+            Ok(())
         } else if entry.1 < self.limit {
             entry.1 += 1;
-            true
+            Ok(())
         } else {
-            false
+            Err(self.window.saturating_sub(elapsed))
         }
     }
 }
@@ -120,6 +127,17 @@ mod tests {
             "a different key must have its own budget"
         );
         assert!(!limiter.allow("a"));
+    }
+
+    #[test]
+    fn a_refusal_names_the_time_left_in_the_window() {
+        let window = Duration::from_secs(60);
+        let limiter = RateLimiter::new(1, window);
+        assert_eq!(limiter.check("a"), Ok(()));
+        std::thread::sleep(Duration::from_millis(20));
+        let wait = limiter.check("a").expect_err("over the limit");
+        assert!(wait <= window - Duration::from_millis(20), "{wait:?}");
+        assert!(wait > window - Duration::from_secs(5), "{wait:?}");
     }
 
     #[test]

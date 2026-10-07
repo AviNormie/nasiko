@@ -16,8 +16,8 @@ use super::error::StateError;
 use crate::rate_limit::RateLimiter;
 
 /// Length of the fixed window the per-agent request budget is counted over, and so also the
-/// longest a rejected caller can be told to wait.
-const RATE_WINDOW: Duration = Duration::from_secs(60);
+/// longest a rejected caller can be told to wait (`Retry-After` is what is left of it).
+pub(super) const RATE_WINDOW: Duration = Duration::from_secs(60);
 
 /// Mints, or rotates, the agent's state API credential and returns its plaintext, once.
 ///
@@ -80,11 +80,9 @@ async fn identify(auth: &AgentAuth, headers: &HeaderMap) -> Result<Authenticated
         .await
         .map_err(|e| StateError::Internal(format!("agent token lookup failed: {e}")))?
         .ok_or(StateError::Unauthorized)?;
-    if !auth.limiter.allow(&agent_id.to_string()) {
-        return Err(StateError::RateLimited {
-            retry_after_secs: RATE_WINDOW.as_secs(),
-        });
-    }
+    auth.limiter
+        .check(&agent_id.to_string())
+        .map_err(StateError::rate_limited)?;
     Ok(AuthenticatedAgent(agent_id))
 }
 

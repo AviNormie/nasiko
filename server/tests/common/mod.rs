@@ -339,7 +339,9 @@ impl TestServer {
         let port = listener.local_addr().unwrap().port();
 
         tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            // As the server binary does, so per-address limits see the peer.
+            let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+            axum::serve(listener, service).await.unwrap();
         });
 
         TestServer {
