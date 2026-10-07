@@ -124,7 +124,10 @@ class DeepAnalystAgent:
         inputs = {"messages": [("user", query)]}
         config = {"configurable": {"thread_id": context_id}}
 
-        for item in self.graph.stream(inputs, config, stream_mode="values"):
+        # One checkpoint per turn, not per step: a turn then costs a handful of calls against the
+        # platform's per-agent rate limit, and a crash mid-turn resumes from the previous turn
+        # instead of from a half-finished tool call no new message could follow.
+        for item in self.graph.stream(inputs, config, stream_mode="values", durability="exit"):
             message = item["messages"][-1]
             if isinstance(message, AIMessage) and message.tool_calls:
                 tool_names = [tc["name"] for tc in message.tool_calls]
