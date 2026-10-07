@@ -137,6 +137,10 @@ class NasikoStateMalformedRow(NasikoStateError):
     """
 
 
+class NasikoStateTooLarge(NasikoStateError):
+    """The state API refused a value above its size limit (HTTP 413). Retrying cannot help."""
+
+
 class NasikoStateConflict(NasikoStateError):
     """An ``If-Match`` precondition failed: another writer changed the row first.
 
@@ -368,6 +372,8 @@ def _error_from(response: httpx.Response, operation: _Operation) -> NasikoStateE
     )
     if response.status_code == 412:
         return NasikoStateConflict(message, current_version=_current_version(body), body=body)
+    if response.status_code == 413:
+        return NasikoStateTooLarge(message, status=413, body=body)
     retry_after = response.headers.get("retry-after")
     if response.status_code == 429 and retry_after:
         message += f" (retry after {retry_after}s)"
@@ -1245,6 +1251,7 @@ class NasikoKV:
 CHECKPOINT_FAMILY = "lg"
 HEAD_FAMILY = "lgh"
 WRITES_FAMILY = "lgw"
+BLOB_FAMILY = "lgb"
 
 
 def _key(family: str, *parts: str) -> str:
@@ -1290,9 +1297,15 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
     langgraph object is written by the saver's own serde and carried as a base64 string in a JSON
     record. Pickle is never written or read.
 
-      lg:{thread}:{ns}:{checkpoint}  the whole checkpoint with its metadata and parent id. Values
-                                     are stored in full rather than shared between checkpoints, so
-                                     one record answers one get_tuple.
+      lg:{thread}:{ns}:{checkpoint}  the checkpoint with its metadata and parent id. Channel
+                                     values that are None, a string, a number or a boolean stay
+                                     inline; every other value lives in its own blob record.
+      lgb:{thread}:{ns}:{channel}:{version}
+                                     one channel value at one version, written only by the put
+                                     that introduced that version (``new_versions``), the way
+                                     langgraph's own savers share values between checkpoints. An
+                                     unchanged channel is never rewritten, and the size limit
+                                     applies to each value rather than to the whole state.
       lgh:{thread}:{ns}              the id of the newest checkpoint. The key-value API has no
                                      "latest" query, and scanning every checkpoint to find the
                                      newest would cost a call per hundred of them.
@@ -1304,9 +1317,13 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
                                      interrupt, resume, scheduled) has its own record at its
                                      negative index.
 
-    A checkpoint is written before the head that points at it, so a crash can only leave the head
-    one checkpoint behind, which resumes cleanly: that step's tasks have their writes saved and are
-    not run again. State expires with the platform's retention, counted from the last write.
+    Blobs are written before the checkpoint and the checkpoint before the head that points at it,
+    so a crash can only leave the head one checkpoint behind, which resumes cleanly: that step's
+    tasks have their writes saved and are not run again. State expires with the platform's
+    retention, counted from each record's last write, so a channel left unchanged for that long
+    expires before the rest of its thread; reading such a checkpoint raises NasikoStateMalformedRow
+    rather than returning it without that channel. A value above the platform's size limit raises
+    NasikoStateTooLarge.
     """
 
     def __init__(self, kv: NasikoKV, *, serde: Any = None) -> None:
@@ -1330,8 +1347,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             return None
         prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
         writes = [write.value for write in self._kv.list(prefix)]
+        blobs = self._load_blobs(record.value, {})
         explicit = config if config["configurable"].get("checkpoint_id") else None
-        return self._tuple(record.value, writes, config=explicit)
+        return self._tuple(record.value, writes, blobs, config=explicit)
 
     async def aget_tuple(self, config: Any) -> Any:
         thread_id, namespace = _thread_and_namespace(config)
@@ -1346,8 +1364,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             return None
         prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
         writes = [write.value async for write in self._kv.alist(prefix)]
+        blobs = await self._aload_blobs(record.value, {})
         explicit = config if config["configurable"].get("checkpoint_id") else None
-        return self._tuple(record.value, writes, config=explicit)
+        return self._tuple(record.value, writes, blobs, config=explicit)
 
     def list(
         self,
@@ -1361,8 +1380,10 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         checkpoints = [record.value for record in self._kv.list(_prefix(CHECKPOINT_FAMILY, *scope))]
         selected = self._select(checkpoints, config, filter, before, limit)
         writes = self._writes_by_checkpoint(list(self._kv.list(_prefix(WRITES_FAMILY, *scope))))
+        loaded_blobs: dict[str, KVRecord | None] = {}  # checkpoints share unchanged values
         for record in selected:
-            yield self._tuple(record, writes.get(_checkpoint_identity(record), []))
+            blobs = self._load_blobs(record, loaded_blobs)
+            yield self._tuple(record, writes.get(_checkpoint_identity(record), []), blobs)
 
     async def alist(
         self,
@@ -1377,29 +1398,40 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         selected = self._select(checkpoints, config, filter, before, limit)
         write_records = [record async for record in self._kv.alist(_prefix(WRITES_FAMILY, *scope))]
         writes = self._writes_by_checkpoint(write_records)
+        loaded_blobs: dict[str, KVRecord | None] = {}
         for record in selected:
-            yield self._tuple(record, writes.get(_checkpoint_identity(record), []))
+            blobs = await self._aload_blobs(record, loaded_blobs)
+            yield self._tuple(record, writes.get(_checkpoint_identity(record), []), blobs)
+
+    def _load_blobs(self, record: dict[str, Any], loaded: dict[str, KVRecord | None]) -> dict[str, Any]:
+        """The blob records a checkpoint refers to, by channel. ``loaded`` caches across calls."""
+        keys = _blob_keys(record)
+        for key in keys.values():
+            if key not in loaded:
+                loaded[key] = self._kv.get(key)
+        return {channel: loaded[key] for channel, key in keys.items()}
+
+    async def _aload_blobs(
+        self, record: dict[str, Any], loaded: dict[str, KVRecord | None]
+    ) -> dict[str, Any]:
+        keys = _blob_keys(record)
+        for key in keys.values():
+            if key not in loaded:
+                loaded[key] = await self._kv.aget(key)
+        return {channel: loaded[key] for channel, key in keys.items()}
 
     # --- writing ---------------------------------------------------------------------------
 
     def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
-        # new_versions is unused: langgraph needs it to share channel blobs between checkpoints,
-        # and this saver stores each checkpoint whole.
         thread_id, namespace = _thread_and_namespace(config)
-        self._kv.put(
-            _key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]),
-            self._checkpoint_record(config, checkpoint, metadata),
-        )
-        self._kv.put(_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]})
+        for key, value in self._planned_checkpoint(config, checkpoint, metadata, new_versions):
+            self._kv.put(key, value)
         return _checkpoint_config(thread_id, namespace, checkpoint["id"])
 
     async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
         thread_id, namespace = _thread_and_namespace(config)
-        await self._kv.aput(
-            _key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]),
-            self._checkpoint_record(config, checkpoint, metadata),
-        )
-        await self._kv.aput(_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]})
+        for key, value in self._planned_checkpoint(config, checkpoint, metadata, new_versions):
+            await self._kv.aput(key, value)
         return _checkpoint_config(thread_id, namespace, checkpoint["id"])
 
     def put_writes(
@@ -1419,13 +1451,12 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             await self._kv.aput(planned.key, planned.record)
 
     def delete_thread(self, thread_id: str) -> None:
-        # Heads first: a half-deleted thread then reads as empty rather than pointing at nothing.
-        for family in (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY):
+        for family in _THREAD_FAMILIES:
             for record in list(self._kv.list(_prefix(family, thread_id))):
                 self._kv.delete(record.key)
 
     async def adelete_thread(self, thread_id: str) -> None:
-        for family in (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY):
+        for family in _THREAD_FAMILIES:
             records = [record async for record in self._kv.alist(_prefix(family, thread_id))]
             for record in records:
                 await self._kv.adelete(record.key)
@@ -1443,29 +1474,64 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             raise NasikoStateError("refusing to load a pickled value from the platform state")
         return self.serde.loads_typed((encoded["type"], base64.b64decode(encoded["data"])))
 
-    def _checkpoint_record(self, config: Any, checkpoint: Any, metadata: Any) -> dict[str, Any]:
+    def _planned_checkpoint(
+        self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any
+    ) -> list[tuple[str, Any]]:
+        """The records one put writes, in crash-safe order: new blobs, the checkpoint, the head."""
         thread_id, namespace = _thread_and_namespace(config)
-        return {
+        inline, blobs = _split_channel_values(checkpoint["channel_values"])
+        versions = checkpoint["channel_versions"]
+        record = {
             "thread_id": thread_id,
             "checkpoint_ns": namespace,
             "checkpoint_id": checkpoint["id"],
             "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
-            "checkpoint": self._encode(checkpoint),
+            "checkpoint": self._encode({**checkpoint, "channel_values": inline}),
             "metadata": self._encode(get_checkpoint_metadata(config, metadata)),
+            "blobs": {channel: versions[channel] for channel in blobs},
         }
+        new_blobs = [
+            (_key(BLOB_FAMILY, thread_id, namespace, channel, str(versions[channel])), self._encode(value))
+            for channel, value in blobs.items()
+            if channel in new_versions
+        ]
+        return [
+            *new_blobs,
+            (_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]), record),
+            (_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]}),
+        ]
 
     def _tuple(
-        self, record: dict[str, Any], write_records: list[dict[str, Any]], *, config: Any = None
+        self,
+        record: dict[str, Any],
+        write_records: list[dict[str, Any]],
+        blobs: Mapping[str, KVRecord | None],
+        *,
+        config: Any = None,
     ) -> Any:
         thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
         parent_id = record["parent_checkpoint_id"]
+        checkpoint = self._decode(record["checkpoint"])
+        checkpoint["channel_values"] = {**checkpoint["channel_values"], **self._blob_values(record, blobs)}
         return CheckpointTuple(
             config=config or _checkpoint_config(thread_id, namespace, record["checkpoint_id"]),
-            checkpoint=self._decode(record["checkpoint"]),
+            checkpoint=checkpoint,
             metadata=self._decode(record["metadata"]),
             parent_config=_checkpoint_config(thread_id, namespace, parent_id) if parent_id else None,
             pending_writes=self._pending_writes(write_records),
         )
+
+    def _blob_values(self, record: dict[str, Any], blobs: Mapping[str, KVRecord | None]) -> dict[str, Any]:
+        values = {}
+        for channel, blob in blobs.items():
+            if blob is None:
+                raise NasikoStateMalformedRow(
+                    f"checkpoint {record['checkpoint_id']!r} of thread {record['thread_id']!r} refers to "
+                    f"channel {channel!r} at version {record['blobs'][channel]!r}, which is gone (expired "
+                    "or deleted)"
+                )
+            values[channel] = self._decode(blob.value)
+        return values
 
     def _pending_writes(self, write_records: list[dict[str, Any]]) -> list[tuple[str, str, Any]]:
         """Flatten write records into langgraph's (task, channel, value), ordered by task then index."""
@@ -1550,6 +1616,29 @@ def _checkpoint_config(thread_id: str, namespace: str, checkpoint_id: str) -> di
 
 def _checkpoint_identity(record: Mapping[str, Any]) -> tuple[str, str, str]:
     return record["thread_id"], record["checkpoint_ns"], record["checkpoint_id"]
+
+
+# Heads first, so a half-deleted thread reads as empty rather than pointing at nothing.
+_THREAD_FAMILIES = (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY, BLOB_FAMILY)
+
+
+def _is_inline_value(value: Any) -> bool:
+    """Small scalars stay in the checkpoint record, as langgraph's Postgres saver keeps them."""
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _split_channel_values(values: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    inline = {channel: value for channel, value in values.items() if _is_inline_value(value)}
+    blobs = {channel: value for channel, value in values.items() if not _is_inline_value(value)}
+    return inline, blobs
+
+
+def _blob_keys(record: Mapping[str, Any]) -> dict[str, str]:
+    thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
+    return {
+        channel: _key(BLOB_FAMILY, thread_id, namespace, channel, str(version))
+        for channel, version in record["blobs"].items()
+    }
 
 
 def make_checkpointer() -> Any:
