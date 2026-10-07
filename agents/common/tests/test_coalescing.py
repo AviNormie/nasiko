@@ -27,7 +27,7 @@ def written_texts(server: FakeStateServer, task_id: str = "t1") -> list[str | No
     """The artifact text of every PUT, in arrival order."""
     texts = []
     for request in task_writes(server, task_id):
-        artifacts = request.json["body"].get("artifacts")
+        artifacts = request.json["body"]["task"].get("artifacts")
         texts.append(artifacts[0]["parts"][0]["text"] if artifacts else None)
     return texts
 
