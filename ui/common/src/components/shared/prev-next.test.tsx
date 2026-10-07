@@ -100,10 +100,9 @@ describe('PrevNext', () => {
     input.remove()
   })
 
-  it('drops the flag when the view did not remount', async () => {
+  it('does not take focus while the clicked button is still mounted', async () => {
     setup()
     await userEvent.click(screen.getByRole('button', { name: 'Next agent' }))
-    await new Promise((r) => requestAnimationFrame(r))
     ;(document.activeElement as HTMLElement).blur()
     render(
       <TooltipProvider>

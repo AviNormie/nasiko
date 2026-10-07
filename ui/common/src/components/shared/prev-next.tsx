@@ -11,18 +11,12 @@ import { stepFromKey } from '@/lib/keys'
 import { cn } from '@/lib/utils'
 
 /**
- * ponytail: a module-level flag, set in a click and consumed by the next PrevNext to mount, if focus fell to <body>
- * within 10 s. A detail route remounts on a step, which drops focus; this puts it back on the arrow used. A step
- * blocked by a leave prompt just expires; a view that doesn't remount clears the flag on the next frame.
+ * ponytail: a module-level flag, set in a click and consumed by the next PrevNext to mount. A detail route remounts
+ * on a step, which drops focus; the new instance puts it back on the arrow used, but only if focus fell to <body>,
+ * within 10 s, and the clicked button is gone (the view really remounted: a sheet that stays open keeps its button).
+ * A step blocked by a leave prompt just expires.
  */
-const refocus: { which?: 'prev' | 'next'; at: number } = { at: 0 }
-
-/** The view didn't remount (the clicked arrow is still there next frame): nothing fell, so drop the flag. */
-function clearIfStayed(btn: HTMLElement) {
-  requestAnimationFrame(() => {
-    if (btn.isConnected) refocus.which = undefined
-  })
-}
+const refocus: { which?: 'prev' | 'next'; el?: HTMLElement; at: number } = { at: 0 }
 
 export function PrevNext({
   noun,
@@ -50,10 +44,10 @@ export function PrevNext({
   const canPrev = !blocked && index > 0
   const canNext = !blocked && index < count - 1
   useEffect(() => {
-    const { which, at } = refocus
+    const { which, el, at } = refocus
     refocus.which = undefined
     const fell = !document.activeElement || document.activeElement === document.body
-    if (which && fell && Date.now() - at < 10_000)
+    if (which && fell && !el?.isConnected && Date.now() - at < 10_000)
       (which === 'prev' ? prevButton : nextButton).current?.focus()
   }, [])
   useEffect(() => {
@@ -95,12 +89,11 @@ export function PrevNext({
             aria-label={`Previous ${noun}`}
             aria-keyshortcuts="k"
             aria-disabled={!canPrev}
-            aria-describedby={blocked ? reasonId : undefined}
+            {...(blocked ? { 'aria-describedby': reasonId } : {})}
             onClick={(e) => {
               if (!canPrev) return
-              Object.assign(refocus, { which: 'prev', at: Date.now() })
+              Object.assign(refocus, { which: 'prev', el: e.currentTarget, at: Date.now() })
               onPrev()
-              clearIfStayed(e.currentTarget)
             }}
           >
             <ChevronUp className="size-4" aria-hidden />
@@ -118,12 +111,11 @@ export function PrevNext({
             aria-label={`Next ${noun}`}
             aria-keyshortcuts="j"
             aria-disabled={!canNext}
-            aria-describedby={blocked ? reasonId : undefined}
+            {...(blocked ? { 'aria-describedby': reasonId } : {})}
             onClick={(e) => {
               if (!canNext) return
-              Object.assign(refocus, { which: 'next', at: Date.now() })
+              Object.assign(refocus, { which: 'next', el: e.currentTarget, at: Date.now() })
               onNext()
-              clearIfStayed(e.currentTarget)
             }}
           >
             <ChevronDown className="size-4" aria-hidden />
