@@ -7,7 +7,8 @@ COPY src/ /app
 RUN pip install --no-cache-dir \
     click>=8.1.8 \
     httpx>=0.28.1 \
-    langgraph>=0.3.18 \
+    "langgraph>=1.0,<2" \
+    "langgraph-checkpoint>=4.1,<5" \
     langchain-openai>=0.1.0 \
     langchain-core \
     pydantic>=2.10.6 \
