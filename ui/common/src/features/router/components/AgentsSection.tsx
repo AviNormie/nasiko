@@ -319,6 +319,7 @@ function Row({
           size="sm"
           variant="ghost"
           className="h-8 px-2 text-primary-text pointer-coarse:min-h-11"
+          data-agent-id={agent.id}
           onClick={onChange}
           disabled={read.state !== 'ok'}
           aria-label={`${copy.changeRouting}: ${name}`}
