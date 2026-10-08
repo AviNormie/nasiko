@@ -46,6 +46,13 @@ pub struct FakeRuntime {
     /// When set, `deploy` fails instead of succeeding — lets a test exercise
     /// a genuine (post-build) deploy failure without a real runtime.
     fail_deploy: std::sync::atomic::AtomicBool,
+    /// Every spec `deploy` accepted, in order - lets a test assert on the env a
+    /// deploy path actually handed the runtime.
+    deployed: std::sync::Mutex<Vec<DeploymentSpec>>,
+    /// When set, `status` reports a container that was never deployed (or was
+    /// destroyed) as not found, like a real runtime - what startup reconcile
+    /// keys on. Off by default: most tests expect everything to look running.
+    status_follows_deploys: std::sync::atomic::AtomicBool,
     /// Stands in for agents' persistent `/workspace`, keyed by
     /// `{subpath}/{rel_path}` so a test can prove the server scoped a read to
     /// the right agent rather than just echoing back what it asked for.
@@ -68,6 +75,31 @@ impl FakeRuntime {
             .lock()
             .unwrap()
             .insert(format!("{}/{rel_path}", workspace.subpath()), body.to_vec());
+    }
+
+    /// The specs deployed so far, oldest first.
+    #[allow(dead_code)]
+    pub fn deployed_specs(&self) -> Vec<DeploymentSpec> {
+        self.deployed.lock().unwrap().clone()
+    }
+
+    /// The most recent spec deployed for `container_id`, if any.
+    #[allow(dead_code)]
+    pub fn last_spec_for(&self, container_id: &ContainerId) -> Option<DeploymentSpec> {
+        self.deployed
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|spec| &spec.container_id == container_id)
+            .cloned()
+    }
+
+    /// Make `status` answer from what was actually deployed.
+    #[allow(dead_code)]
+    pub fn set_status_follows_deploys(&self, follow: bool) {
+        self.status_follows_deploys
+            .store(follow, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Make the next (and all subsequent) `deploy` calls fail instead of
@@ -99,6 +131,7 @@ impl ContainerRuntime for FakeRuntime {
             ));
         }
         let status = fake_status(&spec.container_id);
+        self.deployed.lock().unwrap().push(spec.clone());
         self.containers
             .lock()
             .unwrap()
@@ -120,6 +153,14 @@ impl ContainerRuntime for FakeRuntime {
     }
 
     async fn status(&self, container_id: &ContainerId) -> RuntimeResult<DeploymentStatus> {
+        let follows = self
+            .status_follows_deploys
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if follows && !self.containers.lock().unwrap().contains_key(container_id) {
+            return Err(nasiko_runtime::RuntimeError::ContainerNotFound(
+                container_id.clone(),
+            ));
+        }
         Ok(fake_status(container_id))
     }
 
@@ -224,6 +265,10 @@ pub struct TestServer {
     /// in-process per-agent in-flight count while a request is held open.
     #[allow(dead_code)]
     pub genai_metrics: nasiko_server::telemetry::genai::GenAiMetrics,
+    /// Clone of the running server's `AppState`, for tests that call a
+    /// background routine (seed, reconcile) directly instead of over HTTP.
+    #[allow(dead_code)]
+    pub state: AppState,
     db_name: String,
     admin_pool: PgPool,
 }
@@ -332,6 +377,7 @@ impl TestServer {
             AppState::from_config_with_db(config, auth, runtime, oci_storage, db.clone()).await;
         let flow_events = state.flow_events.clone();
         let genai_metrics = state.genai_metrics.clone();
+        let handle_state = state.clone();
 
         let app = nasiko_server::build_app(state, fallback);
 
@@ -351,6 +397,7 @@ impl TestServer {
             runtime: fake_handle,
             flow_events,
             genai_metrics,
+            state: handle_state,
             db_name,
             admin_pool: admin,
         }
