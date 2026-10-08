@@ -33,6 +33,7 @@ use crate::router::a2a_dispatch::{
     orchestrator_stream, pause_kind, resolve_endpoint,
 };
 use crate::state::AppState;
+use crate::telemetry::agent_request::RequestOutcome;
 
 /// Delivery attempts before a resume gives up and `resume_status` becomes the terminal `failed`
 /// (§3.2) — a pre-flight failure (connection refused, DNS, timeout) releases the lease and
@@ -536,6 +537,9 @@ async fn deliver(state: AppState, row: HitlRequest) {
     // another replica holds it (see `lost_task`).
     let mut redeliveries = 0u32;
     let attempt = loop {
+        // Each delivery is one request in flight to the agent; the backoff between redeliveries
+        // is not.
+        let mut in_flight = state.genai_metrics.begin_agent_request(&agent_id_str);
         let attempt = post_resume(
             &build_req,
             &req_body,
@@ -545,6 +549,8 @@ async fn deliver(state: AppState, row: HitlRequest) {
             &continuation,
         )
         .await;
+        in_flight.set_outcome(resume_attempt_outcome(&attempt));
+        drop(in_flight);
         let exhausted = redeliveries >= state.config.hitl_lost_task_retries;
         if !matches!(attempt, ResumeAttempt::TaskNotFound) || exhausted {
             break attempt;
@@ -1029,6 +1035,15 @@ enum ResumeAttempt {
     /// The request went out and was answered, but the body could not be read or parsed; carries
     /// why, for `resume_last_error`.
     Unclassified(String),
+}
+
+/// How one delivery ended, for the per-agent request metrics: only a classified reply whose task
+/// did not fail is a success.
+fn resume_attempt_outcome(attempt: &ResumeAttempt) -> RequestOutcome {
+    let ResumeAttempt::Reply((disposition, _, _)) = attempt else {
+        return RequestOutcome::Error;
+    };
+    RequestOutcome::from_success(*disposition != StreamDisposition::Failed)
 }
 
 /// Disposition, the raw payload that produced it, and the reply text, as the two body consumers
@@ -1673,5 +1688,35 @@ mod answer_text_tests {
     fn no_human_response_fails_closed_to_denied() {
         let row = row_with_response(None);
         assert_eq!(answer_text(&row), "denied");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_reply_whose_task_did_not_fail_counts_as_a_successful_delivery() {
+        let reply = |d| ResumeAttempt::Reply((d, None, None));
+        assert_eq!(
+            resume_attempt_outcome(&reply(StreamDisposition::Completed)),
+            RequestOutcome::Ok
+        );
+        assert_eq!(
+            resume_attempt_outcome(&reply(StreamDisposition::Paused)),
+            RequestOutcome::Ok
+        );
+        assert_eq!(
+            resume_attempt_outcome(&reply(StreamDisposition::Failed)),
+            RequestOutcome::Error
+        );
+        for failed in [
+            ResumeAttempt::TaskNotFound,
+            ResumeAttempt::SendFailed("refused".into()),
+            ResumeAttempt::HttpFailure(reqwest::StatusCode::BAD_GATEWAY),
+            ResumeAttempt::Unclassified("stream broke".into()),
+        ] {
+            assert_eq!(resume_attempt_outcome(&failed), RequestOutcome::Error);
+        }
     }
 }

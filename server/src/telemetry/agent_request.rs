@@ -1,6 +1,16 @@
 //! Per-agent request load: how many requests are in flight to each agent, how long they take at
-//! each level of concurrency, and how they end. Recorded at every hop that forwards a request to
-//! an agent, keyed by agent UUID (names are reused and renamed, ids are not).
+//! each level of concurrency, and how they end, keyed by agent UUID (names are reused and renamed,
+//! ids are not). Recorded at every hop that sends a request to an agent:
+//! - the direct proxy (`agent_proxy.rs`);
+//! - the explicit-agent dispatch (`agent_stream` in `router/a2a_dispatch.rs`);
+//! - the ReAct orchestrator's agent tool calls, through `CpCallGuard::before_call` (`acl.rs`);
+//! - the MAF executor's step calls, fresh and resumed, through the meter `lib.rs` hands
+//!   `start_worker`;
+//! - each HITL resume delivery (`hitl/mod.rs`).
+//!
+//! The last three reach agents from code outside this crate or around a retry loop; the
+//! orchestrator crates see only the `nasiko_types::agent_call` seam, implemented here by
+//! [`AgentRequestMetrics`] and [`AgentRequestGuard`].
 //!
 //! The in-flight count is kept in-process as well as exported, because the duration histogram is
 //! labelled with the count at request start (the "band") and an UpDownCounter cannot be read back.
@@ -8,6 +18,7 @@
 //! running several server processes must give each a distinct resource identity.
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use nasiko_types::agent_call::{AgentCallHandle, AgentCallMeter};
 use opentelemetry::{
     KeyValue,
     metrics::{Counter, Histogram, Meter, UpDownCounter},
@@ -131,9 +142,21 @@ impl AgentRequestMetrics {
         );
     }
 
-    #[cfg(test)]
-    fn inflight_now(&self, agent_id: &str) -> u64 {
+    /// Requests to `agent_id` in flight from this process right now.
+    pub fn inflight_now(&self, agent_id: &str) -> u64 {
         self.inflight.get(agent_id).map_or(0, |count| *count)
+    }
+}
+
+/// The seam crates outside the server (the ReAct orchestrator, the MAF executor) count their
+/// own direct agent calls through.
+impl AgentCallMeter for AgentRequestMetrics {
+    fn begin(&self, agent_id: uuid::Uuid) -> Box<dyn AgentCallHandle> {
+        let mut guard = AgentRequestMetrics::begin(self, &agent_id.to_string());
+        // The seam's contract: a handle dropped before it is told a result is a caller that
+        // stopped waiting.
+        guard.set_outcome(RequestOutcome::Cancelled);
+        Box::new(guard)
     }
 }
 
@@ -167,6 +190,12 @@ impl AgentRequestGuard {
 
     pub fn band(&self) -> &'static str {
         self.band
+    }
+}
+
+impl AgentCallHandle for AgentRequestGuard {
+    fn set_succeeded(&mut self, succeeded: bool) {
+        self.set_outcome(RequestOutcome::from_success(succeeded));
     }
 }
 

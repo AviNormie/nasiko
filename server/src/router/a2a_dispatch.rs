@@ -729,6 +729,7 @@ pub(crate) async fn orchestrator_stream(
         state.flow_guard.clone(),
         flow_ctx,
         caller_uuid,
+        state.genai_metrics.agent_call_meter(),
     );
 
     // `A2aClient`'s own default is deliberately short — it is shared with agent

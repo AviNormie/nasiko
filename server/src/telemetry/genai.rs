@@ -149,6 +149,17 @@ impl GenAiMetrics {
         self.agent_requests.begin(agent_id)
     }
 
+    /// The same per-agent load metrics, behind the seam that the orchestrator crates use for
+    /// the agent calls they make themselves.
+    pub fn agent_call_meter(&self) -> std::sync::Arc<dyn nasiko_types::agent_call::AgentCallMeter> {
+        std::sync::Arc::new(self.agent_requests.clone())
+    }
+
+    /// Requests to `agent_id` (a UUID) in flight from this process right now.
+    pub fn agent_inflight_now(&self, agent_id: &str) -> u64 {
+        self.agent_requests.inflight_now(agent_id)
+    }
+
     pub fn record_tokens(
         &self,
         input_tokens: u64,
