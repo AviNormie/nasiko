@@ -254,7 +254,7 @@ impl AgentExecutor for CodingAgent {
                     serde_json::json!({"role": "system", "content": "You review instruction files for staleness. Respond with only a JSON array."}),
                     serde_json::json!({"role": "user", "content": prune_prompt}),
                 ];
-                if let Ok(resp) = agent.chat(&prune_messages, &[]).await {
+                if let Ok(resp) = agent.chat(&prune_messages, &[], remote_cx.as_ref()).await {
                     let answer = resp["choices"][0]["message"]["content"].as_str().unwrap_or("[]");
                     let indices = instructions::parse_prune_response(answer);
                     if !indices.is_empty() {
@@ -330,7 +330,7 @@ impl AgentExecutor for CodingAgent {
                                         serde_json::json!({"role": "system", "content": "You review instruction files for staleness. Respond with only a JSON array."}),
                                         serde_json::json!({"role": "user", "content": prune_prompt}),
                                     ];
-                                    match agent.chat(&prune_messages, &[]).await {
+                                    match agent.chat(&prune_messages, &[], remote_cx.as_ref()).await {
                                         Ok(resp) => {
                                             let answer = resp["choices"][0]["message"]["content"].as_str().unwrap_or("[]");
                                             let indices = instructions::parse_prune_response(answer);
