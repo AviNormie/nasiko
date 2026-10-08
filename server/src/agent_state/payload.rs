@@ -100,6 +100,9 @@ impl PayloadCipher {
 /// store's label behind its length, then the name. Fixed and length-prefixed fields leave the
 /// name as the unambiguous remainder, so no two rows share these bytes. Part of the stored
 /// format: changing it makes every stored row unreadable.
+///
+/// The row's version is not bound, so someone able to write the database could put back an older
+/// ciphertext of the same row and it would open. Database write access is outside the threat model.
 fn associated_data(agent_id: Uuid, store: Store, name: &str) -> Vec<u8> {
     let label = store.label().as_bytes();
     let label_len = u8::try_from(label.len()).expect("store labels are a few bytes");
