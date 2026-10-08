@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 from google.adk.agents import Agent
+from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.runners import Runner
 from google.genai import types as genai_types
 from nasiko_adk_sessions import session_service_from_env
@@ -50,10 +51,15 @@ class ResearchAgent:
         existing = await self._session_service.get_session(
             app_name=APP_NAME, user_id="user", session_id=context_id
         )
-        if existing is None:
+        if existing is not None:
+            return
+        try:
             await self._session_service.create_session(
                 app_name=APP_NAME, user_id="user", session_id=context_id
             )
+        except AlreadyExistsError:
+            # Another replica created it between the get and the create; that session is ours too.
+            pass
 
     async def stream(self, query: str, context_id: str) -> AsyncIterable[dict[str, Any]]:
         yield {
