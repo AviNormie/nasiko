@@ -157,6 +157,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         savings_factor_refresh_secs: 86_400,
         savings_factor_min_samples: 1_600,
         savings_factor_window_days: 30,
+        minimal_code_holdout_pct: 5,
         react_compress_enabled: false,
         react_compress_min_bytes: 2048,
         history_compress_enabled: false,
