@@ -49,6 +49,7 @@ import functools
 import json
 import logging
 import os
+import random
 import signal
 import threading
 import time
@@ -92,8 +93,18 @@ CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 10.0
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 0.2
-# The longest Retry-After a rate-limited (429) request waits out; a longer one surfaces the 429.
+# A rate-limited (429) request is retried after the Retry-After the server names, waiting at most
+# MAX_RETRY_AFTER_SECONDS per attempt and RATE_LIMIT_BUDGET_SECONDS in all before the 429 surfaces.
+# The platform's limit is a per-minute window shared by every replica of the agent, so a wait of a
+# few seconds is usually enough, and a turn that keeps failing for half a minute should fail.
 MAX_RETRY_AFTER_SECONDS = 5.0
+RATE_LIMIT_BUDGET_SECONDS = 30.0
+# The wait when a 429 names none (or names an HTTP date), and the shortest wait ever taken, so a
+# server answering "Retry-After: 0" cannot turn the budget into a busy loop.
+RATE_LIMIT_DEFAULT_WAIT_SECONDS = 1.0
+RATE_LIMIT_MIN_WAIT_SECONDS = 0.5
+# Relative spread of each 429 wait, so replicas limited at the same moment do not retry in step.
+RATE_LIMIT_JITTER = 0.2
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 50
 
@@ -430,14 +441,58 @@ def _request_failed(operation: _Operation, exc: httpx.RequestError) -> NasikoSta
     return NasikoStateError(f"state API {operation.method} {operation.path} request failed: {exc!r}")
 
 
-def _retry_after_seconds(response: httpx.Response, default: float) -> float | None:
-    """How long a 429 asks to wait, ``default`` when it does not say, None when it is too long."""
+@dataclass
+class _RetryState:
+    """What one call has spent on retries so far."""
+
+    # Attempts that failed in a way worth repeating (no answer, 5xx); bounded by RETRY_ATTEMPTS.
+    transient_failures: int = 0
+    # Seconds waited on 429 answers; bounded by RATE_LIMIT_BUDGET_SECONDS.
+    rate_limited_seconds: float = 0.0
+
+
+def _is_rate_limited(outcome: httpx.Response | httpx.RequestError) -> bool:
+    return isinstance(outcome, httpx.Response) and outcome.status_code == 429
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """How long a 429 asks to wait, within [RATE_LIMIT_MIN_WAIT_SECONDS, MAX_RETRY_AFTER_SECONDS]."""
     header = response.headers.get("retry-after")
     try:
-        seconds = float(header) if header is not None else default
+        asked = float(header) if header is not None else RATE_LIMIT_DEFAULT_WAIT_SECONDS
     except ValueError:
-        seconds = default  # an HTTP-date; a per-minute limit is not worth parsing one for
-    return seconds if 0 <= seconds <= MAX_RETRY_AFTER_SECONDS else None
+        asked = RATE_LIMIT_DEFAULT_WAIT_SECONDS  # an HTTP-date; a per-minute window is not worth one
+    return min(max(asked, RATE_LIMIT_MIN_WAIT_SECONDS), MAX_RETRY_AFTER_SECONDS)
+
+
+def _jittered(seconds: float) -> float:
+    """Spread a 429 wait so replicas limited together do not all come back at the same instant.
+
+    Never shorter than the server asked, since an early retry is refused again and spends the
+    agent's budget, except at the per-attempt cap, where the spread can only go down.
+    """
+    if seconds >= MAX_RETRY_AFTER_SECONDS:
+        return MAX_RETRY_AFTER_SECONDS * random.uniform(1 - RATE_LIMIT_JITTER, 1)
+    return min(MAX_RETRY_AFTER_SECONDS, seconds * random.uniform(1, 1 + RATE_LIMIT_JITTER))
+
+
+def _rate_limit_delay(response: httpx.Response, retries: _RetryState) -> float | None:
+    """The wait before repeating a rate-limited call, or None once the 429 budget is spent."""
+    delay = _jittered(_retry_after_seconds(response))
+    if retries.rate_limited_seconds + delay > RATE_LIMIT_BUDGET_SECONDS:
+        return None
+    retries.rate_limited_seconds += delay
+    return delay
+
+
+def _is_transient_outcome(operation: _Operation, outcome: httpx.Response | httpx.RequestError) -> bool:
+    """Whether repeating the request could get a different answer: no answer at all, or a 5xx."""
+    if isinstance(outcome, httpx.Response):
+        return outcome.status_code >= 500
+    # Only transport failures are transient; an undecodable answer or a redirect loop is not.
+    if not isinstance(outcome, httpx.TransportError):
+        return False
+    return not (operation.if_match is not None and isinstance(outcome, _OUTCOME_UNKNOWN_ERRORS))
 
 
 def _response_or_raise(operation: _Operation, outcome: httpx.Response | httpx.RequestError) -> httpx.Response:
@@ -457,8 +512,10 @@ class NasikoStateClient:
     Async methods carry an ``a`` prefix (``put_task`` / ``aput_task``), the way langgraph names
     its savers. Failures raise NasikoStateError with the HTTP status and body; nothing falls back
     silently. Connection errors and 5xx answers are retried (RETRY_ATTEMPTS attempts in total,
-    exponential backoff) because every call is idempotent; so is a 429, after the Retry-After it
-    names when that is at most MAX_RETRY_AFTER_SECONDS. Other 4xx answers never are.
+    exponential backoff) because every call is idempotent. A 429 is retried after the Retry-After
+    it names, jittered and capped at MAX_RETRY_AFTER_SECONDS per attempt, until
+    RATE_LIMIT_BUDGET_SECONDS of waiting is spent; then it raises like any other failure. Other
+    4xx answers are never retried.
 
     The first write of each kind (tasks, kv) registers the agent with the platform, once.
     """
@@ -653,22 +710,21 @@ class NasikoStateClient:
 
     def _send(self, operation: _Operation) -> httpx.Response:
         http = self._sync_http()
-        attempt = 1
+        retries = _RetryState()
         while True:
             _check_deadline(operation)
             try:
                 outcome: httpx.Response | httpx.RequestError = http.request(**operation.request_kwargs())
             except httpx.RequestError as exc:
                 outcome = exc
-            delay = self._retry_delay(operation, attempt, outcome)
+            delay = self._retry_delay(operation, retries, outcome)
             if delay is None:
                 return _response_or_raise(operation, outcome)
             time.sleep(delay)
-            attempt += 1
 
     async def _asend(self, operation: _Operation) -> httpx.Response:
         http = self._async_http()
-        attempt = 1
+        retries = _RetryState()
         while True:
             _check_deadline(operation)
             try:
@@ -677,36 +733,35 @@ class NasikoStateClient:
                 )
             except httpx.RequestError as exc:
                 outcome = exc
-            delay = self._retry_delay(operation, attempt, outcome)
+            delay = self._retry_delay(operation, retries, outcome)
             if delay is None:
                 return _response_or_raise(operation, outcome)
             await asyncio.sleep(delay)
-            attempt += 1
 
     def _retry_delay(
-        self, operation: _Operation, attempt: int, outcome: httpx.Response | httpx.RequestError
+        self, operation: _Operation, retries: _RetryState, outcome: httpx.Response | httpx.RequestError
     ) -> float | None:
-        """Seconds to wait before trying again, or None when this outcome is the answer."""
-        if _is_final_attempt(attempt):
-            return None
-        delay = self._delay_before_retrying(operation, attempt, outcome)
+        """Seconds to wait before trying again, or None when this outcome is the answer.
+
+        Records the wait in ``retries``, so it is only to be called once per outcome.
+        """
+        if _is_rate_limited(outcome):
+            delay = _rate_limit_delay(outcome, retries)  # type: ignore[arg-type]
+        else:
+            delay = self._transient_delay(operation, retries, outcome)
         if delay is None or delay >= operation.seconds_left():
             return None
         return delay
 
-    def _delay_before_retrying(
-        self, operation: _Operation, attempt: int, outcome: httpx.Response | httpx.RequestError
+    def _transient_delay(
+        self, operation: _Operation, retries: _RetryState, outcome: httpx.Response | httpx.RequestError
     ) -> float | None:
-        if isinstance(outcome, httpx.RequestError):
-            # Only transport failures are transient; an undecodable answer or a redirect loop is not.
-            if not isinstance(outcome, httpx.TransportError):
-                return None
-            if operation.if_match is not None and isinstance(outcome, _OUTCOME_UNKNOWN_ERRORS):
-                return None
-            return self._backoff(attempt)
-        if outcome.status_code == 429:
-            return _retry_after_seconds(outcome, default=self._backoff(attempt))
-        return self._backoff(attempt) if outcome.status_code >= 500 else None
+        if not _is_transient_outcome(operation, outcome):
+            return None
+        retries.transient_failures += 1
+        if _is_final_attempt(retries.transient_failures):
+            return None
+        return self._backoff(retries.transient_failures)
 
     def _backoff(self, attempt: int) -> float:
         return self._retry_backoff * 2 ** (attempt - 1)
