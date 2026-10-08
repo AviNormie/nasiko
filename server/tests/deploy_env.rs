@@ -726,8 +726,7 @@ async fn deleting_an_agent_revokes_its_state_credential() {
     // The token row itself is tombstoned, not just hidden by the soft delete: undeleting the
     // agent must not bring the credential back.
     let revoked: bool = sqlx::query_scalar(
-        "SELECT revoked_at IS NOT NULL FROM agent_gateway_tokens \
-         WHERE agent_id = $1 AND scope = 'state'",
+        "SELECT revoked_at IS NOT NULL FROM agent_state_tokens WHERE agent_id = $1",
     )
     .bind(agent_id)
     .fetch_one(&f.server.db)
@@ -743,11 +742,15 @@ async fn deleting_an_agent_revokes_its_state_credential() {
 
 // ─── Credential rotation vs. a failed build ─────────────────────────────────
 
-/// Both credentials (the gateway row and the state row share one table, split by `scope`) as
-/// `(scope, token_hash, rotated_at)`; `rotated_at` is NULL until a credential is first rotated.
+/// Both credentials (the gateway row in `agent_gateway_tokens`, the state row in
+/// `agent_state_tokens`) as `(scope, token_hash, rotated_at)`; `rotated_at` is NULL until a
+/// credential is first rotated.
 async fn credential_rows(f: &Fixture, agent_id: Uuid) -> Vec<(String, String, Option<String>)> {
     sqlx::query_as(
-        "SELECT scope, token_hash, rotated_at::text FROM agent_gateway_tokens \
+        "SELECT 'gateway' AS scope, token_hash, rotated_at::text FROM agent_gateway_tokens \
+         WHERE agent_id = $1 \
+         UNION ALL \
+         SELECT 'state', token_hash, rotated_at::text FROM agent_state_tokens \
          WHERE agent_id = $1 ORDER BY scope",
     )
     .bind(agent_id)
