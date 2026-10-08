@@ -522,7 +522,7 @@ pub async fn execute_agent_update(
         )
         .await;
 
-        // Built with agent_owner_id (the agent's real owner), NOT owner_id (the caller) —
+        // Built with agent_owner_id (the agent's real owner), NOT owner_id (the caller) -
         // a superuser/ACL-grantee updating someone else's agent must not cause that
         // agent to resolve the caller's secrets/llm_config instead of its own owner's.
         let env =
@@ -908,7 +908,7 @@ pub async fn execute_agent_rollback(
         .execute(db)
         .await;
 
-    // Built with agent_owner_id (the agent's real owner), NOT caller_id — a superuser/
+    // Built with agent_owner_id (the agent's real owner), NOT caller_id - a superuser/
     // ACL-grantee rolling back someone else's agent must not cause that agent to
     // resolve the caller's secrets/llm_config instead of its own owner's.
     let env =
