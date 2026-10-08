@@ -1608,7 +1608,9 @@ async fn agent_stream(
             }
 
             // The agent's part is over; what follows is bookkeeping, not in-flight agent load.
-            request_guard.settle(RequestOutcome::from_success(agent_error.is_none()));
+            request_guard.settle(RequestOutcome::from_success(
+                agent_error.is_none() && final_disposition != a2a::StreamDisposition::Failed,
+            ));
             drop(request_guard);
 
             if final_disposition == a2a::StreamDisposition::Paused {
@@ -1691,6 +1693,9 @@ async fn agent_stream(
             .await
             .map_err(|e| A2aDispatchError::Internal(format!("invalid agent JSON: {e}")))?;
 
+        // A non-success first reply returned early above; the retry's status is checked below.
+        let mut reply_status_ok = true;
+
         // The agent rejected `message/stream` (e.g. method not found) —
         // retry once with plain `message/send`.
         if resp_body.get("error").is_some() {
@@ -1701,6 +1706,7 @@ async fn agent_stream(
                 .send()
                 .await
                 .map_err(|e| A2aDispatchError::Internal(format!("agent request failed: {e}")))?;
+            reply_status_ok = retry.status().is_success();
             resp_body = retry
                 .json()
                 .await
@@ -1711,8 +1717,8 @@ async fn agent_stream(
         // `message/send`, or whose `message/stream` fell back here) — §8 applies here just as
         // much as it does to the streaming branch; without this check the pause was silently
         // flattened into `extract_text`'s ordinary-reply fallback and lost entirely.
-        // Any failure above (including the retry) returned early with the guard still `Error`.
-        request_guard.set_outcome(RequestOutcome::Ok);
+        // A transport or parse failure above returned early with the guard still `Error`.
+        request_guard.set_outcome(non_streaming_reply_outcome(reply_status_ok, &resp_body));
 
         let raw_body = resp_body.to_string();
         if a2a::classify_stream_disposition(&raw_body) == a2a::StreamDisposition::Paused {
@@ -2174,6 +2180,16 @@ pub(crate) async fn resolve_endpoint(
 
 /// Normalize a Python a2a-sdk JSONRPC event to CP native StreamResponse format.
 /// Extract the error message if this SSE event represents a TASK_STATE_FAILED status update.
+/// The per-agent metrics outcome of a non-streaming agent reply: a success status, no JSON-RPC
+/// `error`, and a task that did not end failed. The task state is read with the same wire-shape
+/// classifier the streaming relay ends its exchange on, which (unlike `extract_failure_message`)
+/// also reads the task-wrapped reply a non-streaming agent sends.
+fn non_streaming_reply_outcome(status_ok: bool, body: &serde_json::Value) -> RequestOutcome {
+    let task_failed =
+        a2a::classify_stream_disposition(&body.to_string()) == a2a::StreamDisposition::Failed;
+    RequestOutcome::from_success(status_ok && body.get("error").is_none() && !task_failed)
+}
+
 fn extract_failure_message(data: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
     let status_update = parsed
@@ -2583,6 +2599,44 @@ mod hitl_pause_tests {
         assert_eq!(
             pause_kind(AUTH_REQUIRED_PAYLOAD),
             nasiko_hitl::HitlKind::AuthRequired
+        );
+    }
+}
+
+#[cfg(test)]
+mod reply_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn a_non_streaming_reply_is_ok_only_without_an_error_or_a_failed_task() {
+        let completed = json!({"jsonrpc": "2.0", "id": "1", "result": {"task": {
+            "id": "t", "status": {"state": "TASK_STATE_COMPLETED"}}}});
+        let flat_message = json!({"jsonrpc": "2.0", "id": "1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}});
+        let failed = json!({"jsonrpc": "2.0", "id": "1", "result": {"task": {
+            "id": "t", "status": {"state": "TASK_STATE_FAILED"}}}});
+        let rpc_error = json!({"jsonrpc": "2.0", "id": "1",
+            "error": {"code": -32601, "message": "method not found"}});
+
+        assert_eq!(
+            non_streaming_reply_outcome(true, &completed),
+            RequestOutcome::Ok
+        );
+        assert_eq!(
+            non_streaming_reply_outcome(true, &flat_message),
+            RequestOutcome::Ok
+        );
+        assert_eq!(
+            non_streaming_reply_outcome(false, &completed),
+            RequestOutcome::Error
+        );
+        assert_eq!(
+            non_streaming_reply_outcome(true, &failed),
+            RequestOutcome::Error
+        );
+        assert_eq!(
+            non_streaming_reply_outcome(true, &rpc_error),
+            RequestOutcome::Error
         );
     }
 }
