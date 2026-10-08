@@ -31,21 +31,27 @@ pub struct LlmConfig {
 /// Call once at server startup — the worker reads from the Redis stream
 /// `nasiko:maf:execute` and drives execution of queued MAF jobs.
 ///
-/// `http_client` serves the worker's LLM calls; `agent_client` its calls to agents,
-/// which it makes without a per-request timeout, so that client carries the agent
-/// call budget.
+/// How the worker reaches agents: the client for its calls to them and the meter that counts
+/// each call as in flight. MAF calls agents directly, not through the server's proxy, so both
+/// are received from the composition root.
+pub struct AgentCalls {
+    /// Serves the worker's calls to agents. They carry no per-request timeout, so this client
+    /// carries the agent call budget.
+    pub client: reqwest::Client,
+    /// Counts each step's agent call as in flight to its agent.
+    pub meter: Arc<dyn AgentCallMeter>,
+}
+
+/// `http_client` serves the worker's LLM calls; `agent_calls` its calls to agents.
 pub fn start_worker(
     db: PgPool,
     redis: redis::Client,
     http_client: reqwest::Client,
-    agent_client: reqwest::Client,
+    agent_calls: AgentCalls,
     // Cascade-limit enforcement for each step's agent call. Received from the
     // composition root rather than constructed here, so MAF shares the very
     // same guard instance the A2A dispatch and proxy paths use.
     flow_guard: Arc<FlowGuard>,
-    // Counts each step's agent call as in flight to its agent. Received for the same reason
-    // as `flow_guard`: MAF calls agents directly, not through the server's proxy.
-    agent_calls: Arc<dyn AgentCallMeter>,
     llm_config: LlmConfig,
     hitl_store: Arc<dyn nasiko_hitl::HitlStore>,
 ) {
@@ -58,9 +64,9 @@ pub fn start_worker(
     tokio::spawn(worker::run(
         db,
         redis,
-        agent_client,
+        agent_calls.client,
         flow_guard,
-        agent_calls,
+        agent_calls.meter,
         llm,
         hitl_store,
     ));
