@@ -117,6 +117,11 @@ DEFERRED_RETRY_MAX_SECONDS = 10.0
 PENDING_MAX_AGE_SECONDS = 60.0
 # Exiting with the platform unreachable must not hang for every pending task.
 EXIT_FLUSH_BUDGET_SECONDS = 10.0
+# A task id just looked up and not found reads as missing for this long without asking again.
+# a2a-sdk 1.x looks a new task's id up several times before the task's first save, and that id is
+# one the SDK generated for the request, so no other replica can have created the task meanwhile.
+# A task that exists is always read from the server: another replica may have changed it.
+ABSENT_CACHE_SECONDS = 2.0
 # Bound on tasks whose write state is remembered. Forgetting an idle one costs its next write the
 # version check: having no version to match, that write is unconditional.
 MAX_TRACKED_TASKS = 4096
@@ -962,6 +967,8 @@ class _TaskSlot:
         # state is written through. None when unknown: nothing sent yet, or the last send failed.
         self.state: str | None = None
         self.last_write_started = float("-inf")
+        # time.monotonic() until which a lookup that found nothing stands; see ABSENT_CACHE_SECONDS.
+        self.absent_until = float("-inf")
         # Consecutive failed writes; spaces out the background retries.
         self.failed_writes = 0
         self.flusher: asyncio.Task[None] | None = None
@@ -970,6 +977,10 @@ class _TaskSlot:
 
     def is_idle(self) -> bool:
         return self.pending is None and self.flusher is None and not self.lock.locked()
+
+    def is_known_absent(self) -> bool:
+        """Whether a recent lookup found no such task and nothing has been saved since."""
+        return self.pending is None and self.version is None and time.monotonic() < self.absent_until
 
 
 class NasikoTaskStore(TaskStore):
@@ -990,7 +1001,8 @@ class NasikoTaskStore(TaskStore):
     first, a save that changes state raises NasikoStateConflict, and a coalesced update is dropped
     (logged); either way the store re-reads the task, and ``get()`` returns the other replica's
     row. ``get()`` returns this process's unwritten snapshot only while it is still based on the
-    server's current row. ``list`` is served by the server and can lag by one window.
+    server's current row; a task it did not find reads as missing for ABSENT_CACHE_SECONDS
+    without another request. ``list`` is served by the server and can lag by one window.
 
     Tasks are scoped to the agent, not to an end user: the SDK's per-user owner resolution does
     not apply.
@@ -1009,6 +1021,7 @@ class NasikoTaskStore(TaskStore):
         snapshot = _snapshot(task)
         slot = self._slot(snapshot.task_id)
         slot.pending = snapshot
+        slot.absent_until = float("-inf")
         if snapshot.state == slot.state:
             self._schedule_flush(slot)
             return
@@ -1026,8 +1039,13 @@ class NasikoTaskStore(TaskStore):
         slot = self._slot(task_id)
         # Under the slot's lock, so a write in flight cannot be mistaken for another writer's.
         async with slot.lock:
+            if slot.is_known_absent():
+                return None
             record = await self._client.aget_task(task_id)
-            return self._newest_of(slot, record)
+            task = self._newest_of(slot, record)
+            if task is None:
+                slot.absent_until = time.monotonic() + ABSENT_CACHE_SECONDS
+            return task
 
     async def delete(self, task_id: str, context: Any = None) -> None:
         slot = self._slot(task_id)
