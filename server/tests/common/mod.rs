@@ -46,6 +46,9 @@ pub struct FakeRuntime {
     /// When set, `deploy` fails instead of succeeding — lets a test exercise
     /// a genuine (post-build) deploy failure without a real runtime.
     fail_deploy: std::sync::atomic::AtomicBool,
+    /// When set, `build` fails instead of succeeding - a failed image build, which must leave
+    /// the running agent untouched.
+    fail_build: std::sync::atomic::AtomicBool,
     /// Every spec `deploy` accepted, in order - lets a test assert on the env a
     /// deploy path actually handed the runtime.
     deployed: std::sync::Mutex<Vec<DeploymentSpec>>,
@@ -107,6 +110,13 @@ impl FakeRuntime {
     #[allow(dead_code)]
     pub fn set_fail_deploy(&self, fail: bool) {
         self.fail_deploy
+            .store(fail, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make `build` calls fail instead of succeeding.
+    #[allow(dead_code)]
+    pub fn set_fail_build(&self, fail: bool) {
+        self.fail_build
             .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -187,6 +197,11 @@ impl ContainerRuntime for FakeRuntime {
     }
 
     async fn build(&self, _tar_context: &[u8], image_tag: &str) -> RuntimeResult<String> {
+        if self.fail_build.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(nasiko_runtime::RuntimeError::BackendUnreachable(
+                "fake build failure (scripted by test)".into(),
+            ));
+        }
         Ok(image_tag.to_owned())
     }
 

@@ -344,9 +344,15 @@ pub(crate) async fn restart_deployment(
     // Resolve agent environment (platform vars + agent-specific secrets).
     // Platform credentials rotate on restart and reach the pod via the K8s secret
     // refresh below, or the Docker recreate's env.
-    let secrets =
-        crate::agents::deploy_env::build(&state, info.agent_id, info.owner_id, Default::default())
-            .await;
+    // Same image comes back, so a durable agent stays durable.
+    let secrets = crate::agents::deploy_env::build(
+        &state,
+        info.agent_id,
+        info.owner_id,
+        Default::default(),
+        crate::agents::deploy_env::StateModeOnDeploy::Keep,
+    )
+    .await;
 
     if let Some(k8s_name) = &info.k8s_deployment_name {
         // ── K8s path: scale-to-1 (avoids tearing down and recreating the Deployment) ──

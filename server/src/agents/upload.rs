@@ -923,9 +923,7 @@ async fn suggest_next_version(db: &sqlx::PgPool, agent_id: Uuid, base: &str) -> 
 /// Called by the build worker.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_upload_and_deploy(
-    runtime: std::sync::Arc<dyn nasiko_runtime::ContainerRuntime>,
-    db: sqlx::PgPool,
-    http: reqwest::Client,
+    state: &AppState,
     build_id: Uuid,
     agent_id: Uuid,
     owner_id: Uuid,
@@ -934,27 +932,16 @@ pub async fn execute_upload_and_deploy(
     zip_path: PathBuf,
     image_tag: String,
     ports: Vec<u16>,
-    mut env: HashMap<String, String>,
-    // Server-level LLM defaults, injected here (not baked into the DB payload) so
-    // the API key is never persisted in cleartext (RUN-5). Caller env wins.
-    openai_api_key: Option<String>,
-    openai_base_url: Option<String>,
-    agent_runtime: String,
-    agent_image_registry: String,
-    max_replicas: u32,
+    // The caller's own `env` field, opened. The platform's env is assembled only once the image
+    // has built (below), so a failed build never rotates the running agent's credentials.
+    job_env: HashMap<String, String>,
     writable: bool,
     writable_path: Option<String>,
-    default_memory: String,
-    deletion_hook: std::sync::Arc<crate::agent_lifecycle::SwappableAgentDeletionHook>,
 ) {
-    if let Some(key) = openai_api_key {
-        env.entry("OPENAI_API_KEY".to_owned()).or_insert(key);
-    }
-    if let Some(url) = openai_base_url {
-        env.entry("OPENAI_BASE_URL".to_owned()).or_insert(url);
-    }
-    set_build_status(&db, build_id, BuildStatus::Building).await;
-    set_upload_status(&db, &upload_id, &name, owner_id, "initiated", None, None).await;
+    let db = &state.db;
+    let runtime = &state.runtime;
+    set_build_status(db, build_id, BuildStatus::Building).await;
+    set_upload_status(db, &upload_id, &name, owner_id, "initiated", None, None).await;
 
     let tmp_dir = std::env::temp_dir().join(format!("nasiko-agent-{build_id}"));
 
@@ -966,7 +953,7 @@ pub async fn execute_upload_and_deploy(
             .await
             .map_err(|e| format!("spawn_blocking extract: {e}"))??;
 
-        set_upload_status(&db, &upload_id, &name, owner_id, "processing", None, None).await;
+        set_upload_status(db, &upload_id, &name, owner_id, "processing", None, None).await;
 
         let dockerfile_path = tmp_dir.join("Dockerfile");
         if !dockerfile_path.exists() {
@@ -989,7 +976,7 @@ pub async fn execute_upload_and_deploy(
             .map_err(|e| format!("docker build: {e}"))?;
 
         set_upload_status(
-            &db,
+            db,
             &upload_id,
             &name,
             owner_id,
@@ -999,6 +986,25 @@ pub async fn execute_upload_and_deploy(
         )
         .await;
 
+        // Minted only now that the image exists: this rotates the agent's gateway and state
+        // credentials, and a build that failed must leave the running pods' credentials alone.
+        let mut env = crate::agents::deploy_env::build(
+            state,
+            agent_id,
+            owner_id,
+            job_env,
+            crate::agents::deploy_env::StateModeOnDeploy::Reset,
+        )
+        .await;
+        // Server-level LLM defaults, injected here (not baked into the DB payload) so the API
+        // key is never persisted in cleartext (RUN-5). Caller env wins.
+        if let Some(key) = state.config.openai_api_key.clone() {
+            env.entry("OPENAI_API_KEY".to_owned()).or_insert(key);
+        }
+        if let Some(url) = state.config.openai_base_url.clone() {
+            env.entry("OPENAI_BASE_URL".to_owned()).or_insert(url);
+        }
+
         // Deploy container keyed on agent UUID (not name) — see build_agent_spec.
         let mut spec = crate::agents::build_agent_spec(
             agent_id,
@@ -1006,16 +1012,16 @@ pub async fn execute_upload_and_deploy(
             image_tag.clone(),
             ports,
             env,
-            &default_memory,
-            max_replicas,
+            &state.config.agent_default_memory,
+            state.config.agent_max_replicas,
             writable,
             writable_path.clone(),
             owner_id,
         );
         crate::agents::attach_pull_credential(
-            &db,
-            &agent_runtime,
-            &agent_image_registry,
+            db,
+            &state.config.agent_runtime,
+            &state.config.agent_image_registry,
             &mut spec,
             agent_id,
         )
@@ -1026,7 +1032,7 @@ pub async fn execute_upload_and_deploy(
             .map_err(|e| format!("deploy: {e}"))?;
 
         set_upload_status(
-            &db,
+            db,
             &upload_id,
             &name,
             owner_id,
@@ -1048,9 +1054,9 @@ pub async fn execute_upload_and_deploy(
 
     match result {
         Ok(deploy_status) => {
-            set_build_status(&db, build_id, BuildStatus::Success).await;
+            set_build_status(db, build_id, BuildStatus::Success).await;
             set_upload_status(
-                &db,
+                db,
                 &upload_id,
                 &name,
                 owner_id,
@@ -1063,9 +1069,9 @@ pub async fn execute_upload_and_deploy(
             // already-deployed agent must land here too, which this activates and
             // archives whatever was previously running for (mirroring `update.rs`'s
             // redeploy path). A genuinely first upload has nothing to archive yet.
-            record_uploaded_version(&db, agent_id, build_id, &image_tag).await;
+            record_uploaded_version(db, agent_id, build_id, &image_tag).await;
             let agent_url = crate::agents::resolve_agent_url(
-                &runtime,
+                runtime,
                 &deploy_status,
                 &nasiko_runtime::ContainerId::from_uuid(agent_id),
             )
@@ -1075,13 +1081,13 @@ pub async fn execute_upload_and_deploy(
             )
             .bind(agent_id)
             .bind(&agent_url)
-            .execute(&db)
+            .execute(db)
             .await;
             // Fetch the agent's card in the background to persist skills,
             // description and the advertised transport_path (chat URL).
             tokio::spawn(super::utils::fetch_agent_card_with_retry(
                 db.clone(),
-                http,
+                state.http_client.clone(),
                 agent_id,
                 agent_url.clone(),
             ));
@@ -1097,17 +1103,17 @@ pub async fn execute_upload_and_deploy(
             .bind(build_id)
             .bind(owner_id)
             .bind(agent_id.to_string())
-            .execute(&db)
+            .execute(db)
             .await;
             tracing::info!(build_id = %build_id, agent_id = %agent_id, "upload-and-deploy succeeded");
         }
         Err(e) => {
-            set_build_status(&db, build_id, BuildStatus::Failed).await;
+            set_build_status(db, build_id, BuildStatus::Failed).await;
             // `e` may embed raw docker/tar/IO error text — log it, but
             // upload_status.error_message is read back by clients via
             // GET /agents/uploads, so store a generic reason there.
             set_upload_status(
-                &db,
+                db,
                 &upload_id,
                 &name,
                 owner_id,
@@ -1116,7 +1122,8 @@ pub async fn execute_upload_and_deploy(
                 Some("upload and deploy failed"),
             )
             .await;
-            super::utils::delete_agent_or_mark_failed(&db, agent_id, &deletion_hook).await;
+            super::utils::delete_agent_or_mark_failed(db, agent_id, &state.agent_deletion_hook)
+                .await;
             tracing::error!(build_id = %build_id, %e, "upload-and-deploy failed");
         }
     }
@@ -1656,7 +1663,14 @@ pub async fn execute_github_clone_and_deploy(
     // values are consumed there to restore the row on a version conflict, so
     // neither the tag nor a placeholder binding for them belongs in this
     // function any more.
-    let platform_env = super::deploy_env::build(&state, agent_id, owner_id, env).await;
+    let platform_env = super::deploy_env::build(
+        &state,
+        agent_id,
+        owner_id,
+        env,
+        super::deploy_env::StateModeOnDeploy::Reset,
+    )
+    .await;
     execute_clone_and_deploy(
         state.runtime.clone(),
         state.db.clone(),

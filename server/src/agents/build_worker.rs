@@ -390,12 +390,8 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
                     return;
                 }
             };
-            let platform_env =
-                crate::agents::deploy_env::build(&state, agent_id, owner_id, job_env).await;
             execute_upload_and_deploy(
-                state.runtime.clone(),
-                state.db.clone(),
-                state.http_client.clone(),
+                &state,
                 build_id,
                 agent_id,
                 owner_id,
@@ -404,17 +400,9 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
                 std::path::PathBuf::from(&zip_path),
                 image_tag,
                 ports,
-                platform_env,
-                // Inject server LLM secrets at execution — not persisted in the payload (RUN-5).
-                state.config.openai_api_key.clone(),
-                state.config.openai_base_url.clone(),
-                state.config.agent_runtime.clone(),
-                state.config.agent_image_registry.clone(),
-                state.config.agent_max_replicas,
+                job_env,
                 writable,
                 writable_path,
-                state.config.agent_default_memory.clone(),
-                state.agent_deletion_hook.clone(),
             )
             .await;
         }
@@ -513,8 +501,14 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
             ports,
             env,
         } => {
-            let platform_env =
-                crate::agents::deploy_env::build(&state, agent_id, owner_id, env).await;
+            let platform_env = crate::agents::deploy_env::build(
+                &state,
+                agent_id,
+                owner_id,
+                env,
+                crate::agents::deploy_env::StateModeOnDeploy::Reset,
+            )
+            .await;
             // This legacy job variant is never actually enqueued anymore
             // (superseded by `GithubClone`), kept for in-flight compat.
             execute_clone_and_deploy(

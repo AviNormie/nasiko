@@ -162,6 +162,12 @@ fn dockerfile_zip() -> Vec<u8> {
 
 /// What every deploy path must hand the runtime.
 fn assert_platform_env(spec: &DeploymentSpec) {
+    assert_credentials(spec);
+    assert_llm_wiring(spec);
+}
+
+/// The gateway and state credentials and the state API address.
+fn assert_credentials(spec: &DeploymentSpec) {
     let env = &spec.env_vars;
     let gateway = env.get("MCP_GATEWAY_TOKEN").expect("MCP_GATEWAY_TOKEN");
     assert!(gateway.starts_with("ngt_"), "gateway credential: {gateway}");
@@ -171,6 +177,11 @@ fn assert_platform_env(spec: &DeploymentSpec) {
         env.get("NASIKO_STATE_URL").map(String::as_str),
         Some(STATE_URL)
     );
+}
+
+/// The LLM router wiring: its base URL and the agent-identity JWT as the key.
+fn assert_llm_wiring(spec: &DeploymentSpec) {
+    let env = &spec.env_vars;
     assert_eq!(
         env.get("OPENAI_BASE_URL").map(String::as_str),
         Some("http://llm.test:8080/v1"),
@@ -218,9 +229,11 @@ async fn seed_agent_deploy_carries_the_platform_env() {
     f.server.cleanup().await;
 }
 
+/// An internal agent's model access is its own `env`; the LLM router (configured in this
+/// fixture) must not take it over, but the credentials still arrive.
 #[tokio::test]
 #[serial]
-async fn internal_agent_seed_deploy_carries_the_platform_env() {
+async fn internal_agent_seed_deploy_carries_the_credentials_and_keeps_its_direct_llm_env() {
     let f = start().await;
 
     seed_internal_agent(
@@ -229,15 +242,21 @@ async fn internal_agent_seed_deploy_carries_the_platform_env() {
             name: "internal-helper".into(),
             image: "nasiko/helper:1".into(),
             force_pull: false,
-            env: HashMap::from([("EDITION_SETTING".into(), "kept".into())]),
+            env: HashMap::from([
+                ("EDITION_SETTING".into(), "kept".into()),
+                ("OPENAI_API_KEY".into(), "direct-key".into()),
+                ("OPENAI_BASE_URL".into(), "http://direct.test/v1".into()),
+            ]),
         },
     )
     .await;
 
     let agent_id = f.agent_id_by_name("internal-helper").await;
     let spec = f.first_spec(agent_id).await;
-    assert_platform_env(&spec);
+    assert_credentials(&spec);
     assert_eq!(spec.env_vars["EDITION_SETTING"], "kept");
+    assert_eq!(spec.env_vars["OPENAI_API_KEY"], "direct-key");
+    assert_eq!(spec.env_vars["OPENAI_BASE_URL"], "http://direct.test/v1");
     f.server.cleanup().await;
 }
 
@@ -286,13 +305,8 @@ async fn admin_redeploy_carries_the_platform_env() {
     f.server.cleanup().await;
 }
 
-#[tokio::test]
-#[serial]
-async fn deployment_restart_carries_the_platform_env() {
-    let f = start().await;
-    let agent_id = f
-        .agent_row("restarted-agent", Some("nasiko/restart:1"), "running")
-        .await;
+/// A stopped deployment row for `agent_id`, ready to be restarted.
+async fn stopped_deployment(f: &Fixture, agent_id: Uuid) -> Uuid {
     let build_id: Uuid = sqlx::query_scalar(
         "INSERT INTO agent_builds (agent_id, version_tag, image_reference, status) \
          VALUES ($1, '1.0.0', 'nasiko/restart:1', 'success') RETURNING id",
@@ -301,7 +315,7 @@ async fn deployment_restart_carries_the_platform_env() {
     .fetch_one(&f.server.db)
     .await
     .unwrap();
-    let deployment_id: Uuid = sqlx::query_scalar(
+    sqlx::query_scalar(
         "INSERT INTO agent_deployments (agent_id, build_id, owner_id, status) \
          VALUES ($1, $2, $3, 'stopped') RETURNING id",
     )
@@ -310,8 +324,10 @@ async fn deployment_restart_carries_the_platform_env() {
     .bind(f.admin_id)
     .fetch_one(&f.server.db)
     .await
-    .unwrap();
+    .unwrap()
+}
 
+async fn restart_deployment(f: &Fixture, deployment_id: Uuid) {
     let res = common::as_superuser(
         f.server.client.post(
             f.server
@@ -324,6 +340,18 @@ async fn deployment_restart_carries_the_platform_env() {
     .await
     .unwrap();
     assert!(res.status().is_success(), "restart: {}", res.status());
+}
+
+#[tokio::test]
+#[serial]
+async fn deployment_restart_carries_the_platform_env() {
+    let f = start().await;
+    let agent_id = f
+        .agent_row("restarted-agent", Some("nasiko/restart:1"), "running")
+        .await;
+    let deployment_id = stopped_deployment(&f, agent_id).await;
+
+    restart_deployment(&f, deployment_id).await;
 
     assert_platform_env(&f.first_spec(agent_id).await);
     f.server.cleanup().await;
@@ -577,6 +605,83 @@ async fn a_redeploy_resets_the_state_mode_to_memory() {
     f.server.cleanup().await;
 }
 
+async fn mark_durable(f: &Fixture, agent_id: Uuid) {
+    sqlx::query("UPDATE agents SET state_mode = 'durable' WHERE id = $1")
+        .bind(agent_id)
+        .execute(&f.server.db)
+        .await
+        .unwrap();
+}
+
+/// A restart brings the same image back, so a durable agent must still be durable afterwards.
+#[tokio::test]
+#[serial]
+async fn a_deployment_restart_keeps_the_state_mode() {
+    let f = start().await;
+    let agent_id = f
+        .agent_row("kept-durable-agent", Some("nasiko/restart:1"), "running")
+        .await;
+    mark_durable(&f, agent_id).await;
+    let deployment_id = stopped_deployment(&f, agent_id).await;
+
+    restart_deployment(&f, deployment_id).await;
+    f.first_spec(agent_id).await;
+
+    assert_eq!(f.state_mode(agent_id).await, "durable");
+    f.server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn startup_reconcile_keeps_the_state_mode() {
+    let f = start().await;
+    let agent_id = f
+        .agent_row(
+            "recovered-durable-agent",
+            Some("nasiko/echo:1.0.0"),
+            "running",
+        )
+        .await;
+    mark_durable(&f, agent_id).await;
+    f.server.runtime.set_status_follows_deploys(true);
+
+    f.server.state.init().await;
+    f.first_spec(agent_id).await;
+
+    assert_eq!(f.state_mode(agent_id).await, "durable");
+    f.server.cleanup().await;
+}
+
+/// An update ships a new image, which may not register a task store.
+#[tokio::test]
+#[serial]
+async fn an_update_resets_the_state_mode_to_memory() {
+    let f = start().await;
+    let agent_id = f.create_agent("updated-durable-agent", "1.0.0").await;
+    mark_durable(&f, agent_id).await;
+
+    let form = reqwest::multipart::Form::new().part(
+        "source",
+        reqwest::multipart::Part::bytes(dockerfile_zip()).file_name("agent.zip"),
+    );
+    let res = common::as_superuser(
+        f.server
+            .client
+            .put(f.server.url(&format!("/api/agents/{agent_id}/update"))),
+        &f.uid(),
+        "admin",
+    )
+    .multipart(form)
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(res.status(), 202);
+    f.first_spec(agent_id).await;
+
+    assert_eq!(f.state_mode(agent_id).await, "memory");
+    f.server.cleanup().await;
+}
+
 #[tokio::test]
 #[serial]
 async fn deleting_an_agent_revokes_its_state_credential() {
@@ -625,6 +730,81 @@ async fn deleting_an_agent_revokes_its_state_credential() {
         f.register_with(&token, json!(["kv"])).await,
         reqwest::StatusCode::UNAUTHORIZED
     );
+    f.server.cleanup().await;
+}
+
+// ─── Credential rotation vs. a failed build ─────────────────────────────────
+
+/// Both credentials (the gateway row and the state row share one table, split by `scope`) as
+/// `(scope, token_hash, rotated_at)`; `rotated_at` is NULL until a credential is first rotated.
+async fn credential_rows(f: &Fixture, agent_id: Uuid) -> Vec<(String, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT scope, token_hash, rotated_at::text FROM agent_gateway_tokens \
+         WHERE agent_id = $1 ORDER BY scope",
+    )
+    .bind(agent_id)
+    .fetch_all(&f.server.db)
+    .await
+    .unwrap()
+}
+
+async fn wait_for_failed_build(f: &Fixture, agent_id: Uuid) {
+    for _ in 0..200 {
+        let failed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agent_builds WHERE agent_id = $1 AND status = 'failed')",
+        )
+        .bind(agent_id)
+        .fetch_one(&f.server.db)
+        .await
+        .unwrap();
+        if failed {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the build of agent {agent_id} never failed");
+}
+
+/// The running pods hold the current credentials; minting new ones for an upload whose image
+/// never builds would shorten their remaining validity for nothing.
+#[tokio::test]
+#[serial]
+async fn a_failed_upload_build_leaves_the_running_agents_credentials_unrotated() {
+    use nasiko_mcp_gateway::agent_tokens::{self, TokenScope};
+    let f = start().await;
+    let agent_id = f
+        .agent_row("running-agent", Some("nasiko/old:1"), "running")
+        .await;
+    sqlx::query("UPDATE agents SET version = '0.9.0' WHERE id = $1")
+        .bind(agent_id)
+        .execute(&f.server.db)
+        .await
+        .unwrap();
+    // A prior successful build is what a running agent has, and it makes the failed upload
+    // mark the agent failed instead of deleting it (and its credential rows with it).
+    sqlx::query(
+        "INSERT INTO agent_builds (agent_id, version_tag, image_reference, status) \
+         VALUES ($1, '0.9.0', 'nasiko/old:1', 'success')",
+    )
+    .bind(agent_id)
+    .execute(&f.server.db)
+    .await
+    .unwrap();
+    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::Gateway)
+        .await
+        .unwrap();
+    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::State)
+        .await
+        .unwrap();
+    let before = credential_rows(&f, agent_id).await;
+    assert_eq!(before.len(), 2, "one row per scope: {before:?}");
+    f.server.runtime.set_fail_build(true);
+
+    assert_eq!(upload_zip(&f, "running-agent", vec![]).await, agent_id);
+    wait_for_failed_build(&f, agent_id).await;
+
+    assert_eq!(credential_rows(&f, agent_id).await, before);
+    assert!(f.specs_for(agent_id).is_empty(), "nothing was deployed");
     f.server.cleanup().await;
 }
 

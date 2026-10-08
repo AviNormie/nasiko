@@ -68,9 +68,15 @@ pub async fn reconcile_agents_on_startup(state: &AppState) {
 
         // Same env every other deploy path gets - a redeployed-but-recovered
         // agent must behave identically to one that was deployed normally.
-        let env =
-            crate::agents::deploy_env::build(state, agent.id, agent.owner_id, Default::default())
-                .await;
+        // The same image comes back, so a durable agent is durable again as it starts.
+        let env = crate::agents::deploy_env::build(
+            state,
+            agent.id,
+            agent.owner_id,
+            Default::default(),
+            crate::agents::deploy_env::StateModeOnDeploy::Keep,
+        )
+        .await;
 
         let qualified_image =
             crate::agents::qualify_deploy_image(&state.config.agent_image_registry, &image);

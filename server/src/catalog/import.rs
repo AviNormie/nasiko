@@ -398,8 +398,14 @@ pub(crate) async fn build_and_deploy(
     // every other deploy path (agents/upload.rs, deployments.rs::restart) — this path
     // used to start from an empty map, so imported agents booted with no LLM env at
     // all and failed on their first call with a 401.
-    let env_vars =
-        crate::agents::deploy_env::build(state, agent_id, owner_id, Default::default()).await;
+    let env_vars = crate::agents::deploy_env::build(
+        state,
+        agent_id,
+        owner_id,
+        Default::default(),
+        crate::agents::deploy_env::StateModeOnDeploy::Reset,
+    )
+    .await;
     let mut spec = crate::agents::build_agent_spec(
         agent_id,
         &meta.name,
@@ -1108,8 +1114,14 @@ pub(crate) async fn import_registry(
         // every other deploy path (agents/upload.rs, deployments.rs::restart) — this path
         // used to start from an empty map, so imported agents booted with no LLM env at
         // all and failed on their first call with a 401.
-        let env_vars =
-            crate::agents::deploy_env::build(&state, agent_id, owner_id, Default::default()).await;
+        let env_vars = crate::agents::deploy_env::build(
+            &state,
+            agent_id,
+            owner_id,
+            Default::default(),
+            crate::agents::deploy_env::StateModeOnDeploy::Reset,
+        )
+        .await;
         let mut spec = crate::agents::build_agent_spec(
             agent_id,
             &agent_name,
