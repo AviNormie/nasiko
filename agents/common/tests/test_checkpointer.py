@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TypedDict
 
+import nasiko_state
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -128,6 +130,7 @@ class TestCheckpoints:
 
     async def test_a_head_whose_checkpoint_has_expired_reads_as_none(self, saver, style, state_server):
         await put(saver, style, config_for(), "cp-1")
+        del state_server.kv["lgh:thread-1:"].value["value"]["checkpoint"]  # a head naming it only
         del state_server.kv["lg:thread-1::cp-1"]  # the platform expired the older row
 
         assert await call(saver, style, "get_tuple", config_for()) is None
@@ -404,13 +407,30 @@ class TestCallCounts:
             ("PUT", "kv"),
         ]
 
-    async def test_get_tuple_of_the_newest_is_head_checkpoint_writes(self, saver, style, state_server):
-        await put(saver, style, config_for(), "cp-1")
+    async def test_get_tuple_of_the_newest_is_the_head_and_its_writes(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1", messages=["hi"], notes={"n": 1})
         state_server.requests.clear()
 
-        await call(saver, style, "get_tuple", config_for())
+        loaded = await call(saver, style, "get_tuple", config_for())
 
-        assert [r.method for r in state_server.requests] == ["GET", "GET", "GET"]
+        assert [(r.method, r.path) for r in state_server.requests] == [
+            ("GET", "/kv/lgh%3Athread-1%3A"),
+            ("GET", "/kv"),  # the writes listing
+        ]
+        assert loaded.checkpoint["channel_values"] == {"messages": ["hi"], "notes": {"n": 1}}
+
+    async def test_get_tuple_of_an_explicit_checkpoint_is_its_record_and_its_writes(
+        self, saver, style, state_server
+    ):
+        saved = await put(saver, style, config_for(), "cp-1", messages=["hi"])
+        state_server.requests.clear()
+
+        await call(saver, style, "get_tuple", saved)
+
+        assert [(r.method, r.path) for r in state_server.requests] == [
+            ("GET", "/kv/lg%3Athread-1%3A%3Acp-1"),
+            ("GET", "/kv"),
+        ]
 
     async def test_put_writes_of_regular_writes_is_one_write_and_no_read(self, saver, style, state_server):
         saved = await put(saver, style, config_for(), "cp-1")
@@ -449,17 +469,21 @@ def versioned_checkpoint(checkpoint_id: str, **channels: tuple[int, object]) -> 
 METADATA = {"source": "loop", "step": 0, "parents": {}}
 
 
-class TestChannelBlobs:
-    async def test_scalars_stay_inline_and_other_values_get_a_blob_per_channel_version(
-        self, saver, style, state_server
-    ):
+@pytest.fixture
+def spilling(monkeypatch):
+    """Every checkpoint is too big for inline values, as a long thread's state eventually is."""
+    monkeypatch.setattr(nasiko_state, "INLINE_CHECKPOINT_MAX_BYTES", 0)
+
+
+class TestChannelValues:
+    async def test_values_travel_inside_the_checkpoint_record(self, saver, style, state_server):
         await put(saver, style, config_for(), "cp-1", messages=["hi"], count=7, label="x")
 
-        assert sorted(key for key in state_server.kv if key.startswith("lgb:")) == [
-            "lgb:thread-1::messages:1"
-        ]
+        record = state_server.kv["lg:thread-1::cp-1"].value["value"]
+        assert not [key for key in state_server.kv if key.startswith("lgb:")]
+        assert set(record["values"]) == {"messages"}  # scalars are serialized with the checkpoint
 
-    async def test_an_unchanged_channel_is_not_written_again(self, saver, style, state_server):
+    async def test_a_put_is_the_record_then_the_head(self, saver, style, state_server):
         first = versioned_checkpoint("cp-1", log=(1, ["a"]), notes=(1, {"big": "x" * 50}))
         saved = await call(saver, style, "put", config_for(), first, METADATA, {"log": 1, "notes": 1})
         state_server.requests.clear()
@@ -468,13 +492,49 @@ class TestChannelBlobs:
         await call(saver, style, "put", saved, second, METADATA, {"log": 2})
         loaded = await call(saver, style, "get_tuple", config_for())
 
-        written = [r.path for r in state_server.writes("kv")]
-        assert written == [
-            "/kv/lgb%3Athread-1%3A%3Alog%3A2",
+        assert [r.path for r in state_server.writes("kv")] == [
             "/kv/lg%3Athread-1%3A%3Acp-2",
             "/kv/lgh%3Athread-1%3A",
         ]
         assert loaded.checkpoint["channel_values"] == {"log": ["a", "b"], "notes": {"big": "x" * 50}}
+
+    async def test_the_head_carries_the_newest_record(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1", messages=["hi"])
+
+        head = state_server.kv["lgh:thread-1:"].value["value"]
+
+        assert head == {"checkpoint_id": "cp-1", "checkpoint": state_server.kv["lg:thread-1::cp-1"].value["value"]}
+
+    async def test_a_big_state_spills_every_value_into_its_own_blob(
+        self, saver, style, state_server, spilling
+    ):
+        first = versioned_checkpoint("cp-1", log=(1, ["a"]), notes=(1, {"big": "x" * 50}))
+        saved = await call(saver, style, "put", config_for(), first, METADATA, {"log": 1, "notes": 1})
+        state_server.requests.clear()
+
+        second = versioned_checkpoint("cp-2", log=(2, ["a", "b"]), notes=(1, {"big": "x" * 50}))
+        await call(saver, style, "put", saved, second, METADATA, {"log": 2})
+        loaded = await call(saver, style, "get_tuple", config_for())
+
+        assert [r.path for r in state_server.writes("kv")] == [
+            "/kv/lgb%3Athread-1%3A%3Alog%3A2",
+            "/kv/lgb%3Athread-1%3A%3Anotes%3A1",  # rewritten: it may have been inline before
+            "/kv/lg%3Athread-1%3A%3Acp-2",
+            "/kv/lgh%3Athread-1%3A",
+        ]
+        assert state_server.kv["lg:thread-1::cp-2"].value["value"]["values"] == {}
+        assert loaded.checkpoint["channel_values"] == {"log": ["a", "b"], "notes": {"big": "x" * 50}}
+
+    async def test_a_head_the_platform_refuses_only_names_the_checkpoint(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1", messages=["hi"])
+        record_size = len(json.dumps(state_server.kv["lg:thread-1::cp-1"].value["value"]))
+        state_server.max_body_bytes = record_size  # the record fits, the head that carries it does not
+
+        await put(saver, style, config_for(), "cp-1", messages=["hi"])
+        loaded = await call(saver, style, "get_tuple", config_for())
+
+        assert state_server.kv["lgh:thread-1:"].value["value"] == {"checkpoint_id": "cp-1"}
+        assert loaded.checkpoint["channel_values"] == {"messages": ["hi"]}
 
     async def test_the_size_limit_applies_to_each_value_not_to_the_whole_state(
         self, saver, style, state_server
@@ -484,6 +544,8 @@ class TestChannelBlobs:
 
         saved = await put(saver, style, config_for(), "cp-1", **halves)
 
+        # The inline record was refused, so it was written again with each value on its own.
+        assert state_server.kv["lg:thread-1::cp-1"].value["value"]["blobs"] == {"left": 1, "right": 1}
         assert (await call(saver, style, "get_tuple", saved)).checkpoint["channel_values"] == halves
 
     async def test_a_value_over_the_limit_raises_a_typed_error(self, saver, style, state_server):
@@ -496,7 +558,7 @@ class TestChannelBlobs:
         assert isinstance(raised.value, NasikoStateError)
 
     async def test_a_checkpoint_whose_blob_expired_is_an_error_not_a_missing_channel(
-        self, saver, style, state_server
+        self, saver, style, state_server, spilling
     ):
         await put(saver, style, config_for(), "cp-1", messages=["hi"])
         del state_server.kv["lgb:thread-1::messages:1"]
@@ -504,7 +566,7 @@ class TestChannelBlobs:
         with pytest.raises(NasikoStateMalformedRow, match="messages"):
             await call(saver, style, "get_tuple", config_for())
 
-    async def test_listing_reads_a_shared_value_once(self, saver, style, state_server):
+    async def test_listing_reads_a_shared_value_once(self, saver, style, state_server, spilling):
         config = config_for()
         for step in (1, 2, 3):
             snapshot = versioned_checkpoint(f"cp-{step}", log=(step, ["x"] * step), notes=(1, {"n": 1}))
@@ -570,17 +632,31 @@ class TestMalformedRecords:
             await call(saver, style, "get_tuple", config_for())
 
     async def test_a_checkpoint_record_missing_fields(self, saver, style, state_server):
-        await put(saver, style, config_for(), "cp-1")
+        saved = await put(saver, style, config_for(), "cp-1")
         del state_server.kv["lg:thread-1::cp-1"].value["value"]["metadata"]
 
         with pytest.raises(NasikoStateMalformedRow, match="metadata"):
-            await call(saver, style, "get_tuple", config_for())
+            await call(saver, style, "get_tuple", saved)
 
     async def test_a_payload_that_is_not_base64(self, saver, style, state_server):
-        await put(saver, style, config_for(), "cp-1")
+        saved = await put(saver, style, config_for(), "cp-1")
         state_server.kv["lg:thread-1::cp-1"].value["value"]["checkpoint"]["data"] = "not base64!"
 
         with pytest.raises(NasikoStateMalformedRow):
+            await call(saver, style, "get_tuple", saved)
+
+    async def test_a_head_carrying_another_checkpoint(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        state_server.kv["lgh:thread-1:"].value["value"]["checkpoint_id"] = "cp-9"
+
+        with pytest.raises(NasikoStateMalformedRow, match="cp-9"):
+            await call(saver, style, "get_tuple", config_for())
+
+    async def test_a_damaged_record_carried_by_the_head(self, saver, style, state_server):
+        await put(saver, style, config_for(), "cp-1")
+        del state_server.kv["lgh:thread-1:"].value["value"]["checkpoint"]["metadata"]
+
+        with pytest.raises(NasikoStateMalformedRow, match="metadata"):
             await call(saver, style, "get_tuple", config_for())
 
     async def test_a_writes_record_without_writes(self, saver, style, state_server):
@@ -610,12 +686,12 @@ class TestSerialization:
         self, client, style, state_server
     ):
         saver = NasikoCheckpointSaver(NasikoKV(client), serde=JsonPlusSerializer(pickle_fallback=True))
-        await put(saver, style, config_for(), "cp-1")
+        saved = await put(saver, style, config_for(), "cp-1")
         record = state_server.kv["lg:thread-1::cp-1"].value["value"]
         record["checkpoint"] = {"type": "pickle", "data": "gASVBAAAAAAAAABLAS4="}
 
         with pytest.raises(NasikoStateError, match="pickle"):
-            await call(saver, style, "get_tuple", config_for())
+            await call(saver, style, "get_tuple", saved)
 
     async def test_records_are_plain_json_with_base64_payloads(self, saver, style, state_server):
         await put(saver, style, config_for(), "cp-1", n=1)
@@ -629,6 +705,7 @@ class TestSerialization:
             "parent_checkpoint_id",
             "checkpoint",
             "metadata",
+            "values",
             "blobs",
         }
         assert set(record["checkpoint"]) == {"type", "data"}
