@@ -482,8 +482,11 @@ pub async fn agent_proxy(
                         if !tap.collector.is_paused() {
                             return Some((chunk_result, RelayStep::Read(stream, tap, guard)));
                         }
-                        // A pause ends the relay here; the guard is dropped with this step.
+                        // A pause ends the agent's part of the request here. Release the count
+                        // now: persisting the pause below is the platform's bookkeeping, not
+                        // load on the agent.
                         guard.settle(upstream_outcome);
+                        drop(guard);
                         // Persist synchronously here, before the stream is allowed to
                         // close, and inject the id-carrying frame on this same still-open
                         // connection: this used to happen only in `Drop`, after the stream
@@ -507,8 +510,10 @@ pub async fn agent_proxy(
         tracing::error!(error = %e, %agent_id, "agent proxy: failed to read agent response body");
         StatusCode::BAD_GATEWAY
     })?;
-    // The agent's work is done once its reply is fully read.
+    // The agent's work is done once its reply is fully read; the pause check and persistence
+    // below are not load on the agent.
     request_guard.set_outcome(upstream_outcome);
+    drop(request_guard);
 
     // A non-streaming reply can pause too — same check `agent_stream()`'s own non-streaming
     // branch runs, so this proxy doesn't flatten a pause into a bogus "assistant reply" just
