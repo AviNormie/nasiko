@@ -6,6 +6,7 @@ use opentelemetry::{
 };
 use std::time::Instant;
 
+use super::agent_replicas::ReadyReplicas;
 use super::agent_request::{AgentRequestGuard, AgentRequestMetrics};
 
 /// OTel GenAI semantic convention attribute names.
@@ -158,6 +159,12 @@ impl GenAiMetrics {
     /// Requests to `agent_id` (a UUID) in flight from this process right now.
     pub fn agent_inflight_now(&self, agent_id: &str) -> u64 {
         self.agent_requests.inflight_now(agent_id)
+    }
+
+    /// The per-agent ready-replica cache the in-flight band divides by; the server's background
+    /// refresher (`agent_replicas::run`) keeps it current.
+    pub fn agent_ready_replicas(&self) -> ReadyReplicas {
+        self.agent_requests.ready_replicas()
     }
 
     pub fn record_tokens(

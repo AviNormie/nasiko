@@ -347,6 +347,13 @@ impl AppState {
         let hitl_state = state.clone();
         tokio::spawn(crate::hitl::run(hitl_state, hitl_resume_rx));
 
+        // Keeps the ready-replica count of recently called agents current, so the per-agent
+        // in-flight band describes one replica's load (telemetry/agent_replicas.rs).
+        tokio::spawn(crate::telemetry::agent_replicas::run(
+            state.genai_metrics.agent_ready_replicas(),
+            state.runtime.clone(),
+        ));
+
         // Periodic eviction for finished continuation buffers — same shape as every other
         // periodic sweep in this file.
         tokio::spawn(crate::hitl::continuation::sweep_loop(
