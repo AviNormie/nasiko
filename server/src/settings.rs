@@ -258,14 +258,14 @@ pub struct ContextTiersResponse {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct TierTable {
     low: i64,
     medium: i64,
     high: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ContextTiersUpdate {
     pacms_budget: TierTable,
     context_k: TierTable,
@@ -318,7 +318,20 @@ fn tier_problems(body: &ContextTiersUpdate) -> Option<String> {
     None
 }
 
-async fn get_context_tiers(State(state): State<AppState>, _claims: Claims) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/api/settings/context-tiers",
+    tag = "settings",
+    responses((
+        status = 200,
+        description = "Tier values (env defaults unless superuser-overridden): pacms_budget, context_k, compress_history, pool_size, mandatory_recent, compress_min_bytes, updated_at"
+    )),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn get_context_tiers(
+    State(state): State<AppState>,
+    _claims: Claims,
+) -> impl IntoResponse {
     let tiers = nasiko_orchestrator::ContextTiers::from_config(&state.config)
         .with_overrides(&state.db)
         .await;
@@ -351,7 +364,19 @@ async fn get_context_tiers(State(state): State<AppState>, _claims: Claims) -> im
     .into_response()
 }
 
-async fn update_context_tiers(
+#[utoipa::path(
+    put,
+    path = "/api/settings/context-tiers",
+    tag = "settings",
+    responses(
+        (status = 200, description = "Saved; the tier values after the write"),
+        (status = 400, description = "A value breaks the rules: whole numbers >= 1, low <= medium <= high, pool_size >= mandatory_recent"),
+        (status = 403, description = "requires superuser"),
+        (status = 409, description = "expected_updated_at does not match — reload"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_context_tiers(
     State(state): State<AppState>,
     claims: Claims,
     Json(body): Json<ContextTiersUpdate>,

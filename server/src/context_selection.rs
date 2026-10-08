@@ -87,7 +87,19 @@ pub struct HistoryParams {
 ///
 /// A bare JSON array, newest first. The chart reads it to mark the day a user switched strategy, so
 /// a jump in the trend has a cause beside it.
-async fn get_settings_history(
+#[utoipa::path(
+    get,
+    path = "/api/me/settings-history",
+    tag = "context-selection",
+    params(
+        ("start_time" = Option<String>, Query, description = "Window start, RFC 3339"),
+        ("end_time" = Option<String>, Query, description = "Window end, RFC 3339 (default now)"),
+        ("range" = Option<String>, Query, description = "Preset window: 24h, 7d, 30d, 90d (default 30d when no start_time)"),
+    ),
+    responses((status = 200, description = "Bare JSON array of changes, newest first")),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn get_settings_history(
     State(state): State<AppState>,
     claims: Claims,
     Query(params): Query<HistoryParams>,
@@ -157,8 +169,8 @@ struct ContextStrategyResponse {
     blocked_by: Vec<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ContextStrategyUpdate {
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct ContextStrategyUpdate {
     strategy: ContextSelectionStrategy,
     /// Sent only when it changed. Absent means keep.
     enabled: Option<bool>,
@@ -187,18 +199,57 @@ async fn strategy_response(
     }
 }
 
-async fn get_context_strategy(State(state): State<AppState>, claims: Claims) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/api/me/context-strategy",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "The caller's selection strategy and effective state"),
+        (status = 500, description = "Read failed (CX-4): never served as a silent default"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn get_context_strategy(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> impl IntoResponse {
     let user_id = match claims.user_uuid() {
         Ok(id) => id,
         Err(e) => return e.into_response(),
     };
 
-    let strategy = ContextSelectionStrategy::for_user(&state.db, user_id).await;
-    let enabled = nasiko_orchestrator::selection_enabled(&state.db, user_id).await;
+    // CX-4: a failed read must 500, not quietly serve the column default as though it were the
+    // caller's saved choice — the write side already refuses to report success without a row;
+    // the read side owes the same honesty.
+    let strategy = match ContextSelectionStrategy::for_user_checked(&state.db, user_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, %user_id, "get_context_strategy: read failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
+    let enabled = match nasiko_orchestrator::selection_enabled_checked(&state.db, user_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, %user_id, "get_context_strategy: read failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
     Json(strategy_response(&state, user_id, strategy, enabled).await).into_response()
 }
 
-async fn update_context_strategy(
+#[utoipa::path(
+    patch,
+    path = "/api/me/context-strategy",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "Saved; body `{strategy, enabled?}` — the strategy and effective state after the write"),
+        (status = 404, description = "No such user (CX-4): the update touched no row"),
+        (status = 422, description = "A value outside the enum (Axum's Json rejection)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_context_strategy(
     State(state): State<AppState>,
     claims: Claims,
     Json(body): Json<ContextStrategyUpdate>,
@@ -222,22 +273,53 @@ struct PacmsBudgetResponse {
     level: PacmsBudgetLevel,
 }
 
-#[derive(Debug, Deserialize)]
-struct PacmsBudgetUpdate {
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct PacmsBudgetUpdate {
     level: PacmsBudgetLevel,
 }
 
-async fn get_pacms_budget(State(state): State<AppState>, claims: Claims) -> impl IntoResponse {
+#[utoipa::path(
+    get,
+    path = "/api/me/pacms-budget",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "The caller's PACMS budget tier: `{level}`"),
+        (status = 500, description = "Read failed (CX-4): never served as a silent default"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn get_pacms_budget(
+    State(state): State<AppState>,
+    claims: Claims,
+) -> impl IntoResponse {
     let user_id = match claims.user_uuid() {
         Ok(id) => id,
         Err(e) => return e.into_response(),
     };
 
-    let level = PacmsBudgetLevel::for_user(&state.db, user_id).await;
+    // CX-4: see get_context_strategy — a failed read must 500, not serve the default silently.
+    let level = match PacmsBudgetLevel::for_user_checked(&state.db, user_id).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, %user_id, "get_pacms_budget: read failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
     Json(PacmsBudgetResponse { level }).into_response()
 }
 
-async fn update_pacms_budget(
+#[utoipa::path(
+    patch,
+    path = "/api/me/pacms-budget",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "Saved; body `{level}` — the tier after the write"),
+        (status = 404, description = "No such user (CX-4): the update touched no row"),
+        (status = 422, description = "A value outside the enum (Axum's Json rejection)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_pacms_budget(
     State(state): State<AppState>,
     claims: Claims,
     Json(body): Json<PacmsBudgetUpdate>,
@@ -255,8 +337,8 @@ async fn update_pacms_budget(
 
 // ── One atomic save (CX-2) ────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct ContextUpdate {
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct ContextUpdate {
     strategy: Option<ContextSelectionStrategy>,
     level: Option<PacmsBudgetLevel>,
     enabled: Option<bool>,
@@ -277,7 +359,18 @@ struct ContextResponse {
 /// The two older routes stay for compatibility, but a Save that writes through them can half
 /// succeed: the strategy lands, the tier 500s, and the page is left holding a draft that disagrees
 /// with the server. One statement cannot.
-async fn update_context(
+#[utoipa::path(
+    patch,
+    path = "/api/me/context",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "Saved; body `{strategy?, level?, enabled?}` — one transaction (CX-2), full state after the write"),
+        (status = 404, description = "No such user (CX-4): the update touched no row"),
+        (status = 422, description = "A value outside an enum (Axum's Json rejection)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn update_context(
     State(state): State<AppState>,
     claims: Claims,
     Json(body): Json<ContextUpdate>,
@@ -432,8 +525,8 @@ impl IntoResponse for PreferenceError {
 
 // ── Preview (CX-6) ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
-struct PreviewRequest {
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct PreviewRequest {
     strategy: ContextSelectionStrategy,
 }
 
@@ -456,7 +549,18 @@ struct PreviewTiers {
 ///
 /// Runs the real selectors over real history and sends nothing to any model, so the figures cannot
 /// drift from what a turn would actually carry.
-async fn context_preview(
+#[utoipa::path(
+    post,
+    path = "/api/me/context-preview",
+    tag = "context-selection",
+    responses(
+        (status = 200, description = "Body `{strategy}`; what each tier would keep on the caller's latest chat, nothing sent to any model"),
+        (status = 404, description = "`{\"error\": \"no chats yet\", \"code\": \"no_session\"}` — the caller has no chat"),
+        (status = 422, description = "A value outside the enum (Axum's Json rejection)"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub(crate) async fn context_preview(
     State(state): State<AppState>,
     claims: Claims,
     Json(body): Json<PreviewRequest>,
