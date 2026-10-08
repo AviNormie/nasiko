@@ -175,6 +175,7 @@ async fn deploy(
         env_vars: env,
         min_replicas: bounds.min,
         max_replicas: bounds.max,
+        replica_target: bounds.target,
         resources: None,
         image_pull_secret_name: None,
         image_pull_credential_seed: None,

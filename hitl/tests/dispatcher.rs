@@ -158,6 +158,7 @@ fn agent_spec(container_id: ContainerId) -> DeploymentSpec {
         image: "example/agent:latest".to_string(),
         min_replicas: 1,
         max_replicas: 1,
+        replica_target: None,
         env_vars: HashMap::new(),
         ports: vec![8080],
         resources: None,
