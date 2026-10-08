@@ -330,11 +330,11 @@ pub async fn agent_proxy(
         "accept-language",
         "a2a-version",
     ];
-    // Agent turns outrun the shared client's short default (long tool calls,
-    // multi-step orchestration), so this hop carries the agent-call budget.
+    // Agent turns outrun short defaults (long tool calls, multi-step
+    // orchestration), so this hop carries the agent-call budget.
     let mut forwarded =
         state
-            .http_client
+            .agent_client
             .request(method, &target_url)
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
