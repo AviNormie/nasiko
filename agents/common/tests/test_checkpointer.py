@@ -504,7 +504,10 @@ class TestChannelValues:
 
         head = state_server.kv["lgh:thread-1:"].value["value"]
 
-        assert head == {"checkpoint_id": "cp-1", "checkpoint": state_server.kv["lg:thread-1::cp-1"].value["value"]}
+        assert head == {
+            "checkpoint_id": "cp-1",
+            "checkpoint": state_server.kv["lg:thread-1::cp-1"].value["value"],
+        }
 
     async def test_a_big_state_spills_every_value_into_its_own_blob(
         self, saver, style, state_server, spilling

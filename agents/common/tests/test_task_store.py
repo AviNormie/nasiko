@@ -183,7 +183,9 @@ class TestFailures:
         assert state_server.tasks["t1"].value["state"] == "working"
 
     async def test_a_state_change_waits_out_a_short_rate_limit_and_lands(self, store, state_server, slept):
-        state_server.fail(429, times=2, headers={"Retry-After": "3"}, when=lambda r: r.path.startswith("/tasks"))
+        state_server.fail(
+            429, times=2, headers={"Retry-After": "3"}, when=lambda r: r.path.startswith("/tasks")
+        )
 
         await store.save(new_task("t1", "input-required"))
 
