@@ -28,6 +28,29 @@ impl<'a> BoundedPayload<'a> {
     }
 }
 
+/// The most a sealed payload's stored size exceeds 4/3 of the payload's own size.
+///
+/// `SecretsCrypto::encrypt_with_aad` stores `base64(12-byte nonce || ciphertext || 16-byte tag)`,
+/// where the ciphertext is as long as the payload: `4 * ceil((n + 28) / 3)` bytes for `n` payload
+/// bytes. That is at most `4 * (n + 30) / 3 = 4n/3 + 40`: the 28 bytes of nonce and tag plus up to
+/// 2 bytes of base64 padding, each stored as 4/3 of a byte.
+const SEAL_OVERHEAD_BYTES: u128 = 40;
+
+/// The most stored bytes that `rows` sealed payloads can take when the payloads themselves total
+/// at most `payload_bytes`, saturating at `i64::MAX`.
+///
+/// A listing bounds what it fetches by this: summing stored sizes in SQL is cheap (no row has to
+/// be decrypted, nor even read from TOAST), and a run of rows whose stored size passes this bound
+/// cannot fit `payload_bytes` of payload.
+pub(super) fn sealed_bytes_bound(payload_bytes: usize, rows: i64) -> i64 {
+    // Sum of 4 * (n + 30) / 3 over the rows, rounded up. In u128 nothing here can overflow: a
+    // usize or an i64 times a few fits with room to spare.
+    let payload = u128::try_from(payload_bytes).unwrap_or(u128::from(u64::MAX));
+    let rows = u128::try_from(rows).unwrap_or(0);
+    let sealed = (payload * 4).div_ceil(3) + SEAL_OVERHEAD_BYTES * rows;
+    i64::try_from(sealed).unwrap_or(i64::MAX)
+}
+
 /// Seals and opens one agent's stored payloads (AES-256-GCM).
 ///
 /// The key is the agent's state key (`SecretsCrypto::try_for_agent_state`), derived from the
@@ -144,6 +167,41 @@ mod tests {
         let mut expected = Uuid::from_u128(0x0102).as_bytes().to_vec();
         expected.extend_from_slice(b"\x02kvk/1");
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn a_sealed_payload_never_outgrows_the_bound() {
+        let crypto = SecretsCrypto::for_backup_canary(&base64_key()).unwrap();
+        for size in [0, 1, 2, 3, 4, 100, 1000, 4096, 65_537] {
+            let payload = "x".repeat(size);
+            let sealed = crypto.encrypt_with_aad(&payload, b"row");
+            let sealed_len = i64::try_from(sealed.len()).unwrap();
+            assert!(
+                sealed_len <= sealed_bytes_bound(size, 1),
+                "{size} payload bytes sealed into {sealed_len}"
+            );
+            // Tight: the bound is never more than a padding's worth above the real size.
+            assert!(sealed_bytes_bound(size, 1) - sealed_len <= 4, "{size}");
+        }
+    }
+
+    #[test]
+    fn the_bound_grows_by_the_overhead_per_row_and_saturates() {
+        assert_eq!(sealed_bytes_bound(3, 0), 4);
+        assert_eq!(sealed_bytes_bound(3, 2), 4 + 2 * 40);
+        assert_eq!(
+            sealed_bytes_bound(3, -1),
+            4,
+            "a negative row count adds nothing"
+        );
+        assert_eq!(sealed_bytes_bound(usize::MAX, 101), i64::MAX);
+    }
+
+    /// A fixed key for a cipher built without this process's environment. The constructor that
+    /// takes one is the backup canary's; its key derivation differs, its sealed format does not.
+    fn base64_key() -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode([7u8; 32])
     }
 
     #[test]

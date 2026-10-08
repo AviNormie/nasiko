@@ -51,6 +51,8 @@
 mod auth;
 mod cursor;
 mod error;
+#[cfg(test)]
+mod listing_db_tests;
 mod page;
 mod payload;
 mod peer;

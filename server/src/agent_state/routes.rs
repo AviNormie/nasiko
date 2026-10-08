@@ -9,7 +9,7 @@ use axum::{Json, Router, middleware};
 use super::auth::{AgentAuth, AuthenticatedAgent, authenticate};
 use super::error::StateError;
 use super::page::{ListedRow, Page, build_page};
-use super::payload::{BoundedPayload, PayloadCipher};
+use super::payload::{BoundedPayload, PayloadCipher, sealed_bytes_bound};
 use super::peer::{PeerLimit, limit_by_peer};
 use super::precondition::Precondition;
 use super::repo::{
@@ -154,9 +154,10 @@ async fn list_tasks(
     StateQuery(query): StateQuery<ListTasksQuery>,
 ) -> Result<Json<Page<TaskView>>, StateError> {
     let query = TaskQuery::try_from(query)?;
-    let rows = repo::list_tasks(&state.db, agent_id, &query).await?;
-    let cipher = PayloadCipher::for_agent(agent_id)?;
     let budget = state.config.agent_state_list_bytes_budget;
+    let fetch_bound = listing_fetch_bound(budget, query.page_size);
+    let rows = repo::list_tasks(&state.db, agent_id, &query, fetch_bound).await?;
+    let cipher = PayloadCipher::for_agent(agent_id)?;
     Ok(Json(build_page(rows, budget, |row| {
         cipher.open(Store::Tasks, &row.task_id, &row.sealed_body)
     })))
@@ -222,12 +223,22 @@ async fn list_kv(
     StateQuery(query): StateQuery<ListKvQuery>,
 ) -> Result<Json<Page<KvView>>, StateError> {
     let query = KvQuery::try_from(query)?;
-    let rows = repo::list_kv(&state.db, agent_id, &query).await?;
-    let cipher = PayloadCipher::for_agent(agent_id)?;
     let budget = state.config.agent_state_list_bytes_budget;
+    let fetch_bound = listing_fetch_bound(budget, query.page_size);
+    let rows = repo::list_kv(&state.db, agent_id, &query, fetch_bound).await?;
+    let cipher = PayloadCipher::for_agent(agent_id)?;
     Ok(Json(build_page(rows, budget, |row| {
         cipher.open(Store::Kv, &row.key, &row.sealed_value)
     })))
+}
+
+/// The stored bytes a listing may fetch ahead of a row: what the rows before it can take while
+/// their payloads stay within `budget`. A listing considers at most `page_size + 1` rows, so at
+/// most `page_size` precede any of them, and a row whose predecessors' payloads fit the budget is
+/// always fetched. `build_page` still applies the budget itself to what was fetched. (A row that
+/// does not decrypt counts here though `build_page` skips it, which can only shorten a page.)
+fn listing_fetch_bound(budget: usize, page_size: i64) -> i64 {
+    sealed_bytes_bound(budget, page_size)
 }
 
 // ─── Outcomes to responses ──────────────────────────────────────────────────

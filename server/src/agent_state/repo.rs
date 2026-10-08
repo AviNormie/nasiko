@@ -164,14 +164,59 @@ pub(super) struct Rows<T> {
     pub(super) has_more: bool,
 }
 
+/// A row as a listing fetches it: the row, and how many rows the listing considered (the page
+/// plus one probe row, before the byte bound), which is the same on every row it returns.
+#[derive(Debug, sqlx::FromRow)]
+struct Listed<T> {
+    #[sqlx(flatten)]
+    row: T,
+    candidates: i64,
+}
+
 impl<T> Rows<T> {
-    /// Drops the one extra row a listing fetches beyond the page size to learn whether more exist.
-    fn trimmed(mut rows: Vec<T>, page_size: i64) -> Self {
-        let keep = usize::try_from(page_size).unwrap_or_default();
-        let has_more = rows.len() > keep;
-        rows.truncate(keep);
-        Self { rows, has_more }
+    /// Makes a page of what a listing fetched. The listing considers one row beyond the page size
+    /// to learn whether more exist, and may also have left rows out to stay within its byte
+    /// bound; either way, more follow when it considered more rows than the page keeps.
+    fn from_listing(listed: Vec<Listed<T>>, page_size: i64) -> Self {
+        let candidates = listed.first().map_or(0, |first| first.candidates);
+        let rows = listed.into_iter().map(|listed| listed.row).collect();
+        Self::trimmed(rows, candidates, page_size)
     }
+
+    /// Drops the probe row, if fetched, and reports whether any considered row is not on the page.
+    fn trimmed(mut rows: Vec<T>, candidates: i64, page_size: i64) -> Self {
+        rows.truncate(usize::try_from(page_size).unwrap_or_default());
+        let kept = i64::try_from(rows.len()).unwrap_or(i64::MAX);
+        Self {
+            rows,
+            has_more: candidates > kept,
+        }
+    }
+}
+
+/// Wraps a listing's candidate query, ordered by `order` and limited already, into the statement
+/// that bounds what it fetches by stored bytes. `sealed` is its stored payload column.
+///
+/// A row is fetched only while the stored size of the rows before it is within the budget (the
+/// placeholder `budget_param`), so a page of large rows fetches a few of them, not a
+/// page size's worth of them to throw most away after decrypting. The first row is always fetched,
+/// however large, so a listing always makes progress. `octet_length` reads the stored size
+/// without decompressing or fetching the value, and only fetched rows are read in full.
+/// `count(*) OVER ()` reports how many rows were considered, so the caller knows whether the
+/// byte bound or the page size left any out.
+fn bounded_listing(candidates: &str, order: &str, sealed: &str, budget_param: &str) -> String {
+    format!(
+        "SELECT * FROM (
+            SELECT candidate.*,
+                   count(*) OVER () AS candidates,
+                   coalesce(sum(octet_length(candidate.{sealed})) OVER (
+                       ORDER BY {order}
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS sealed_before
+            FROM ({candidates}) candidate
+        ) measured
+        WHERE sealed_before <= {budget_param}
+        ORDER BY {order}"
+    )
 }
 
 // ─── Registration ───────────────────────────────────────────────────────────
@@ -226,7 +271,10 @@ const GET_TASK: &str =
 /// Newest first, then by id. `task_id` is a `COLLATE "C"` column, so the tie-break is byte order
 /// whatever the database's locale, and `idx_agent_tasks_listing` serves this order and the
 /// cursor's range without a sort.
-const LIST_TASKS: &str =
+const TASK_ORDER: &str = "updated_at DESC, task_id ASC";
+
+/// The candidates of a task listing, before the byte bound (`bounded_listing`, budget `$7`).
+const TASK_CANDIDATES: &str =
     "SELECT task_id, context_id, state, body AS sealed_body, version, updated_at, expires_at
     FROM agent_tasks
     WHERE agent_id = $1
@@ -272,21 +320,26 @@ pub(super) async fn get_task(
         .await
 }
 
+/// One page of tasks, fetching rows only while their stored payloads total at most
+/// `sealed_bytes_budget` before the row (see `bounded_listing`).
 pub(super) async fn list_tasks(
     db: &PgPool,
     agent_id: Uuid,
     query: &TaskQuery,
+    sealed_bytes_budget: i64,
 ) -> Result<Rows<TaskRow>, sqlx::Error> {
-    let rows = sqlx::query_as(LIST_TASKS)
+    let sql = bounded_listing(TASK_CANDIDATES, TASK_ORDER, "sealed_body", "$7");
+    let listed = sqlx::query_as(&sql)
         .bind(agent_id)
         .bind(query.context_id.as_deref())
         .bind(query.state.as_deref())
         .bind(query.after.as_ref().map(|cursor| cursor.updated_at))
         .bind(query.after.as_ref().map(|cursor| cursor.task_id.as_str()))
         .bind(query.page_size + 1)
+        .bind(sealed_bytes_budget)
         .fetch_all(db)
         .await?;
-    Ok(Rows::trimmed(rows, query.page_size))
+    Ok(Rows::from_listing(listed, query.page_size))
 }
 
 /// Creates or replaces a task, at version 1 for a new one and one above the current otherwise.
@@ -344,11 +397,15 @@ const GET_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, ex
     FROM agent_kv
     WHERE agent_id = $1 AND key = $2 AND deleted_at IS NULL AND expires_at > now()";
 
+/// By key. `key` is a `COLLATE "C"` column, so the order is bytes, as for tasks.
+const KV_ORDER: &str = "key ASC";
+
+/// The candidates of a key-value listing, before the byte bound (`bounded_listing`, budget `$5`).
+///
 /// `starts_with`, not `LIKE`: a prefix is a literal, and `%` or `_` in it must not act as
-/// wildcards. `key` is a `COLLATE "C"` column, so the order is bytes, as in `LIST_TASKS`, and the
-/// primary key serves the order, the cursor's range and the prefix (Postgres can use a btree for
-/// `starts_with` only under the C collation).
-const LIST_KV: &str = "SELECT key, value AS sealed_value, version, updated_at, expires_at
+/// wildcards. The primary key serves the order, the cursor's range and the prefix (Postgres can
+/// use a btree for `starts_with` only under the C collation).
+const KV_CANDIDATES: &str = "SELECT key, value AS sealed_value, version, updated_at, expires_at
     FROM agent_kv
     WHERE agent_id = $1
       AND deleted_at IS NULL
@@ -384,19 +441,23 @@ pub(super) async fn get_kv(
         .await
 }
 
+/// One page of entries, bounded in fetched bytes as [`list_tasks`] is.
 pub(super) async fn list_kv(
     db: &PgPool,
     agent_id: Uuid,
     query: &KvQuery,
+    sealed_bytes_budget: i64,
 ) -> Result<Rows<KvRow>, sqlx::Error> {
-    let rows = sqlx::query_as(LIST_KV)
+    let sql = bounded_listing(KV_CANDIDATES, KV_ORDER, "sealed_value", "$5");
+    let listed = sqlx::query_as(&sql)
         .bind(agent_id)
         .bind(query.prefix.as_deref())
         .bind(query.after.as_ref().map(|cursor| cursor.key.as_str()))
         .bind(query.page_size + 1)
+        .bind(sealed_bytes_budget)
         .fetch_all(db)
         .await?;
-    Ok(Rows::trimmed(rows, query.page_size))
+    Ok(Rows::from_listing(listed, query.page_size))
 }
 
 /// Creates or replaces an entry, at version 1 for a new one and one above the current otherwise.
@@ -548,23 +609,52 @@ mod tests {
 
     #[test]
     fn a_full_page_with_a_probe_row_reports_more_and_drops_the_probe() {
-        let page = Rows::trimmed(vec![1, 2, 3], 2);
+        let page = Rows::trimmed(vec![1, 2, 3], 3, 2);
         assert_eq!(page.rows, [1, 2]);
         assert!(page.has_more);
     }
 
     #[test]
     fn a_page_without_a_probe_row_is_the_last() {
-        let exact = Rows::trimmed(vec![1, 2], 2);
+        let exact = Rows::trimmed(vec![1, 2], 2, 2);
         assert_eq!(exact.rows, [1, 2]);
         assert!(!exact.has_more);
 
-        let short = Rows::trimmed(vec![1], 2);
+        let short = Rows::trimmed(vec![1], 1, 2);
         assert_eq!(short.rows, [1]);
         assert!(!short.has_more);
 
-        let empty = Rows::<i32>::trimmed(vec![], 2);
+        let empty = Rows::<i32>::trimmed(vec![], 0, 2);
         assert!(empty.rows.is_empty());
         assert!(!empty.has_more);
+    }
+
+    #[test]
+    fn rows_the_byte_bound_left_out_mean_more_follow() {
+        // Three rows considered, but only the first fitted the bound: the rest come next page.
+        let cut = Rows::trimmed(vec![1], 3, 2);
+        assert_eq!(cut.rows, [1]);
+        assert!(cut.has_more);
+    }
+
+    #[test]
+    fn a_listing_reports_what_it_considered_through_any_of_its_rows() {
+        let listed = vec![
+            Listed {
+                row: "a",
+                candidates: 3,
+            },
+            Listed {
+                row: "b",
+                candidates: 3,
+            },
+        ];
+        let page = Rows::from_listing(listed, 5);
+        assert_eq!(page.rows, ["a", "b"]);
+        assert!(page.has_more, "a third row was considered and left out");
+
+        let none = Rows::<&str>::from_listing(vec![], 5);
+        assert!(none.rows.is_empty());
+        assert!(!none.has_more);
     }
 }
