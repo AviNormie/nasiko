@@ -130,6 +130,11 @@ SIGTERM_EXIT_STATUS = 128 + signal.SIGTERM
 
 # The order the registration contract spells its capability lists in.
 CAPABILITY_ORDER = ("tasks", "kv")
+# A startup registration that failed for a reason that may pass (no answer, 5xx, 429) is retried
+# in the background after a delay that doubles from the first of these up to the second.
+REGISTER_RETRY_FIRST_SECONDS = 1.0
+REGISTER_RETRY_MAX_SECONDS = 60.0
+REGISTER_THREAD_NAME = "nasiko-state-register"
 
 T = TypeVar("T")
 
@@ -522,7 +527,9 @@ class NasikoStateClient:
     RATE_LIMIT_BUDGET_SECONDS of waiting is spent; then it raises like any other failure. Other
     4xx answers are never retried.
 
-    The first write of each kind (tasks, kv) registers the agent with the platform, once.
+    The factories register the agent with the platform at startup (``register_in_background``),
+    so a freshly deployed agent is known to keep durable state before it serves anything; failing
+    that, the first write of each kind (tasks, kv) registers before it writes. Either way, once.
     """
 
     def __init__(
@@ -580,6 +587,38 @@ class NasikoStateClient:
     async def aregister(self, capabilities: Sequence[str], client_name: str | None = None) -> None:
         await self._aexecute(_register_op(capabilities, client_name or self._client_name))
         self._registered.update(capabilities)
+
+    def register_in_background(self, capability: str) -> threading.Thread:
+        """Register ``capability`` from a daemon thread, so starting the agent never waits on it.
+
+        A failure that may pass is retried on a capped backoff until it succeeds. A refusal is
+        logged and left to the first write, which registers before it writes.
+        """
+        thread = threading.Thread(
+            target=self._register_until_done, args=(capability,), name=REGISTER_THREAD_NAME, daemon=True
+        )
+        thread.start()
+        return thread
+
+    def _register_until_done(self, capability: str) -> None:
+        delay = REGISTER_RETRY_FIRST_SECONDS
+        while True:
+            try:
+                self._ensure_registered(capability)
+                return
+            except NasikoStateError as exc:
+                if not (_is_transient(exc) or exc.status == 429):
+                    logger.error(
+                        "registering %s state with the platform failed; the first write will try again: %s",
+                        capability,
+                        exc,
+                    )
+                    return
+                logger.warning(
+                    "registering %s state with the platform failed, retrying in %.0f s: %s", capability, delay, exc
+                )
+            time.sleep(delay)
+            delay = min(delay * 2, REGISTER_RETRY_MAX_SECONDS)
 
     # --- tasks -----------------------------------------------------------------------------
 
@@ -1289,14 +1328,17 @@ def make_task_store() -> TaskStore:
     """The task store an agent hands to its request handler.
 
     The platform's durable store when NASIKO_STATE_URL is set, otherwise the SDK's in-memory
-    store, built exactly as an agent would build it by hand. Nothing contacts the platform
-    until the first task is saved.
+    store, built exactly as an agent would build it by hand. The durable store registers the agent
+    with the platform in the background right away, so the agent counts as durable before its
+    first request; the in-memory one never contacts the platform.
     """
     client = NasikoStateClient.from_env()
     if client is None:
         return InMemoryTaskStore()
     logger.info("task state is kept in the platform state API: %r", client)
-    return NasikoTaskStore(client)
+    store = NasikoTaskStore(client)
+    client.register_in_background("tasks")
+    return store
 
 
 def install_shutdown_hooks(app: Any) -> None:
@@ -1933,7 +1975,8 @@ def make_checkpointer() -> Any:
     """The checkpointer a langgraph agent compiles its graph with.
 
     The platform's durable one when NASIKO_STATE_URL is set, otherwise langgraph's own
-    ``MemorySaver``, built exactly as an agent would build it by hand.
+    ``MemorySaver``, built exactly as an agent would build it by hand. Like make_task_store, the
+    durable one registers with the platform in the background right away.
     """
     client = NasikoStateClient.from_env()
     if client is None:
@@ -1941,4 +1984,6 @@ def make_checkpointer() -> Any:
 
         return MemorySaver()
     logger.info("langgraph checkpoints are kept in the platform state API: %r", client)
-    return NasikoCheckpointSaver(NasikoKV(client))
+    saver = NasikoCheckpointSaver(NasikoKV(client))
+    client.register_in_background("kv")
+    return saver
