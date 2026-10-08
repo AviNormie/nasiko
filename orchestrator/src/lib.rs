@@ -16,7 +16,7 @@ pub mod vector_store;
 pub use context_selection::{
     ContextPreview, ContextSelectionStrategy, ContextTiers, PacmsBudgetLevel, ReportAttribution,
     TierCounts, compression_opt_in, compression_state, fetch_for_user, preview,
-    record_context_report, selection_enabled,
+    record_context_report, selection_enabled, selection_enabled_checked,
 };
 pub use engine::{OssRoutingEngine, RouterConfig, RoutingEngine};
 pub use error::RouterError;

@@ -33,7 +33,16 @@ use nasiko_compress::Policy;
 /// [`ContextTiers`]), so an operator can retune what "high" means per
 /// deployment without touching user data.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, sqlx::Type,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    sqlx::Type,
+    utoipa::ToSchema,
 )]
 #[sqlx(type_name = "pacms_budget_level", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -82,13 +91,24 @@ impl PacmsBudgetLevel {
     /// column default) if the row is missing or the query fails — a lookup
     /// hiccup must never block a chat request.
     pub async fn for_user(pool: &PgPool, user_id: Uuid) -> Self {
-        sqlx::query_scalar::<_, Self>("SELECT pacms_budget_level FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(pool)
+        Self::for_user_checked(pool, user_id)
             .await
-            .ok()
-            .flatten()
             .unwrap_or_default()
+    }
+
+    /// Same lookup, but a real database error is reported rather than swallowed into the default
+    /// (CX-4) — for the `GET /api/me/pacms-budget` read path, which must 500 on a failed read
+    /// instead of quietly claiming the default was saved. A missing row (`fetch_optional` returning
+    /// `None` — no such user) still resolves to the column default, same as `for_user`; only an
+    /// actual query failure is `Err`.
+    pub async fn for_user_checked(pool: &PgPool, user_id: Uuid) -> Result<Self, sqlx::Error> {
+        Ok(
+            sqlx::query_scalar::<_, Self>("SELECT pacms_budget_level FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(pool)
+                .await?
+                .unwrap_or_default(),
+        )
     }
 }
 
@@ -97,7 +117,16 @@ impl PacmsBudgetLevel {
 /// deriving `sqlx::Type` lets sqlx decode the column directly instead of
 /// treating it as TEXT.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, sqlx::Type,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    sqlx::Type,
+    utoipa::ToSchema,
 )]
 #[sqlx(type_name = "context_selection_strategy", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -129,13 +158,22 @@ impl ContextSelectionStrategy {
     /// column default) if the row is missing or the query fails — a lookup
     /// hiccup must never block a chat request.
     pub async fn for_user(pool: &PgPool, user_id: Uuid) -> Self {
-        sqlx::query_scalar::<_, Self>("SELECT context_selection_strategy FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(pool)
+        Self::for_user_checked(pool, user_id)
             .await
-            .ok()
-            .flatten()
             .unwrap_or_default()
+    }
+
+    /// Same lookup, but a real database error is reported rather than swallowed into the default
+    /// (CX-4) — for the `GET /api/me/context-strategy` read path. See
+    /// [`PacmsBudgetLevel::for_user_checked`] for the missing-row-vs-error distinction.
+    pub async fn for_user_checked(pool: &PgPool, user_id: Uuid) -> Result<Self, sqlx::Error> {
+        Ok(sqlx::query_scalar::<_, Self>(
+            "SELECT context_selection_strategy FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or_default())
     }
 }
 
@@ -434,13 +472,20 @@ pub async fn compression_state(pool: &PgPool, user_id: Uuid) -> (bool, Vec<Uuid>
 /// Off means every request carries recent history as read, with no budget applied. Defaults to on,
 /// so a deployment that predates the column behaves exactly as it did.
 pub async fn selection_enabled(pool: &PgPool, user_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, bool>("SELECT context_selection_enabled FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(true)
+    selection_enabled_checked(pool, user_id).await.unwrap_or(true)
+}
+
+/// Same check, but a real database error is reported rather than swallowed into the default
+/// (CX-4) — for the `GET /api/me/context-strategy` read path. See
+/// [`PacmsBudgetLevel::for_user_checked`] for the missing-row-vs-error distinction.
+pub async fn selection_enabled_checked(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
+    Ok(
+        sqlx::query_scalar::<_, bool>("SELECT context_selection_enabled FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or(true),
+    )
 }
 
 pub async fn fetch_for_user(
