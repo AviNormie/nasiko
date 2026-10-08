@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 
 import httpx
@@ -10,6 +9,9 @@ import pytest
 from fake_state_server import BASE_URL, TOKEN, Recorded
 from nasiko_state import (
     CLIENT_NAME,
+    MAX_RETRY_AFTER_SECONDS,
+    RATE_LIMIT_BUDGET_SECONDS,
+    RATE_LIMIT_JITTER,
     RETRY_ATTEMPTS,
     NasikoStateClient,
     NasikoStateConflict,
@@ -23,24 +25,6 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture(params=["sync", "async"])
 def style(request: pytest.FixtureRequest) -> str:
     return request.param
-
-
-@pytest.fixture
-def slept(monkeypatch) -> list[float]:
-    """Every retry wait the client asks for, sync or async, without actually waiting."""
-    waits: list[float] = []
-    real_asleep = asyncio.sleep
-
-    def sleep(seconds: float) -> None:
-        waits.append(seconds)
-
-    async def asleep(seconds: float) -> None:
-        waits.append(seconds)
-        await real_asleep(0)
-
-    monkeypatch.setattr(time, "sleep", sleep)
-    monkeypatch.setattr(asyncio, "sleep", asleep)
-    return waits
 
 
 async def call(client: NasikoStateClient, style: str, method: str, *args, **kwargs):
@@ -234,19 +218,6 @@ class TestFailures:
         assert "body too large" in raised.value.body
         assert "413" in str(raised.value)
 
-    async def test_a_rate_limit_longer_than_the_bound_raises_without_waiting(
-        self, client, state_server, style, slept
-    ):
-        state_server.rate_limit = 0  # answers 429 with Retry-After: 7
-
-        with pytest.raises(NasikoStateError) as raised:
-            await call(client, style, "get_task", "t1")
-
-        assert raised.value.status == 429
-        assert "retry after 7s" in str(raised.value)
-        assert len(state_server.requests) == 1
-        assert slept == []
-
     async def test_unknown_token_is_refused(self, state_server, style):
         stranger = NasikoStateClient(BASE_URL, "wrong", transport=state_server.transport)
 
@@ -290,30 +261,6 @@ class TestFailures:
         assert "could not be reached" in str(raised.value) or "request failed" in str(raised.value)
         assert len(state_server.requests) == RETRY_ATTEMPTS
 
-    async def test_a_429_is_retried_after_the_wait_the_server_names(self, client, state_server, style, slept):
-        state_server.fail(429, headers={"Retry-After": "2"})
-
-        assert await call(client, style, "get_task", "t1") is None
-
-        assert slept == [2.0]
-        assert len(state_server.requests) == 2
-
-    async def test_a_429_without_retry_after_backs_off_like_a_5xx(self, client, state_server, style, slept):
-        state_server.fail(429, times=RETRY_ATTEMPTS - 1)
-
-        assert await call(client, style, "get_task", "t1") is None
-
-        assert len(slept) == RETRY_ATTEMPTS - 1
-
-    async def test_429_retries_are_bounded(self, client, state_server, style, slept):
-        state_server.fail(429, times=100, headers={"Retry-After": "1"})
-
-        with pytest.raises(NasikoStateError) as raised:
-            await call(client, style, "get_task", "t1")
-
-        assert raised.value.status == 429
-        assert len(state_server.requests) == RETRY_ATTEMPTS
-
     @pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 413, 422])
     async def test_client_errors_are_never_retried(self, client, state_server, style, status):
         state_server.fail(status, times=100)
@@ -337,6 +284,68 @@ class TestFailures:
 
         with pytest.raises(NasikoStateError, match="TaskRecord"):
             await call(broken, style, "get_task", "t1")
+
+
+class TestRateLimits:
+    """A 429 is waited out within a per-attempt cap and a total budget, then surfaces."""
+
+    async def test_a_429_is_retried_after_the_wait_the_server_names(self, client, state_server, style, slept):
+        state_server.fail(429, headers={"Retry-After": "2"})
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert len(slept) == 1
+        assert 2.0 <= slept[0] <= 2.0 * (1 + RATE_LIMIT_JITTER)  # never earlier than asked
+        assert len(state_server.requests) == 2
+
+    async def test_a_long_retry_after_is_waited_out_at_the_cap(self, client, state_server, style, slept):
+        state_server.fail(429, headers={"Retry-After": "34"})  # what a per-minute window answers
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert len(slept) == 1
+        assert MAX_RETRY_AFTER_SECONDS * (1 - RATE_LIMIT_JITTER) <= slept[0] <= MAX_RETRY_AFTER_SECONDS
+
+    async def test_a_429_without_retry_after_waits_a_second(self, client, state_server, style, slept):
+        state_server.fail(429)
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert 1.0 <= slept[0] <= 1.0 * (1 + RATE_LIMIT_JITTER)
+
+    async def test_a_zero_retry_after_still_waits(self, client, state_server, style, slept):
+        state_server.fail(429, headers={"Retry-After": "0"})
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert slept[0] >= 0.5
+
+    async def test_waits_are_spread_so_replicas_do_not_retry_in_step(self, client, state_server, style, slept):
+        state_server.fail(429, times=10, headers={"Retry-After": "1"})
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert len(set(slept)) > 1
+
+    async def test_429s_stop_after_the_budget_and_raise(self, client, state_server, style, slept):
+        state_server.rate_limit = 0  # every request answered 429 with Retry-After: 7
+
+        with pytest.raises(NasikoStateError) as raised:
+            await call(client, style, "get_task", "t1")
+
+        assert raised.value.status == 429
+        assert "retry after 7s" in str(raised.value)
+        assert all(wait <= MAX_RETRY_AFTER_SECONDS for wait in slept)
+        assert RATE_LIMIT_BUDGET_SECONDS - MAX_RETRY_AFTER_SECONDS < sum(slept) <= RATE_LIMIT_BUDGET_SECONDS
+        assert len(state_server.requests) == len(slept) + 1
+
+    async def test_429s_do_not_use_up_the_attempts_for_failures(self, client, state_server, style, slept):
+        state_server.fail(429, times=RETRY_ATTEMPTS + 2, headers={"Retry-After": "1"})
+        state_server.fail(503, times=RETRY_ATTEMPTS - 1)
+
+        assert await call(client, style, "get_task", "t1") is None
+
+        assert len(state_server.requests) == (RETRY_ATTEMPTS + 2) + (RETRY_ATTEMPTS - 1) + 1
 
 
 class TestConstruction:
