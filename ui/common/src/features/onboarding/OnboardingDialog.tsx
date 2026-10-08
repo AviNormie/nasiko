@@ -83,6 +83,7 @@ export function OnboardingDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showCloseButton={false}
+        overlayClassName="backdrop-blur-sm"
         // Start on the step's own action (Get started), not the rail's first button.
         onOpenAutoFocus={(e) => {
           e.preventDefault()
