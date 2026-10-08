@@ -1171,9 +1171,7 @@ async fn restore_prior_state_or_clean_up(
 /// restores that snapshot or cleans up a genuinely brand-new agent.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_clone_and_deploy(
-    runtime: std::sync::Arc<dyn nasiko_runtime::ContainerRuntime>,
-    db: sqlx::PgPool,
-    http: reqwest::Client,
+    state: &AppState,
     build_id: Uuid,
     agent_id: Uuid,
     owner_id: Uuid,
@@ -1181,13 +1179,9 @@ pub async fn execute_clone_and_deploy(
     name: String,
     tar_gz_path: PathBuf,
     ports: Vec<u16>,
-    mut env: HashMap<String, String>,
-    openai_api_key: Option<String>,
-    openai_base_url: Option<String>,
-    agent_runtime: String,
-    agent_image_registry: String,
-    max_replicas: u32,
-    default_memory: String,
+    // The caller's own `env` field. The platform's env is assembled only once the image has
+    // built (below), so a failed clone or build never rotates the running agent's credentials.
+    job_env: HashMap<String, String>,
     version_override: Option<String>,
     // What this agent's `version`/`image`/`status` were before the queueing
     // handler optimistically overwrote them with a placeholder — `None` for
@@ -1197,16 +1191,12 @@ pub async fn execute_clone_and_deploy(
     prior_version: Option<String>,
     prior_image: Option<String>,
     prior_status: Option<String>,
-    deletion_hook: std::sync::Arc<crate::agent_lifecycle::SwappableAgentDeletionHook>,
 ) {
-    if let Some(key) = openai_api_key {
-        env.entry("OPENAI_API_KEY".to_owned()).or_insert(key);
-    }
-    if let Some(url) = openai_base_url {
-        env.entry("OPENAI_BASE_URL".to_owned()).or_insert(url);
-    }
-    set_build_status(&db, build_id, BuildStatus::Building).await;
-    set_upload_status(&db, &upload_id, &name, owner_id, "initiated", None, None).await;
+    let db = &state.db;
+    let runtime = &state.runtime;
+    let agent_image_registry = &state.config.agent_image_registry;
+    set_build_status(db, build_id, BuildStatus::Building).await;
+    set_upload_status(db, &upload_id, &name, owner_id, "initiated", None, None).await;
 
     let tmp_dir = std::env::temp_dir().join(format!("nasiko-clone-{build_id}"));
 
@@ -1227,7 +1217,7 @@ pub async fn execute_clone_and_deploy(
         .await
         .map_err(|e| format!("spawn_blocking extract: {e}"))??;
 
-        set_upload_status(&db, &upload_id, &name, owner_id, "processing", None, None).await;
+        set_upload_status(db, &upload_id, &name, owner_id, "processing", None, None).await;
 
         // ── Extract version from project files (same logic as zip upload) ────
         // Resolution order: AgentCard.json → pyproject.toml → Cargo.toml.
@@ -1255,7 +1245,7 @@ pub async fn execute_clone_and_deploy(
                 }
             };
 
-            let new_tag = crate::agents::build_image_tag(&agent_image_registry, &name, &ver);
+            let new_tag = crate::agents::build_image_tag(agent_image_registry, &name, &ver);
 
             // Atomically claim this version before any build/deploy work
             // starts, via the real `UNIQUE(agent_id, version)` constraint —
@@ -1264,7 +1254,7 @@ pub async fn execute_clone_and_deploy(
             // one `reserve_version` call can win. Released on failure below
             // (see the `Err(e)` match), or finalized into the real active
             // record on success.
-            super::versions::reserve_version(&db, agent_id, build_id, &ver, &new_tag)
+            super::versions::reserve_version(db, agent_id, build_id, &ver, &new_tag)
                 .await
                 .map_err(|e| match e {
                     super::versions::VersionChangeError::VersionAlreadyExists(_) => {
@@ -1282,7 +1272,7 @@ pub async fn execute_clone_and_deploy(
             .bind(agent_id)
             .bind(&ver)
             .bind(&new_tag)
-            .execute(&db)
+            .execute(db)
             .await;
             let _ = sqlx::query(
                 "UPDATE agent_builds SET version_tag = $2, image_reference = $3 WHERE id = $1",
@@ -1290,7 +1280,7 @@ pub async fn execute_clone_and_deploy(
             .bind(build_id)
             .bind(&ver)
             .bind(&new_tag)
-            .execute(&db)
+            .execute(db)
             .await;
             tracing::info!(%build_id, %agent_id, version = %ver, "clone: detected version from source");
             new_tag
@@ -1319,7 +1309,7 @@ pub async fn execute_clone_and_deploy(
             .map_err(|e| format!("BUILD_FAILED:docker build: {e}"))?;
 
         set_upload_status(
-            &db,
+            db,
             &upload_id,
             &name,
             owner_id,
@@ -1329,6 +1319,24 @@ pub async fn execute_clone_and_deploy(
         )
         .await;
 
+        // Minted only now that the image exists: this rotates the agent's gateway and state
+        // credentials, and a clone or build that failed must leave the running pods alone.
+        let mut env = crate::agents::deploy_env::build(
+            state,
+            agent_id,
+            owner_id,
+            job_env,
+            crate::agents::deploy_env::StateModeOnDeploy::Reset,
+        )
+        .await;
+        // Server-level LLM defaults, never persisted in the job payload. Caller env wins.
+        if let Some(key) = state.config.openai_api_key.clone() {
+            env.entry("OPENAI_API_KEY".to_owned()).or_insert(key);
+        }
+        if let Some(url) = state.config.openai_base_url.clone() {
+            env.entry("OPENAI_BASE_URL".to_owned()).or_insert(url);
+        }
+
         // Deploy container keyed on agent UUID.
         let mut spec = crate::agents::build_agent_spec(
             agent_id,
@@ -1336,17 +1344,17 @@ pub async fn execute_clone_and_deploy(
             image_tag.clone(),
             ports,
             env,
-            &default_memory,
-            max_replicas,
+            &state.config.agent_default_memory,
+            state.config.agent_max_replicas,
             // GitHub-clone deploys don't expose a --writable flag yet.
             false,
             None,
             owner_id,
         );
         crate::agents::attach_pull_credential(
-            &db,
-            &agent_runtime,
-            &agent_image_registry,
+            db,
+            &state.config.agent_runtime,
+            agent_image_registry,
             &mut spec,
             agent_id,
         )
@@ -1357,7 +1365,7 @@ pub async fn execute_clone_and_deploy(
             .map_err(|e| format!("BUILD_FAILED:deploy: {e}"))?;
 
         set_upload_status(
-            &db,
+            db,
             &upload_id,
             &name,
             owner_id,
@@ -1379,9 +1387,9 @@ pub async fn execute_clone_and_deploy(
 
     match result {
         Ok((deploy_status, _final_image_tag)) => {
-            set_build_status(&db, build_id, BuildStatus::Success).await;
+            set_build_status(db, build_id, BuildStatus::Success).await;
             set_upload_status(
-                &db,
+                db,
                 &upload_id,
                 &name,
                 owner_id,
@@ -1396,10 +1404,10 @@ pub async fn execute_clone_and_deploy(
             // running (mirroring `update.rs`'s redeploy path). A genuinely
             // first deploy has nothing to archive yet.
             if let Some(ver) = &claimed_version {
-                super::versions::finalize_reserved_version_with_retry(&db, agent_id, ver).await;
+                super::versions::finalize_reserved_version_with_retry(db, agent_id, ver).await;
             }
             let agent_url = crate::agents::resolve_agent_url(
-                &runtime,
+                runtime,
                 &deploy_status,
                 &nasiko_runtime::ContainerId::from_uuid(agent_id),
             )
@@ -1409,11 +1417,11 @@ pub async fn execute_clone_and_deploy(
             )
             .bind(agent_id)
             .bind(&agent_url)
-            .execute(&db)
+            .execute(db)
             .await;
             tokio::spawn(super::utils::fetch_agent_card_with_retry(
                 db.clone(),
-                http,
+                state.http_client.clone(),
                 agent_id,
                 agent_url.clone(),
             ));
@@ -1425,34 +1433,34 @@ pub async fn execute_clone_and_deploy(
             .bind(build_id)
             .bind(owner_id)
             .bind(agent_id.to_string())
-            .execute(&db)
+            .execute(db)
             .await;
             tracing::info!(build_id = %build_id, agent_id = %agent_id, "clone-and-deploy succeeded");
         }
         Err(e) => {
-            set_build_status(&db, build_id, BuildStatus::Failed).await;
+            set_build_status(db, build_id, BuildStatus::Failed).await;
             // Free a version this attempt claimed via `reserve_version` but
             // never finished deploying, so the same version can be retried.
             // A no-op if nothing was ever claimed (e.g. rejected before a
             // version was even determined).
             if let Some(ver) = &claimed_version {
-                super::versions::release_reserved_version(&db, agent_id, ver).await;
+                super::versions::release_reserved_version(db, agent_id, ver).await;
             }
             if let Some(ver) = e.strip_prefix("VERSION_CONFLICT:") {
                 restore_prior_state_or_clean_up(
-                    &db,
+                    db,
                     agent_id,
                     &prior_version,
                     &prior_image,
                     &prior_status,
-                    &deletion_hook,
+                    &state.agent_deletion_hook,
                 )
                 .await;
                 // Prefixed so the client can offer "deploy as vX" instead of
                 // a dead-end error. See `add-agent-github-page.js`.
-                let suggested = suggest_next_version(&db, agent_id, ver).await;
+                let suggested = suggest_next_version(db, agent_id, ver).await;
                 set_upload_status(
-                    &db,
+                    db,
                     &upload_id,
                     &name,
                     owner_id,
@@ -1475,7 +1483,7 @@ pub async fn execute_clone_and_deploy(
                 // answer the right question: they're `Some` only if this
                 // agent existed before this import touched it.
                 set_upload_status(
-                    &db,
+                    db,
                     &upload_id,
                     &name,
                     owner_id,
@@ -1485,12 +1493,12 @@ pub async fn execute_clone_and_deploy(
                 )
                 .await;
                 restore_prior_state_or_clean_up(
-                    &db,
+                    db,
                     agent_id,
                     &prior_version,
                     &prior_image,
                     &prior_status,
-                    &deletion_hook,
+                    &state.agent_deletion_hook,
                 )
                 .await;
                 tracing::error!(build_id = %build_id, %reason, "clone-and-deploy failed");
@@ -1500,15 +1508,15 @@ pub async fn execute_clone_and_deploy(
                 // ever built or deployed, so restore exactly like a version
                 // conflict instead of wiping an existing agent.
                 restore_prior_state_or_clean_up(
-                    &db,
+                    db,
                     agent_id,
                     &prior_version,
                     &prior_image,
                     &prior_status,
-                    &deletion_hook,
+                    &state.agent_deletion_hook,
                 )
                 .await;
-                set_upload_status(&db, &upload_id, &name, owner_id, "failed", None, Some(&e)).await;
+                set_upload_status(db, &upload_id, &name, owner_id, "failed", None, Some(&e)).await;
                 tracing::warn!(build_id = %build_id, %agent_id, %e, "clone-and-deploy rejected before any build ran");
             }
         }
@@ -1663,18 +1671,8 @@ pub async fn execute_github_clone_and_deploy(
     // values are consumed there to restore the row on a version conflict, so
     // neither the tag nor a placeholder binding for them belongs in this
     // function any more.
-    let platform_env = super::deploy_env::build(
-        &state,
-        agent_id,
-        owner_id,
-        env,
-        super::deploy_env::StateModeOnDeploy::Reset,
-    )
-    .await;
     execute_clone_and_deploy(
-        state.runtime.clone(),
-        state.db.clone(),
-        state.http_client.clone(),
+        &state,
         build_id,
         agent_id,
         owner_id,
@@ -1682,18 +1680,11 @@ pub async fn execute_github_clone_and_deploy(
         name,
         tar_gz_path,
         ports,
-        platform_env,
-        state.config.openai_api_key.clone(),
-        state.config.openai_base_url.clone(),
-        state.config.agent_runtime.clone(),
-        state.config.agent_image_registry.clone(),
-        state.config.agent_max_replicas,
-        state.config.agent_default_memory.clone(),
+        env,
         version_override,
         prior_version,
         prior_image,
         prior_status,
-        state.agent_deletion_hook.clone(),
     )
     .await;
 }
