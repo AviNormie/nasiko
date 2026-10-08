@@ -306,10 +306,12 @@ install_shutdown_hooks(app)  # flushes pending writes when the server stops
 ```
 
 `make_task_store()` returns the SDK's in-memory store when `NASIKO_STATE_URL` is unset, so the
-same code runs unchanged on your laptop. A LangGraph agent swaps `MemorySaver()` for
-`make_checkpointer()` the same way; running the graph with `durability="exit"` writes one
-checkpoint per run instead of one per step, which keeps a turn well inside the rate limit.
-`oss/agents/common/check_vendored.py` fails CI when a copy drifts from the original.
+same code runs unchanged on your laptop; otherwise it registers your agent as durable at startup,
+in the background. A LangGraph agent swaps `MemorySaver()` for `make_checkpointer()` the same
+way. `oss/agents/common/check_vendored.py` fails CI when a copy drifts from the original. Each
+agent may make 600 state calls a minute by default, across its replicas; a rate-limited call
+waits out `Retry-After` (30 s at most), then raises. A turn of `oss/agents/langgraph` (its graph
+runs with `durability="exit"`: one checkpoint per run) costs 7 calls, 8 on a2a-sdk 1.x.
 
 **What is written, and when.** The store never pretends a write happened:
 
