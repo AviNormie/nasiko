@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fake_state_server import Row
 from nasiko_state import (
+    RATE_LIMIT_BUDGET_SECONDS,
     TASK_FORMAT,
     TASK_FORMAT_A2A_0_3,
     TASK_FORMAT_A2A_1,
@@ -123,6 +124,27 @@ class TestFailures:
         await store.save(new_task("t1", "input-required"))
 
         assert state_server.tasks["t1"].value["state"] == "input-required"
+
+    async def test_a_state_change_still_raises_once_the_rate_limit_budget_is_spent(
+        self, store, state_server, slept
+    ):
+        await store.save(new_task("t1", "working"))
+        state_server.rate_limit = len(state_server.requests)  # every request from now on gets a 429
+
+        with pytest.raises(NasikoStateError) as raised:
+            await store.save(new_task("t1", "input-required"))
+
+        assert raised.value.status == 429
+        assert 0 < sum(slept) <= RATE_LIMIT_BUDGET_SECONDS
+        assert state_server.tasks["t1"].value["state"] == "working"
+
+    async def test_a_state_change_waits_out_a_short_rate_limit_and_lands(self, store, state_server, slept):
+        state_server.fail(429, times=2, headers={"Retry-After": "3"}, when=lambda r: r.path.startswith("/tasks"))
+
+        await store.save(new_task("t1", "input-required"))
+
+        assert state_server.tasks["t1"].value["state"] == "input-required"
+        assert len(slept) == 2
 
     async def test_a_row_that_does_not_decode_is_an_error_not_a_missing_task(self, store, state_server):
         state_server.tasks["t1"] = stored_row("t1", tagged({"id": 12}))
