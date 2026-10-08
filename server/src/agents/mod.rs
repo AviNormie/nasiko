@@ -229,6 +229,7 @@ pub(crate) fn build_agent_spec(
         env_vars: env,
         min_replicas: bounds.min,
         max_replicas: bounds.max,
+        replica_target: bounds.target,
         // No per-agent override exists yet — every caller wants the
         // platform's configured default (AGENT_DEFAULT_MEMORY, see
         // Config::agent_default_memory's doc comment). cpu_milli is
@@ -422,7 +423,7 @@ mod spec_tests {
         let bounds = ReplicaBounds {
             min: 2,
             max: 5,
-            target: None,
+            target: Some(6),
         };
         let s = build_agent_spec(
             Uuid::new_v4(),
@@ -437,6 +438,7 @@ mod spec_tests {
             Uuid::nil(),
         );
         assert_eq!((s.min_replicas, s.max_replicas), (2, 5));
+        assert_eq!(s.replica_target, Some(6));
     }
 
     #[test]

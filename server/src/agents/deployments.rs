@@ -414,6 +414,7 @@ pub(crate) async fn restart_deployment(
             env_vars: secrets,
             min_replicas: bounds.min,
             max_replicas: bounds.max,
+            replica_target: bounds.target,
             // TODO: persist spec_resources in agent_deployments and restore here.
             // Currently the upload path also uses None, so both deploy and restart
             // apply the runtime default (0.5 CPU / 512 MiB). No behavioral regression
