@@ -185,13 +185,15 @@ where
             state.db.clone(),
             state.redis.clone(),
             maf_client,
-            state.agent_client.clone(),
+            // Step calls bypass the proxy, so they report their load through this seam.
+            nasiko_orchestrator::maf::AgentCalls {
+                client: state.agent_client.clone(),
+                meter: state.genai_metrics.agent_call_meter(),
+            },
             // The same guard the A2A dispatch and agent-proxy paths use, so a
             // MAF step's agent call is bounded by exactly the cascade limits
             // every other inter-agent call already is.
             std::sync::Arc::new(state.flow_guard.clone()),
-            // Step calls bypass the proxy, so they report their load through this seam.
-            state.genai_metrics.agent_call_meter(),
             llm_config,
             state.hitl_store.clone(),
         );
