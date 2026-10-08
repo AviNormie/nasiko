@@ -416,6 +416,94 @@ async fn the_state_credential_does_not_open_the_mcp_gateway() {
 
 #[tokio::test]
 #[serial]
+async fn the_gateway_credential_table_stays_as_servers_before_the_state_api_use_it() {
+    // During a rolling upgrade older servers still mint and authenticate gateway credentials
+    // against `agent_gateway_tokens` with no notion of a state credential. Its key must stay
+    // exactly (agent_id) so their upsert keeps working, and the state credential must live
+    // elsewhere so their scope-blind lookup can never accept it.
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "rolling-upgrade-agent").await;
+
+    let key_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT a.attname::text FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+         WHERE i.indrelid = 'agent_gateway_tokens'::regclass AND i.indisprimary
+         ORDER BY a.attnum",
+    )
+    .fetch_all(&server.db)
+    .await
+    .unwrap();
+    assert_eq!(key_columns, ["agent_id"]);
+
+    // The statement an older server's mint runs, verbatim in shape: insert, then rotate.
+    for hash in ["old-server-hash-1", "old-server-hash-2"] {
+        sqlx::query(
+            "INSERT INTO agent_gateway_tokens (agent_id, token_hash)
+             VALUES ($1, $2)
+             ON CONFLICT (agent_id) DO UPDATE SET
+                 token_hash = EXCLUDED.token_hash,
+                 prev_token_hash = CASE
+                     WHEN agent_gateway_tokens.revoked_at IS NULL
+                     THEN agent_gateway_tokens.token_hash
+                 END,
+                 rotated_at = now(),
+                 created_at = now(),
+                 revoked_at = NULL",
+        )
+        .bind(agent.id)
+        .bind(hash)
+        .execute(&server.db)
+        .await
+        .expect("an older server's gateway mint still succeeds");
+    }
+
+    // An older server's scope-blind gateway lookup: every live hash in the gateway table.
+    let gateway_hashes: Vec<String> =
+        sqlx::query_scalar("SELECT token_hash FROM agent_gateway_tokens WHERE revoked_at IS NULL")
+            .fetch_all(&server.db)
+            .await
+            .unwrap();
+    let state_hash = nasiko_mcp_gateway::agent_tokens::hash_token(&agent.token);
+    assert!(
+        !gateway_hashes.contains(&state_hash),
+        "a state credential must never be in the gateway table"
+    );
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn each_credential_authenticates_only_for_its_own_scope() {
+    use nasiko_mcp_gateway::agent_tokens::{self, TokenScope};
+
+    let server = TestServer::start().await;
+    let agent = new_agent(&server, "two-door-agent").await;
+    let gateway_token = common::mint_gateway_token(&server.db, agent.id).await;
+
+    let state_at_gateway = agent_tokens::authenticate(&server.db, &agent.token)
+        .await
+        .unwrap();
+    assert_eq!(state_at_gateway, None);
+    let gateway_at_state =
+        agent_tokens::authenticate_scoped(&server.db, &gateway_token, TokenScope::State)
+            .await
+            .unwrap();
+    assert_eq!(gateway_at_state, None);
+
+    let own_doors = (
+        agent_tokens::authenticate(&server.db, &gateway_token)
+            .await
+            .unwrap(),
+        agent_tokens::authenticate_scoped(&server.db, &agent.token, TokenScope::State)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(own_doors, (Some(agent.id), Some(agent.id)));
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
 async fn minting_again_rotates_the_state_credential_and_leaves_the_gateway_one_alone() {
     let server = TestServer::start().await;
     let agent = new_agent(&server, "rotating-agent").await;

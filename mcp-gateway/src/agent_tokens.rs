@@ -14,11 +14,15 @@
 //! /api/agents/{id}/mcp-token` is the on-demand row's equivalent kill switch.
 //! Destroy tombstones it either way.
 //!
-//! The same table holds the agent's other credential, for the agent state API
-//! (`NASIKO_AGENT_TOKEN`). Every credential carries a [`TokenScope`] and opens
+//! The agent's other credential, for the agent state API (`NASIKO_AGENT_TOKEN`),
+//! has the same shape and lifecycle but lives in its own table,
+//! `agent_state_tokens`. Every credential carries a [`TokenScope`] and opens
 //! only the door its scope names: the gateway credential also travels in URL
 //! paths (`MCP_GATEWAY_CONNECT_URL`), where it can be logged, so it must never
-//! open an agent's durable state. The unscoped functions here act on the
+//! open an agent's durable state. One table per scope (not a scope column)
+//! keeps `agent_gateway_tokens` exactly as servers from before the state API
+//! read and write it, so a rolling upgrade can't make an old server accept a
+//! state credential at the gateway. The unscoped functions here act on the
 //! gateway credential; the `_scoped` ones on any.
 
 use rand::RngCore;
@@ -47,11 +51,21 @@ pub enum TokenScope {
 }
 
 impl TokenScope {
-    /// The stored form, `agent_gateway_tokens.scope`.
+    /// The scope's stable name.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gateway => "gateway",
             Self::State => "state",
+        }
+    }
+
+    /// The table that holds this scope's credentials. The SQL below formats this
+    /// name into its statements; it comes from this closed enum only, never from
+    /// input, so the formatting cannot inject anything.
+    fn table(self) -> &'static str {
+        match self {
+            Self::Gateway => "agent_gateway_tokens",
+            Self::State => "agent_state_tokens",
         }
     }
 
@@ -105,21 +119,21 @@ pub async fn mint_scoped(
     rand::rng().fill_bytes(&mut buf);
     let token = format!("{}{}", scope.token_prefix(), hex::encode(buf));
 
-    sqlx::query(
-        "INSERT INTO agent_gateway_tokens (agent_id, scope, token_hash)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (agent_id, scope) DO UPDATE SET
+    let table = scope.table();
+    sqlx::query(&format!(
+        "INSERT INTO {table} (agent_id, token_hash)
+         VALUES ($1, $2)
+         ON CONFLICT (agent_id) DO UPDATE SET
              token_hash = EXCLUDED.token_hash,
              prev_token_hash = CASE
-                 WHEN agent_gateway_tokens.revoked_at IS NULL
-                 THEN agent_gateway_tokens.token_hash
+                 WHEN {table}.revoked_at IS NULL
+                 THEN {table}.token_hash
              END,
              rotated_at = now(),
              created_at = now(),
-             revoked_at = NULL",
-    )
+             revoked_at = NULL"
+    ))
     .bind(agent_id)
-    .bind(scope.as_str())
     .bind(hash_token(&token))
     .execute(db)
     .await?;
@@ -147,19 +161,18 @@ pub async fn authenticate_scoped(
     token: &str,
     scope: TokenScope,
 ) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT t.agent_id FROM agent_gateway_tokens t
+    let table = scope.table();
+    sqlx::query_scalar(&format!(
+        "SELECT t.agent_id FROM {table} t
          JOIN agents a ON a.id = t.agent_id
          WHERE t.revoked_at IS NULL
            AND a.deleted_at IS NULL
-           AND t.scope = $3
            AND (t.token_hash = $1
                 OR (t.prev_token_hash = $1
-                    AND t.rotated_at > now() - make_interval(secs => $2)))",
-    )
+                    AND t.rotated_at > now() - make_interval(secs => $2)))"
+    ))
     .bind(hash_token(token))
     .bind(ROTATION_GRACE_SECS as f64)
-    .bind(scope.as_str())
     .fetch_optional(db)
     .await
 }
@@ -176,13 +189,13 @@ pub async fn revoke_scoped(
     agent_id: Uuid,
     scope: TokenScope,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE agent_gateway_tokens
+    let table = scope.table();
+    sqlx::query(&format!(
+        "UPDATE {table}
          SET revoked_at = now(), prev_token_hash = NULL
-         WHERE agent_id = $1 AND scope = $2 AND revoked_at IS NULL",
-    )
+         WHERE agent_id = $1 AND revoked_at IS NULL"
+    ))
     .bind(agent_id)
-    .bind(scope.as_str())
     .execute(db)
     .await?;
     Ok(())
@@ -193,10 +206,11 @@ mod tests {
     use super::{TokenScope, hash_token};
 
     #[test]
-    fn scopes_store_as_the_words_the_schema_allows() {
-        // Must match the CHECK constraint in oss/migrations/0060_agent_token_scope.sql.
-        assert_eq!(TokenScope::Gateway.as_str(), "gateway");
-        assert_eq!(TokenScope::State.as_str(), "state");
+    fn each_scope_lives_in_its_own_table() {
+        // Must match oss/migrations/0008_mcp_agent_auth.sql and 0060_agent_state_tokens.sql.
+        // The gateway table is the one servers from before the state API use, unchanged.
+        assert_eq!(TokenScope::Gateway.table(), "agent_gateway_tokens");
+        assert_eq!(TokenScope::State.table(), "agent_state_tokens");
     }
 
     #[test]
