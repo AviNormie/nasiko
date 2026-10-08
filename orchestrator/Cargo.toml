@@ -27,6 +27,8 @@ nasiko-config.workspace = true
 nasiko-flow.workspace = true
 nasiko-types.workspace = true
 nasiko-hitl.workspace = true
+# Derived `token_savings` rows, so /finops/savings and the Optimization page agree
+nasiko-savings.workspace = true
 
 [dev-dependencies]
 mockito.workspace = true

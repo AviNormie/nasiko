@@ -83,7 +83,15 @@ pub(crate) fn log_inbound_headers(entry: &str, headers: &HeaderMap) {
         .iter()
         .map(|(name, value)| {
             let n = name.as_str();
-            let v = if n.eq_ignore_ascii_case("authorization") || n.eq_ignore_ascii_case("cookie") {
+            // The gateway's signed `x-nasiko-identity` header (`oss/mcp-gateway/
+            // src/identity.rs`) is redacted alongside the other credential-bearing
+            // headers — this logger isn't currently wired to the workspace route
+            // that header is forwarded to, but a header carrying a caller's
+            // identity must never be logged in plain text if it ever is.
+            let v = if n.eq_ignore_ascii_case("authorization")
+                || n.eq_ignore_ascii_case("cookie")
+                || n.eq_ignore_ascii_case(nasiko_mcp_gateway::identity::IDENTITY_HEADER)
+            {
                 "<redacted>"
             } else {
                 value.to_str().unwrap_or("<non-utf8>")
@@ -215,7 +223,9 @@ pub async fn a2a_dispatch_handler(
         history_sid,
         &history_store,
         &text,
-        &ContextTiers::from_config(&state.config),
+        &ContextTiers::from_config(&state.config)
+            .with_overrides(&state.db)
+            .await,
     )
     .await;
 
@@ -235,6 +245,7 @@ pub async fn a2a_dispatch_handler(
                 transcript_role: "user",
                 file_parts: vec![],
                 kind: TurnKind::User,
+                context_report: Some(&history.report),
             },
         )
         .await
@@ -274,7 +285,6 @@ pub async fn a2a_dispatch_handler(
             &state,
             agent,
             &query,
-            &text,
             &outbound_query,
             &task_id,
             &context_id,
@@ -282,6 +292,7 @@ pub async fn a2a_dispatch_handler(
             &[],
             session_id,
             history.user_turn_count(),
+            Some(&history.report),
         )
         .await
     }
@@ -410,6 +421,10 @@ pub(crate) struct OrchestratorTurn<'a> {
     /// turn already did. The operator's policy may treat the two differently —
     /// see [`TurnKind`].
     pub(crate) kind: TurnKind,
+    /// What history selection chose from and kept for this turn. Carried rather than recorded at
+    /// the call site because the request span it belongs on is created inside the stream function,
+    /// several hundred lines after selection ran.
+    pub(crate) context_report: Option<&'a nasiko_orchestrator::ContextReport>,
 }
 
 pub(crate) async fn orchestrator_stream(
@@ -427,6 +442,7 @@ pub(crate) async fn orchestrator_stream(
         transcript_role,
         file_parts,
         kind,
+        context_report,
     } = turn;
     // Orchestrator-routed chats never had a `chat_sessions` row, unlike
     // `agent_proxy.rs`'s `ensure_chat_session` for direct agent chat — so
@@ -613,21 +629,36 @@ pub(crate) async fn orchestrator_stream(
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
     let traceparent = crate::telemetry::traceparent_for(&flow_ctx);
+
+    // Selection ran in the caller, before any of this existed; `dispatch_span` is the span the
+    // trace page looks for, so the report is attached here. `agent_id` stays unset — routing has
+    // not chosen one yet — and the read path resolves it through `session_traces`, which this turn
+    // writes as soon as it dispatches.
+    if let Some(report) = context_report {
+        crate::telemetry::record_context_report(
+            &state.db,
+            &dispatch_span,
+            report,
+            crate::telemetry::ContextRecord {
+                user_id,
+                agent_id: None,
+                session_id: Some(context_id.to_string()),
+                trace_id: Some(flow_id.clone()),
+                span_id: Some(flow_ctx.parent_span_id.clone()),
+            },
+        );
+    }
+
     state.flow_guard.init_flow(&flow_ctx, "orchestrator").await;
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — mirrors the direct-agent proxy
     // (`agent_proxy.rs`). `derive_boundary_signals` reads `metadata->>'context_id'`.
-    // `user_message` is what the LLM gateway's salience gate and classifier score;
-    // only a user-started turn has one — a HITL resume's `raw_text` is platform-written.
     //
     // Re-opens on conflict for the same reason as the proxy path: a repeat
     // request under one traceparent must not inherit the `completed` status the
     // previous one left, or strict attribution denies the agent's LLM calls.
-    let flow_metadata = match kind {
-        TurnKind::User => serde_json::json!({ "context_id": context_id, "user_message": raw_text }),
-        TurnKind::Continuation => serde_json::json!({ "context_id": context_id }),
-    };
+    let flow_metadata = serde_json::json!({ "context_id": context_id });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, 'orchestrator', $3, 'running', $4)
@@ -1170,8 +1201,6 @@ async fn agent_stream(
     // agent without also being recorded as "what the user said" in the flow UI or an
     // observability/audit trail.
     query: &str,
-    // What the caller typed, before history packing — recorded on the flow for the LLM gateway.
-    user_message: &str,
     // What's actually sent to the agent in the A2A request body — `query`, or `query` with
     // injected context prepended. Never read for persistence/tracing.
     outbound_query: &str,
@@ -1196,6 +1225,9 @@ async fn agent_stream(
     // established session (several turns in) leans the other way — see
     // nasiko-coding-policy's minimal_code_addendum() doc comment.
     prior_turn_count: usize,
+    // As `OrchestratorTurn::context_report`: this function owns the `a2a.dispatch` span the
+    // report has to be attached to.
+    context_report: Option<&nasiko_orchestrator::ContextReport>,
 ) -> Result<Response, A2aDispatchError> {
     let endpoint = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
         .await
@@ -1222,6 +1254,22 @@ async fn agent_stream(
     let flow_ctx = crate::telemetry::flow_context_from_span(&dispatch_span)
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
+
+    if let Some(report) = context_report {
+        crate::telemetry::record_context_report(
+            &state.db,
+            &dispatch_span,
+            report,
+            crate::telemetry::ContextRecord {
+                user_id,
+                agent_id: Some(agent.id),
+                session_id: Some(context_id.to_string()),
+                trace_id: Some(flow_id.clone()),
+                span_id: Some(flow_ctx.parent_span_id.clone()),
+            },
+        );
+    }
+
     state.flow_guard.init_flow(&flow_ctx, &agent.name).await;
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
@@ -1230,13 +1278,9 @@ async fn agent_stream(
     // falls back to the per-turn flow_id, so every turn of one conversation looks
     // like a new conversation and the sticky decision is never reused.
     //
-    // `user_message` (the text before history packing) feeds the LLM gateway's
-    // salience gate and classifier — see the orchestrator branch above.
-    //
     // Re-opens on conflict — see the orchestrator branch above: a repeat request
     // under one traceparent must not inherit the previous one's `completed`.
-    let flow_metadata =
-        serde_json::json!({ "context_id": context_id, "user_message": user_message });
+    let flow_metadata = serde_json::json!({ "context_id": context_id });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
@@ -1857,6 +1901,9 @@ pub async fn a2a_upload_handler(
             transcript_role: "user",
             file_parts: collected_files,
             kind: TurnKind::User,
+            // This path mints a fresh context id, so no history was selected and there is nothing
+            // to report. A zero row here would count as a request that optimized nothing.
+            context_report: None,
         },
     )
     .await
