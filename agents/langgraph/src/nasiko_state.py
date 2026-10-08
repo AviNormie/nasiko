@@ -1431,6 +1431,12 @@ def _reads_stored_records(function: Callable[..., T]) -> Callable[..., T]:
     return parse
 
 
+# A checkpoint record carries its channel values inline while it stays within this many bytes, so
+# a put is two writes (the record and the head) and reading the newest checkpoint is one read plus
+# the writes listing. A bigger state, or one the platform refuses as too large (its limit is a
+# server setting this module cannot see), spills every non-scalar value into its own blob record.
+INLINE_CHECKPOINT_MAX_BYTES = 256 * 1024
+
 CHECKPOINT_FAMILY = "lg"
 HEAD_FAMILY = "lgh"
 WRITES_FAMILY = "lgw"
@@ -1472,18 +1478,19 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
     langgraph object is written by the saver's own serde and carried as a base64 string in a JSON
     record. Pickle is never written or read.
 
-      lg:{thread}:{ns}:{checkpoint}  the checkpoint with its metadata and parent id. Channel
-                                     values that are None, a string, a number or a boolean stay
-                                     inline; every other value lives in its own blob record.
+      lg:{thread}:{ns}:{checkpoint}  the checkpoint with its metadata, its parent id and, while the
+                                     record stays within INLINE_CHECKPOINT_MAX_BYTES, every channel
+                                     value. Values that are None, a string, a number or a boolean
+                                     are always serialized with the checkpoint itself.
       lgb:{thread}:{ns}:{channel}:{version}
-                                     one channel value at one version, written only by the put
-                                     that introduced that version (``new_versions``), the way
-                                     langgraph's own savers share values between checkpoints. An
-                                     unchanged channel is never rewritten, and the size limit
-                                     applies to each value rather than to the whole state.
-      lgh:{thread}:{ns}              the id of the newest checkpoint. The key-value API has no
-                                     "latest" query, and scanning every checkpoint to find the
-                                     newest would cost a call per hundred of them.
+                                     one channel value at one version, used only when the record
+                                     would be too big for inline values: then every non-scalar
+                                     value of that checkpoint is written here, alongside it, so the
+                                     size limit applies to each value rather than to the whole
+                                     state.
+      lgh:{thread}:{ns}              the id of the newest checkpoint, carrying a copy of its record
+                                     when that is small enough. The key-value API has no "latest"
+                                     query, and the copy saves a second read on every turn.
       lgw:{thread}:{ns}:{checkpoint}:{task}:{idx}
                                      the writes one task made against a checkpoint. All regular
                                      writes of one put_writes call share one record, keyed by the
@@ -1491,17 +1498,22 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
                                      some of its writes; each write to a special channel (error,
                                      interrupt, resume, scheduled) has its own record at its
                                      negative index. Every record is written unconditionally, one
-                                     call each: the platform rate-limits per agent, and langgraph
-                                     saves a task's regular writes again only when it re-runs a
-                                     task whose first save did not land, so the later one wins.
+                                     call each: langgraph saves a task's regular writes again only
+                                     when it re-runs a task whose first save did not land, so the
+                                     later one wins.
+
+    Calls. The platform rate-limits each agent, so the call count is part of the design: a put is
+    two writes (the record, then the head) while values fit inline; reading the newest checkpoint
+    is the head plus the writes listing; put_writes is one write per record above. Inline values
+    are rewritten by every put, so a long thread costs bytes rather than calls until its record
+    outgrows the inline bound.
 
     Blobs are written before the checkpoint and the checkpoint before the head that points at it,
     so a crash can only leave the head one checkpoint behind, which resumes cleanly: that step's
     tasks have their writes saved and are not run again. State expires with the platform's
-    retention, counted from each record's last write, so a channel left unchanged for that long
-    expires before the rest of its thread; reading such a checkpoint raises NasikoStateMalformedRow
-    rather than returning it without that channel. A value above the platform's size limit raises
-    NasikoStateTooLarge.
+    retention, counted from each record's last write; reading a checkpoint whose blob has expired
+    raises NasikoStateMalformedRow rather than returning it without that channel. A value above
+    the platform's size limit raises NasikoStateTooLarge.
     """
 
     def __init__(self, kv: NasikoKV, *, serde: Any = None) -> None:
@@ -1513,38 +1525,49 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
     # --- reading ---------------------------------------------------------------------------
 
     def get_tuple(self, config: Any) -> Any:
+        record = self._find_record(config)
+        if record is None:
+            return None
+        writes = [write.value for write in self._kv.list(_writes_prefix(record))]
+        blobs = self._load_blobs(record, {})
+        explicit = config if config["configurable"].get("checkpoint_id") else None
+        return self._tuple(record, writes, blobs, config=explicit)
+
+    async def aget_tuple(self, config: Any) -> Any:
+        record = await self._afind_record(config)
+        if record is None:
+            return None
+        writes = [write.value async for write in self._kv.alist(_writes_prefix(record))]
+        blobs = await self._aload_blobs(record, {})
+        explicit = config if config["configurable"].get("checkpoint_id") else None
+        return self._tuple(record, writes, blobs, config=explicit)
+
+    def _find_record(self, config: Any) -> dict[str, Any] | None:
+        """The checkpoint record ``config`` names, or the newest one, which the head carries."""
         thread_id, namespace = _thread_and_namespace(config)
         checkpoint_id = config["configurable"].get("checkpoint_id")
         if checkpoint_id is None:
             head = self._kv.get(_key(HEAD_FAMILY, thread_id, namespace))
             if head is None:
                 return None
-            checkpoint_id = _head_checkpoint_id(head)
-        record = self._kv.get(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
-        if record is None:
-            return None
-        prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
-        writes = [write.value for write in self._kv.list(prefix)]
-        blobs = self._load_blobs(record.value, {})
-        explicit = config if config["configurable"].get("checkpoint_id") else None
-        return self._tuple(record.value, writes, blobs, config=explicit)
+            checkpoint_id, embedded = _head_contents(head)
+            if embedded is not None:
+                return embedded
+        stored = self._kv.get(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
+        return None if stored is None else stored.value
 
-    async def aget_tuple(self, config: Any) -> Any:
+    async def _afind_record(self, config: Any) -> dict[str, Any] | None:
         thread_id, namespace = _thread_and_namespace(config)
         checkpoint_id = config["configurable"].get("checkpoint_id")
         if checkpoint_id is None:
             head = await self._kv.aget(_key(HEAD_FAMILY, thread_id, namespace))
             if head is None:
                 return None
-            checkpoint_id = _head_checkpoint_id(head)
-        record = await self._kv.aget(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
-        if record is None:
-            return None
-        prefix = _prefix(WRITES_FAMILY, thread_id, namespace, checkpoint_id)
-        writes = [write.value async for write in self._kv.alist(prefix)]
-        blobs = await self._aload_blobs(record.value, {})
-        explicit = config if config["configurable"].get("checkpoint_id") else None
-        return self._tuple(record.value, writes, blobs, config=explicit)
+            checkpoint_id, embedded = _head_contents(head)
+            if embedded is not None:
+                return embedded
+        stored = await self._kv.aget(_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint_id))
+        return None if stored is None else stored.value
 
     def list(
         self,
@@ -1600,17 +1623,47 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
 
     # --- writing ---------------------------------------------------------------------------
 
+    # ``new_versions`` goes unused: a record carries every channel value or writes it alongside,
+    # because whether an unchanged value was ever written on its own is not known here.
+
     def put(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
-        thread_id, namespace = _thread_and_namespace(config)
-        for key, value in self._planned_checkpoint(config, checkpoint, metadata, new_versions):
-            self._kv.put(key, value)
-        return _checkpoint_config(thread_id, namespace, checkpoint["id"])
+        plan = self._planned_checkpoint(config, checkpoint, metadata, spill=False)
+        try:
+            self._write_checkpoint(plan)
+        except NasikoStateTooLarge:
+            if plan.spilled:
+                raise
+            self._write_checkpoint(self._planned_checkpoint(config, checkpoint, metadata, spill=True))
+        return _checkpoint_config(*_checkpoint_identity(plan.record))
 
     async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
-        thread_id, namespace = _thread_and_namespace(config)
-        for key, value in self._planned_checkpoint(config, checkpoint, metadata, new_versions):
+        plan = self._planned_checkpoint(config, checkpoint, metadata, spill=False)
+        try:
+            await self._awrite_checkpoint(plan)
+        except NasikoStateTooLarge:
+            if plan.spilled:
+                raise
+            await self._awrite_checkpoint(self._planned_checkpoint(config, checkpoint, metadata, spill=True))
+        return _checkpoint_config(*_checkpoint_identity(plan.record))
+
+    def _write_checkpoint(self, plan: _CheckpointPlan) -> None:
+        """Blobs, then the record, then the head: a crash leaves the head at most one behind."""
+        for key, value in plan.blobs:
+            self._kv.put(key, value)
+        self._kv.put(plan.record_key, plan.record)
+        try:
+            self._kv.put(plan.head_key, plan.head)
+        except NasikoStateTooLarge:
+            self._kv.put(plan.head_key, _bare_head(plan.record))
+
+    async def _awrite_checkpoint(self, plan: _CheckpointPlan) -> None:
+        for key, value in plan.blobs:
             await self._kv.aput(key, value)
-        return _checkpoint_config(thread_id, namespace, checkpoint["id"])
+        await self._kv.aput(plan.record_key, plan.record)
+        try:
+            await self._kv.aput(plan.head_key, plan.head)
+        except NasikoStateTooLarge:
+            await self._kv.aput(plan.head_key, _bare_head(plan.record))
 
     def put_writes(
         self, config: Any, writes: Sequence[tuple[str, Any]], task_id: str, task_path: str = ""
@@ -1648,32 +1701,38 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             raise NasikoStateError("refusing to load a pickled value from the platform state")
         return self.serde.loads_typed((encoded["type"], base64.b64decode(encoded["data"])))
 
-    def _planned_checkpoint(
-        self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any
-    ) -> list[tuple[str, Any]]:
-        """The records one put writes, in crash-safe order: new blobs, the checkpoint, the head."""
+    def _planned_checkpoint(self, config: Any, checkpoint: Any, metadata: Any, *, spill: bool) -> _CheckpointPlan:
+        """What one put writes. Values go inline unless ``spill`` or the record would be too big."""
         thread_id, namespace = _thread_and_namespace(config)
-        inline, blobs = _split_channel_values(checkpoint["channel_values"])
-        versions = checkpoint["channel_versions"]
+        scalars, values = _split_channel_values(checkpoint["channel_values"])
+        encoded = {channel: self._encode(value) for channel, value in values.items()}
         record = {
             "thread_id": thread_id,
             "checkpoint_ns": namespace,
             "checkpoint_id": checkpoint["id"],
             "parent_checkpoint_id": config["configurable"].get("checkpoint_id"),
-            "checkpoint": self._encode({**checkpoint, "channel_values": inline}),
+            "checkpoint": self._encode({**checkpoint, "channel_values": scalars}),
             "metadata": self._encode(get_checkpoint_metadata(config, metadata)),
-            "blobs": {channel: versions[channel] for channel in blobs},
+            "values": encoded,
+            "blobs": {},
         }
-        new_blobs = [
-            (_key(BLOB_FAMILY, thread_id, namespace, channel, str(versions[channel])), self._encode(value))
-            for channel, value in blobs.items()
-            if channel in new_versions
-        ]
-        return [
-            *new_blobs,
-            (_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]), record),
-            (_key(HEAD_FAMILY, thread_id, namespace), {"checkpoint_id": checkpoint["id"]}),
-        ]
+        spill = spill or _json_size(record) > INLINE_CHECKPOINT_MAX_BYTES
+        blobs: list[tuple[str, Any]] = []
+        if spill:
+            versions = checkpoint["channel_versions"]
+            record = {**record, "values": {}, "blobs": {channel: versions[channel] for channel in values}}
+            blobs = [
+                (_key(BLOB_FAMILY, thread_id, namespace, channel, str(versions[channel])), value)
+                for channel, value in encoded.items()
+            ]
+        return _CheckpointPlan(
+            blobs=blobs,
+            record_key=_key(CHECKPOINT_FAMILY, thread_id, namespace, checkpoint["id"]),
+            record=record,
+            head_key=_key(HEAD_FAMILY, thread_id, namespace),
+            head=_head(record),
+            spilled=spill,
+        )
 
     @_reads_stored_records
     def _tuple(
@@ -1687,7 +1746,12 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
         thread_id, namespace = record["thread_id"], record["checkpoint_ns"]
         parent_id = record["parent_checkpoint_id"]
         checkpoint = self._decode(record["checkpoint"])
-        checkpoint["channel_values"] = {**checkpoint["channel_values"], **self._blob_values(record, blobs)}
+        inline = {channel: self._decode(value) for channel, value in record.get("values", {}).items()}
+        checkpoint["channel_values"] = {
+            **checkpoint["channel_values"],
+            **inline,
+            **self._blob_values(record, blobs),
+        }
         return CheckpointTuple(
             config=config or _checkpoint_config(thread_id, namespace, record["checkpoint_id"]),
             checkpoint=checkpoint,
@@ -1799,20 +1863,61 @@ def _checkpoint_identity(record: Mapping[str, Any]) -> tuple[str, str, str]:
 _THREAD_FAMILIES = (HEAD_FAMILY, CHECKPOINT_FAMILY, WRITES_FAMILY, BLOB_FAMILY)
 
 
-def _is_inline_value(value: Any) -> bool:
-    """Small scalars stay in the checkpoint record, as langgraph's Postgres saver keeps them."""
+def _is_scalar_value(value: Any) -> bool:
+    """Scalars are serialized with the checkpoint itself, as langgraph's Postgres saver keeps them."""
     return value is None or isinstance(value, (str, int, float, bool))
 
 
 def _split_channel_values(values: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    inline = {channel: value for channel, value in values.items() if _is_inline_value(value)}
-    blobs = {channel: value for channel, value in values.items() if not _is_inline_value(value)}
-    return inline, blobs
+    scalars = {channel: value for channel, value in values.items() if _is_scalar_value(value)}
+    others = {channel: value for channel, value in values.items() if not _is_scalar_value(value)}
+    return scalars, others
+
+
+def _json_size(value: Any) -> int:
+    """Roughly the bytes the state API measures a value at: its compact JSON encoding."""
+    return len(json.dumps(value, separators=(",", ":")))
+
+
+@dataclass(frozen=True)
+class _CheckpointPlan:
+    """The records one put writes, in the order it writes them."""
+
+    blobs: list[tuple[str, Any]]
+    record_key: str
+    record: dict[str, Any]
+    head_key: str
+    head: dict[str, Any]
+    spilled: bool
+
+
+def _head(record: dict[str, Any]) -> dict[str, Any]:
+    """The head names the newest checkpoint and carries its record when that is small enough."""
+    if _json_size(record) > INLINE_CHECKPOINT_MAX_BYTES:
+        return _bare_head(record)
+    return {"checkpoint_id": record["checkpoint_id"], "checkpoint": record}
+
+
+def _bare_head(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {"checkpoint_id": record["checkpoint_id"]}
 
 
 @_reads_stored_records
-def _head_checkpoint_id(head: KVRecord) -> str:
-    return head.value["checkpoint_id"]
+def _head_contents(head: KVRecord) -> tuple[str, dict[str, Any] | None]:
+    """The newest checkpoint's id, and its record when the head carries one."""
+    checkpoint_id = head.value["checkpoint_id"]
+    embedded = head.value.get("checkpoint")
+    if embedded is not None and embedded["checkpoint_id"] != checkpoint_id:
+        raise NasikoStateMalformedRow(
+            f"the head of thread {embedded['thread_id']!r} names checkpoint {checkpoint_id!r} but "
+            f"carries {embedded['checkpoint_id']!r}"
+        )
+    return checkpoint_id, embedded
+
+
+@_reads_stored_records
+def _writes_prefix(record: Mapping[str, Any]) -> str:
+    return _prefix(WRITES_FAMILY, *_checkpoint_identity(record))
 
 
 @_reads_stored_records
