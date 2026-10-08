@@ -5,10 +5,11 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { ChevronLeft, Pencil, Play, RotateCw, Workflow as WorkflowIcon } from 'lucide-react'
+import { Pencil, Play, RotateCw, Workflow as WorkflowIcon } from 'lucide-react'
 import { useState } from 'react'
 import { PageLoader } from '@/components/shared/page-loader'
 import { PrevNext } from '@/components/shared/prev-next'
+import { TopBar } from '@/app/shell/TopBar'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Button } from '@/components/ui/button'
 import { isUuid } from '@/features/agents/normalize'
@@ -35,7 +36,7 @@ export function WorkflowPage({ id, run }: { id: string; run?: string }) {
 function DeadEnd({ id, title, text }: { id?: string; title: string; text: string }) {
   return (
     <div className={COLUMN}>
-      {id ? <WorkflowSiblings id={id} className="justify-end" /> : null}
+      {id ? <TopBar stepper={<WorkflowSiblings id={id} />} /> : null}
       <EmptyState
         icon={WorkflowIcon}
         title={<h1>{title}</h1>}
@@ -60,7 +61,7 @@ function Detail({ id, run }: { id: string; run?: string }) {
     ) : (
       <div className={COLUMN}>
         <h1 className="sr-only">{copy.loadOneFailed}</h1>
-        <WorkflowSiblings id={id} className="justify-end" />
+        <TopBar stepper={<WorkflowSiblings id={id} />} />
         <StateCard
           tone="error"
           title={copy.loadOneFailed}
@@ -107,14 +108,19 @@ function Loaded({ wf, run }: { wf: Workflow; run?: string }) {
   return (
     <div className={COLUMN}>
       <title>{`${wf.name} · OpenRuntime`}</title>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button asChild variant="ghost" size="sm" className="-ml-2 text-muted-foreground">
-          <Link to={live ? '/workflows' : '/workflows/drafts'}>
-            <ChevronLeft aria-hidden /> {live ? copy.crumbDeployed : copy.crumbDrafts}
-          </Link>
-        </Button>
-        <WorkflowSiblings id={wf.id} />
-      </div>
+      <TopBar
+        trail={
+          live
+            ? [wf.name]
+            : [
+                <Link key="drafts" to="/workflows/drafts">
+                  {copy.crumbDrafts}
+                </Link>,
+                wf.name,
+              ]
+        }
+        stepper={<WorkflowSiblings id={wf.id} />}
+      />
       {live && !editing ? (
         <ReadOnlyFace wf={wf} onEdit={() => setEditing(true)} />
       ) : (

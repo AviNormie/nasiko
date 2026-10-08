@@ -8,6 +8,7 @@ import { Link, useBlocker, useNavigate } from '@tanstack/react-router'
 import { ChevronLeft, Loader2, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { TopBar } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import {
   AlertDialog,
@@ -174,6 +175,7 @@ export function NewWorkflowPage() {
             <ChevronLeft aria-hidden />
           </Link>
         </Button>
+        <TopBar trail={[copy.newTitle]} />
         <PageHeader title={copy.newTitle} description={copy.newText} />
       </div>
       <div className="flex flex-col gap-2">

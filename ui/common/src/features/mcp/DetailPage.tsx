@@ -20,6 +20,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CopyButton, CopyMenuItem } from '@/components/shared/copy-button'
 import { PageHeader } from '@/components/shared/page-header'
+import { TopBar } from '@/app/shell/TopBar'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
 import { AgentMark } from '@/features/agents/components/bits'
@@ -166,6 +167,7 @@ function Header({
   const owner = c.is_owner ? copy.you : (c.owner_username ?? meName ?? '—')
   return (
     <div className="flex items-start gap-3">
+      <TopBar trail={[label]} />
       <AgentMark name={label} iconUrl={c.logo_url} size={40} />
       <PageHeader
         className="min-w-0 flex-1"

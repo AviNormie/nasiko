@@ -3,6 +3,7 @@
  * the registry or a mutation. Reconciling a finished turn with history is `reconcile.ts`, dispatched by
  * `useReconcile`.
  */
+import { TopBar } from '@/app/shell/TopBar'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
@@ -444,9 +445,7 @@ function SessionView({
     const missing = history.error instanceof ApiError && history.error.status === 404
     return (
       <>
-        <header className="flex h-12 shrink-0 items-center border-b border-border">
-          <div className={cn(CHAT_COLUMN, 'flex items-center gap-2')}>{railButton}</div>
-        </header>
+        {railButton ? <TopBar trail={[railButton]} /> : null}
         {/* The rail still announces (a list failure) while this screen shows. */}
         <StatusAnnouncer live={undefined} agentName={agentName} />
         <div className="mx-auto mt-12 w-full max-w-md px-4">
