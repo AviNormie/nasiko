@@ -440,7 +440,7 @@ class TestCallCounts:
 
         assert [r.method for r in state_server.requests] == ["PUT"]
 
-    async def test_an_agent_turn_with_one_tool_call_stays_within_twelve_calls(self, client, state_server):
+    async def test_an_agent_turn_with_one_tool_call_is_three_calls_then_four(self, client, state_server):
         """The stock langgraph agent's turn: a ReAct graph run with durability="exit"."""
         saver = NasikoCheckpointSaver(NasikoKV(client))
         config = {"configurable": {"thread_id": "chat"}}
@@ -454,7 +454,8 @@ class TestCallCounts:
                 pass
             calls_per_turn.append(len([r for r in state_server.requests if r.path != "/register"]))
 
-        assert all(calls <= 12 for calls in calls_per_turn), calls_per_turn
+        # new thread: the head (not found), the record, the head; then the history adds its writes listing
+        assert calls_per_turn == [3, 4]
 
 
 def versioned_checkpoint(checkpoint_id: str, **channels: tuple[int, object]) -> dict:
