@@ -11,6 +11,13 @@
 //! | `NASIKO_STATE_URL` | Base URL of the agent state API (`{server}/api/agent-state`) |
 //! | `NASIKO_AGENT_TOKEN` | The agent's state-scoped credential for that API |
 //!
+//! # State mode
+//!
+//! A deploy of a different image resets the agent's `state_mode` to `memory` (the new image may
+//! not register a task store; one that does re-registers when it starts). A deploy of the same
+//! image (restart, startup recovery) keeps it, so a durable agent is durable again as soon as it
+//! is back. The caller says which it is with [`StateModeOnDeploy`].
+//!
 //! # Platform keys win
 //!
 //! The platform's keys are removed from the caller's env before anything is injected, so a user
@@ -43,6 +50,15 @@ const MCP_GATEWAY_PATH: &str = "/api/mcp";
 /// Path the agent state router is mounted at.
 const AGENT_STATE_PATH: &str = "/api/agent-state";
 
+/// What a deploy does to the agent's recorded `state_mode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateModeOnDeploy {
+    /// Back to `memory`: the image may have changed, so a task store is no longer a given.
+    Reset,
+    /// Leave it: the same image comes back and will find its durable state as before.
+    Keep,
+}
+
 /// The agent's full deploy env: its secrets and platform defaults (`AppState::agent_env`), then
 /// `caller_env` on top (an upload's own `env` field), then the platform's keys on top of both.
 pub async fn build(
@@ -50,39 +66,72 @@ pub async fn build(
     agent_id: Uuid,
     owner_id: Uuid,
     caller_env: HashMap<String, String>,
+    state_mode: StateModeOnDeploy,
 ) -> HashMap<String, String> {
     let mut env = state.agent_env(agent_id).await;
     env.extend(caller_env);
-    apply_platform_env(state, &mut env, agent_id, owner_id).await;
+    apply_platform_env(state, &mut env, agent_id, owner_id, state_mode).await;
     env
 }
 
-/// Sets the platform's keys on `env`, replacing anything the caller put under those names.
+/// Sets all of the platform's keys on `env`: the credentials (`apply_credentials`) and the LLM
+/// router wiring (`apply_llm_wiring`).
 ///
 /// `owner_id` is the agent's real owner (the LLM router JWT's `owner_id` claim), never the user
-/// who happened to trigger this deploy. Rotates the agent's gateway and state credentials; see
-/// `agent_tokens::ROTATION_GRACE_SECS` for how long the previous ones keep working.
+/// who happened to trigger this deploy.
 pub async fn apply_platform_env(
     state: &AppState,
     env: &mut HashMap<String, String>,
     agent_id: Uuid,
     owner_id: Uuid,
+    state_mode: StateModeOnDeploy,
+) {
+    apply_credentials(state, env, agent_id, state_mode).await;
+    apply_llm_wiring(state, env, agent_id, owner_id).await;
+}
+
+/// Sets the platform's credential keys on `env`, replacing anything the caller put under those
+/// names: the gateway token and the state API address and token. Rotates the agent's gateway
+/// and state credentials; see `agent_tokens::ROTATION_GRACE_SECS` for how long the previous ones
+/// keep working.
+///
+/// Alone (without the LLM wiring) for an agent whose model access is configured directly, such
+/// as the internal seed, which must not gain router wiring it never had.
+pub async fn apply_credentials(
+    state: &AppState,
+    env: &mut HashMap<String, String>,
+    agent_id: Uuid,
+    state_mode: StateModeOnDeploy,
 ) {
     for key in RESERVED_KEYS {
         env.remove(key);
     }
-    crate::llm_router::wiring::inject_agent_llm_env(&state.db, env, agent_id, Some(owner_id)).await;
     crate::mcp::wiring::inject_agent_gateway_token(&state.db, env, agent_id).await;
-    inject_agent_state(state, env, agent_id).await;
+    inject_agent_state(state, env, agent_id, state_mode).await;
 }
 
-/// Gives the agent its state API address and credential, and marks it `memory` until it
-/// registers a task store again.
+/// Points the agent's LLM SDK at the LLM router, when one is configured.
+pub async fn apply_llm_wiring(
+    state: &AppState,
+    env: &mut HashMap<String, String>,
+    agent_id: Uuid,
+    owner_id: Uuid,
+) {
+    crate::llm_router::wiring::inject_agent_llm_env(&state.db, env, agent_id, Some(owner_id)).await;
+}
+
+/// Gives the agent its state API address and credential, and, for a deploy that
+/// [`StateModeOnDeploy::Reset`]s it, marks the agent `memory` until it registers a task store
+/// again.
 ///
-/// The mode is reset here, with the credential, because this runs for every deploy: a new image
-/// may not keep a task store at all, and one that does re-registers when it starts. Resetting
+/// The mode is reset here, with the credential, because this runs for every deploy. Resetting
 /// early errs toward `memory`, the conservative reading, if the deploy then fails.
-async fn inject_agent_state(state: &AppState, env: &mut HashMap<String, String>, agent_id: Uuid) {
+async fn inject_agent_state(
+    state: &AppState,
+    env: &mut HashMap<String, String>,
+    agent_id: Uuid,
+    state_mode: StateModeOnDeploy,
+) {
     let configured = state.config.mcp_gateway_public_url.as_deref();
     let Some(url) = configured.and_then(agent_state_url) else {
         tracing::warn!(
@@ -92,7 +141,9 @@ async fn inject_agent_state(state: &AppState, env: &mut HashMap<String, String>,
         );
         return;
     };
-    if let Err(e) = crate::agent_state::reset_state_mode(&state.db, agent_id).await {
+    if state_mode == StateModeOnDeploy::Reset
+        && let Err(e) = crate::agent_state::reset_state_mode(&state.db, agent_id).await
+    {
         tracing::error!(%agent_id, error = %e, "failed to reset agent state mode on deploy");
     }
     match crate::agent_state::mint_state_token(&state.db, agent_id).await {

@@ -95,7 +95,14 @@ async fn deploy(
         for (k, v) in resolved {
             env.entry(k).or_insert(v);
         }
-        crate::agents::deploy_env::apply_platform_env(&state, &mut env, agent_id, owner_id).await;
+        crate::agents::deploy_env::apply_platform_env(
+            &state,
+            &mut env,
+            agent_id,
+            owner_id,
+            crate::agents::deploy_env::StateModeOnDeploy::Reset,
+        )
+        .await;
     }
 
     // UUID-key when the name maps to a catalog agent; fall back to name-keying only
@@ -516,7 +523,14 @@ async fn restart(
 
     // Resolve env: vault (base) + agent secrets (override)
     let mut env = resolve_full_env(&state, owner_id, agent_id).await;
-    crate::agents::deploy_env::apply_platform_env(&state, &mut env, agent_id, owner_id).await;
+    crate::agents::deploy_env::apply_platform_env(
+        &state,
+        &mut env,
+        agent_id,
+        owner_id,
+        crate::agents::deploy_env::StateModeOnDeploy::Reset,
+    )
+    .await;
 
     // Destroy the UUID-keyed workload (post-fix); fall back to the name-keyed one
     // for pre-fix containers so we don't leave a stale duplicate running.

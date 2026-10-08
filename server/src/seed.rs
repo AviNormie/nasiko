@@ -180,7 +180,14 @@ pub async fn seed_agents_if_configured(state: &AppState) {
 
         // The LLM router replaces the direct OPENAI_API_KEY/BASE_URL set above when
         // configured; the gateway and state credentials rotate on every re-seed.
-        crate::agents::deploy_env::apply_platform_env(state, &mut env, agent.id, owner_id).await;
+        crate::agents::deploy_env::apply_platform_env(
+            state,
+            &mut env,
+            agent.id,
+            owner_id,
+            crate::agents::deploy_env::StateModeOnDeploy::Reset,
+        )
+        .await;
 
         // UUID-keyed (see agents::build_agent_spec) so a re-seed re-targets the same
         // workload rather than leaving a name-keyed orphan.
@@ -501,8 +508,15 @@ async fn deploy_internal_agent(
     env.insert("PORT".into(), AGENT_PORT.to_string());
     // Without the gateway credential, McpInjector still sets MCP_GATEWAY_URL but has
     // no MCP_GATEWAY_TOKEN to complete MCP_GATEWAY_CONNECT_URL with, leaving the
-    // gateway unreachable from inside the container.
-    crate::agents::deploy_env::apply_platform_env(state, &mut env, agent_id, owner_id).await;
+    // gateway unreachable from inside the container. Credentials only: an internal agent's
+    // model access comes from its own `extra_env`, never the LLM router.
+    crate::agents::deploy_env::apply_credentials(
+        state,
+        &mut env,
+        agent_id,
+        crate::agents::deploy_env::StateModeOnDeploy::Reset,
+    )
+    .await;
 
     let mut spec = crate::agents::build_agent_spec(
         agent_id,
