@@ -67,6 +67,11 @@ mod wire;
 pub use auth::mint_state_token;
 pub use routes::router;
 
+/// Marks the agent `memory` again; called on every deploy (`agents::deploy_env`).
+pub async fn reset_state_mode(db: &sqlx::PgPool, agent_id: uuid::Uuid) -> Result<(), sqlx::Error> {
+    repo::mark_memory(db, agent_id).await
+}
+
 use nasiko_config::Config;
 
 /// Warns, at startup, when agent state is configured to expire before a pending human-in-the-loop

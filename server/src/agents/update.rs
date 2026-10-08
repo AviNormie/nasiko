@@ -522,21 +522,12 @@ pub async fn execute_agent_update(
         )
         .await;
 
-        let mut env = state.agent_env(agent_id).await;
-        // Inject LLM router wiring (agent JWT + base URL) so the updated agent
-        // keeps routing through the gateway. Best-effort — skipped if not configured.
-        // Uses agent_owner_id (the agent's real owner), NOT owner_id (the caller) —
+        // Built with agent_owner_id (the agent's real owner), NOT owner_id (the caller) —
         // a superuser/ACL-grantee updating someone else's agent must not cause that
         // agent to resolve the caller's secrets/llm_config instead of its own owner's.
-        crate::llm_router::wiring::inject_agent_llm_env(
-            &state.db,
-            &mut env,
-            agent_id,
-            Some(agent_owner_id),
-        )
-        .await;
-        // Per-agent MCP gateway credential (rotates on update).
-        crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env, agent_id).await;
+        let env =
+            crate::agents::deploy_env::build(&state, agent_id, agent_owner_id, Default::default())
+                .await;
         // Key on the agent UUID (not name) so the update re-targets the existing
         // workload instead of spawning an orphaned name-keyed duplicate (RUN-2/7).
         let mut spec = crate::agents::build_agent_spec(
@@ -917,21 +908,12 @@ pub async fn execute_agent_rollback(
         .execute(db)
         .await;
 
-    let mut env = state.agent_env(agent_id).await;
-    // Inject LLM router wiring so the rolled-back agent keeps routing through the
-    // gateway. Best-effort — skipped if not configured.
-    // Uses agent_owner_id (the agent's real owner), NOT caller_id — a superuser/
+    // Built with agent_owner_id (the agent's real owner), NOT caller_id — a superuser/
     // ACL-grantee rolling back someone else's agent must not cause that agent to
     // resolve the caller's secrets/llm_config instead of its own owner's.
-    crate::llm_router::wiring::inject_agent_llm_env(
-        &state.db,
-        &mut env,
-        agent_id,
-        Some(agent_owner_id),
-    )
-    .await;
-    // Per-agent MCP gateway credential (rotates on rollback).
-    crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env, agent_id).await;
+    let env =
+        crate::agents::deploy_env::build(&state, agent_id, agent_owner_id, Default::default())
+            .await;
     // `agent_versions.image_tag` for OCI-push deploys stores the registry-relative
     // `nasiko/{name}:{tag}` as-is, which pulls from docker.io if applied unqualified
     // — qualify exactly as the ad-hoc deploy and restart paths do (no-op for refs
