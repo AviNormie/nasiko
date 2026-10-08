@@ -547,7 +547,7 @@ export function UploadTab({
           )}
         </Card>
         {/* Stays in view under the Deploy page's sticky method row while the form scrolls. */}
-        <div className="sticky top-16 @max-[768px]/deploy:hidden">
+        <div className="sticky top-[calc(var(--topbar-h)+4rem)] @max-[768px]/deploy:hidden">
           <Requirements items={items} advisory={!!check && !check.readable} />
         </div>
       </form>

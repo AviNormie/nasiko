@@ -435,7 +435,7 @@ export function TokenopsPage({
       {/* Sticky bar: title, time control, filters, breadcrumb, freshness (A1). */}
       <div
         ref={stickyBar}
-        className="sticky top-0 z-20 -mx-4 flex flex-col gap-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
+        className="sticky top-(--topbar-h) z-20 -mx-4 flex flex-col gap-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
       >
         <PageHeader
           title="TokenOps"

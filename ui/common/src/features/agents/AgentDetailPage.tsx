@@ -8,6 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { TopBar } from '@/app/shell/TopBar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -98,10 +99,10 @@ function NotFound({ id }: { id?: string }) {
 /** A state shown in place of an agent stepped to from a list keeps the arrows, so the user can step on. */
 function WithSiblings({ id, children }: { id: string; children: ReactNode }) {
   return (
-    <div className="space-y-2">
-      <AgentSiblings id={id} className="justify-end" />
+    <>
+      <TopBar stepper={<AgentSiblings id={id} />} />
       {children}
-    </div>
+    </>
   )
 }
 
@@ -240,9 +241,8 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
 
   return (
     <div className="space-y-4">
-      {/* The arrows keep one place for every agent (and for one that fails to load), whatever its actions. */}
-      <AgentSiblings id={id} className="justify-end" />
       <Header
+        stepper={<AgentSiblings id={id} />}
         agent={agent}
         display={display}
         raw={status.raw}
@@ -335,7 +335,10 @@ function Header({
   ownerLabel,
   mine,
   isPublic,
+  stepper,
 }: {
+  /** Rightmost in the top bar: the arrows keep one place for every agent (and one that fails to load). */
+  stepper: ReactNode
   agent: AgentView
   display: ReturnType<typeof displayStatus>
   raw?: string
@@ -350,35 +353,41 @@ function Header({
   const secondary = agent.canManage ? actionsFor(display).slice(1) : []
   const busy = flow.m.isPending || flow.w.watching
   return (
-    <div className="flex items-start gap-3">
-      <AgentMark name={agent.displayName} iconUrl={agent.iconUrl} size={40} />
-      <PageHeader
-        className="min-w-0 flex-1"
-        title={
-          <span className="flex flex-wrap items-center gap-2">
-            <span className="truncate">{agent.displayName}</span>
-            <StatusBadge display={display} raw={raw} />
-          </span>
-        }
-        description={
-          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="font-mono">{agent.name}</span>
-            <span className="inline-flex items-center font-mono" title={agent.id}>
-              {agent.id.slice(0, 8)}…<CopyButton text={agent.id} label={copy.copyUuid} />
+    <>
+      <div className="flex items-start gap-3">
+        <AgentMark name={agent.displayName} iconUrl={agent.iconUrl} size={40} />
+        <PageHeader
+          className="min-w-0 flex-1"
+          title={
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="truncate">{agent.displayName}</span>
+              <StatusBadge display={display} raw={raw} />
             </span>
-            {agent.version ? <span className="font-mono">v{agent.version}</span> : null}
-            <span>{copy.ownerLine(ownerLabel)}</span>
-            <span>{copy.updatedLine(relTime(agent.updatedAt))}</span>
-            {agent.isHarness ? (
-              <Badge variant="outline">{copy.harnessChip}</Badge>
-            ) : (
-              <Badge variant="outline">{mine ? copy.yours : copy.availableToYou}</Badge>
-            )}
-            {isPublic ? <Badge variant="outline">{copy.publicChip}</Badge> : null}
-          </span>
-        }
+          }
+          description={
+            <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className="font-mono">{agent.name}</span>
+              <span className="inline-flex items-center font-mono" title={agent.id}>
+                {agent.id.slice(0, 8)}…<CopyButton text={agent.id} label={copy.copyUuid} />
+              </span>
+              {agent.version ? <span className="font-mono">v{agent.version}</span> : null}
+              <span>{copy.ownerLine(ownerLabel)}</span>
+              <span>{copy.updatedLine(relTime(agent.updatedAt))}</span>
+              {agent.isHarness ? (
+                <Badge variant="outline">{copy.harnessChip}</Badge>
+              ) : (
+                <Badge variant="outline">{mine ? copy.yours : copy.availableToYou}</Badge>
+              )}
+              {isPublic ? <Badge variant="outline">{copy.publicChip}</Badge> : null}
+            </span>
+          }
+        />
+      </div>
+      <TopBar
+        trail={[agent.displayName]}
+        stepper={stepper}
         actions={
-          <div className="flex flex-wrap items-start justify-end gap-2">
+          <>
             <TryItLink
               id={agent.id}
               name={agent.displayName}
@@ -434,11 +443,11 @@ function Header({
                 ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </>
         }
       />
       <DeleteAgentDialog agent={agent} open={delOpen} onOpenChange={setDelOpen} />
-    </div>
+    </>
   )
 }
 

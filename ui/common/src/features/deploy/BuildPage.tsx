@@ -15,13 +15,7 @@ import { PanelError } from '@/components/shared/panel'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
+import { TopBar } from '@/app/shell/TopBar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { relTime } from '@/features/agents/format'
@@ -167,8 +161,8 @@ export function BuildPage({ buildId }: { buildId: string }) {
 
   return (
     <Frame>
+      <Crumbs title={title} />
       <PageHeader
-        breadcrumb={<Crumbs title={title} />}
         title={
           <span className="flex flex-wrap items-center gap-2">
             {title} <BuildBadge badge={view.badge} />
@@ -339,22 +333,16 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
   )
 }
 
+/** Agents › Builds › this build. */
 function Crumbs({ title }: { title: string }) {
   return (
-    <Breadcrumb aria-label="Breadcrumb">
-      <BreadcrumbList className="gap-1 sm:gap-1">
-        <BreadcrumbItem>
-          <BreadcrumbLink asChild className="underline-offset-2 hover:underline">
-            <Link to="/builds">{copy.build.breadcrumb}</Link>
-          </BreadcrumbLink>
-        </BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem className="min-w-0">
-          <span aria-current="page" className="truncate text-foreground">
-            {title}
-          </span>
-        </BreadcrumbItem>
-      </BreadcrumbList>
-    </Breadcrumb>
+    <TopBar
+      trail={[
+        <Link key="builds" to="/builds">
+          {copy.build.breadcrumb}
+        </Link>,
+        title,
+      ]}
+    />
   )
 }

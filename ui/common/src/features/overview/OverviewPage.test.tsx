@@ -107,7 +107,12 @@ describe('Fleet health', () => {
           name: `Remove the Health: ${copy.rating.watch} filter`,
         })
         await waitFor(() =>
-          expect(within(screen.getByRole('main')).queryAllByRole('listitem')).toHaveLength(n),
+          expect(
+            within(screen.getByRole('main'))
+              .queryAllByRole('listitem')
+              // The top bar's breadcrumb is a list too.
+              .filter((li) => !li.closest('[data-slot="breadcrumb"]')),
+          ).toHaveLength(n),
         )
       }
     }

@@ -2,6 +2,7 @@
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Activity, MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { TopBar } from '@/app/shell/TopBar'
 import { PrevNext, type StepVia } from '@/components/shared/prev-next'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,8 +26,6 @@ import { chatTotals } from '../format'
 import type { ChatIdentity } from '../identity'
 import type { ChatMessage, ChatSessionRow } from '../types'
 import { IdentityChip, IdentityIcon } from './ChatIdentity'
-import { CHAT_COLUMN } from './turnStyles'
-import { cn } from '@/lib/utils'
 
 // quirk: §10.11 — the server caps nothing; this is the UI's own cap.
 const TITLE_MAX = 80
@@ -66,31 +65,41 @@ export function SessionHeader({
   /** Set while Rename is chosen from the menu, so the closing menu doesn't pull focus off the input. */
   const renaming = useRef(false)
   return (
-    <header className="flex h-12 shrink-0 items-center border-b border-border">
-      <div className={cn(CHAT_COLUMN, 'flex min-w-0 items-center gap-2')}>
-        {railButton}
-        {identity ? <IdentityIcon kind={identity.kind} name={identity.name} size={20} /> : null}
-        {editing && row ? (
-          <RenameTitle sessionId={sessionId} title={row.title} onDone={() => setEditing(false)} />
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-auto min-w-0 shrink justify-start px-0 py-0 text-left text-sm font-medium hover:bg-transparent hover:underline dark:hover:bg-transparent pointer-coarse:min-h-11"
-            title={copy.rename}
-            onClick={() => row && !readOnly && setEditing(true)}
-          >
-            <span className="truncate">
-              {row?.title ?? (loading ? copy.loadingChat : copy.chatsNav)}
-            </span>
-          </Button>
-        )}
-        {/* The chip hides below 480 px of pane width; the icon keeps the kind (DS5). */}
-        {identity ? (
-          <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
-        ) : null}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <HeaderTotals replies={replies} partial={partial} className="hidden @min-[560px]:flex" />
+    // The app's top bar holds the chat's header: identity and title on the left, its actions, then Previous/Next.
+    <TopBar
+      pinActions
+      root={
+        <Link to="/chat" search={{}}>
+          {copy.chatsNav}
+        </Link>
+      }
+      trail={[
+        <div key="chat" className="flex min-w-0 items-center gap-2">
+          {railButton}
+          {identity ? <IdentityIcon kind={identity.kind} name={identity.name} size={20} /> : null}
+          {editing && row ? (
+            <RenameTitle sessionId={sessionId} title={row.title} onDone={() => setEditing(false)} />
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-auto min-w-0 shrink justify-start px-0 py-0 text-left text-sm font-medium hover:bg-transparent hover:underline dark:hover:bg-transparent pointer-coarse:min-h-11"
+              title={copy.rename}
+              onClick={() => row && !readOnly && setEditing(true)}
+            >
+              <span className="truncate">
+                {row?.title ?? (loading ? copy.loadingChat : copy.chatsNav)}
+              </span>
+            </Button>
+          )}
+          {/* The chip hides below 480 px of pane width; the icon keeps the kind (DS5). */}
+          {identity ? (
+            <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
+          ) : null}
+        </div>,
+      ]}
+      actions={
+        <>
           <Button
             asChild
             size="sm"
@@ -124,12 +133,13 @@ export function SessionHeader({
                 }
               }}
             >
+              {/* The totals live here, not in the bar: each reply shows its own (one cost readout per place). */}
               {replies.length ? (
                 <>
-                  <DropdownMenuLabel className="font-normal @min-[560px]:hidden">
+                  <DropdownMenuLabel className="font-normal">
                     <HeaderTotals replies={replies} partial={partial} stacked />
                   </DropdownMenuLabel>
-                  <DropdownMenuSeparator className="@min-[560px]:hidden" />
+                  <DropdownMenuSeparator />
                 </>
               ) : null}
               <DropdownMenuItem asChild className="@min-[560px]:hidden pointer-coarse:min-h-11">
@@ -170,11 +180,10 @@ export function SessionHeader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {/* Rightmost, so the arrows stay put from chat to chat whatever the totals' width. */}
-          <ChatSiblings sessionId={sessionId} />
-        </div>
-      </div>
-    </header>
+        </>
+      }
+      stepper={<ChatSiblings sessionId={sessionId} />}
+    />
   )
 }
 

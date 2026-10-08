@@ -208,7 +208,8 @@ describe('layout', () => {
     await router.navigate({ to: '/agents' })
     await waitFor(() => expect(wrapper()).toHaveClass('min-h-screen'))
     expect(wrapper()).not.toHaveClass('h-dvh')
-    expect(document.getElementById('main')).toHaveClass('max-w-page')
+    // The page column keeps the max width; the top bar spans the whole page area.
+    expect(document.querySelector('#main .max-w-page')).toBeInTheDocument()
   })
 
   it.each(['/login', '/no-such-page'])(
