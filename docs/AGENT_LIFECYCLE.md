@@ -283,9 +283,9 @@ Any A2A agent runs on the platform, whatever it does with its state. An agent th
 in process memory, as the SDK's `InMemoryTaskStore` does, loses paused work on every restart and
 has to stay at one replica. Keeping tasks in the platform's state store is necessary for
 surviving restarts and running more than one replica, but not sufficient: every other piece of
-state the agent keeps between requests must be durable too. For example `oss/agents/google-adk`
-keeps its sessions in ADK's `InMemorySessionService` and `oss/agents/crewai` keeps data in its
-own `InMemoryCache`, so neither is replica-safe even though both use the durable task store.
+state the agent keeps between requests must be durable too. For example `oss/agents/crewai` keeps
+data in its own `InMemoryCache`, so it is not replica-safe even though it uses the durable task
+store. Google ADK sessions and JavaScript task stores are covered below.
 
 The platform injects the store's address and your credential into every deployment:
 
@@ -357,6 +357,46 @@ A rotated credential keeps its predecessor valid for 15 minutes, so a rollout st
 is not cut off. A deploy of a new image (update, rollback, upload, import) marks the agent's state
 as in-memory again until your task store registers at startup; a restart or startup recovery of the
 same image leaves the recorded mode as it was.
+
+**Google ADK sessions.** ADK keeps conversations in a session service, and the stock
+`InMemorySessionService` loses them on restart. Copy `oss/agents/common/nasiko_adk_sessions.py`
+(it imports `nasiko_state.py`, so copy that too) and swap the service:
+
+```python
+from nasiko_adk_sessions import session_service_from_env
+
+runner = Runner(
+    agent=agent,
+    app_name=APP_NAME,
+    session_service=session_service_from_env(),  # was InMemorySessionService()
+)
+```
+
+Sessions, and the `user:` and `app:` state they share, are stored as key-value rows under
+`adk/...` keys; an append that loses a race with another replica is re-read and re-applied, and
+fails with `NasikoStateError` after a few attempts instead of dropping the event. Because a
+durable session outlives the process, create it only when `get_session` finds none (ADK refuses
+to create one that exists), as `oss/agents/google-adk` does. This registers key-value state only:
+it does not make the agent's tasks durable, so pair it with `make_task_store()`.
+
+**JavaScript (`@a2a-js/sdk` 1.x).** `oss/agents/common/js/nasiko-state` is a dependency-free ESM
+package (plain JavaScript with JSDoc types, so it needs no build step and can be copied into an
+image like the Python modules). It provides `NasikoTaskStore`, the same write rules and
+version-conditional writes as the Python store, and stores tasks in a format the Python store
+reads too:
+
+```js
+import { DefaultRequestHandler } from "@a2a-js/sdk/server";
+import { installShutdownHooks, taskStoreFromEnv } from "nasiko-state";
+
+const handler = new DefaultRequestHandler(agentCard, taskStoreFromEnv(), executor);
+installShutdownHooks(); // flush pending writes on SIGTERM and SIGINT
+```
+
+`taskStoreFromEnv()` returns the SDK's `InMemoryTaskStore` when `NASIKO_STATE_URL` is unset. The
+package also exports `NasikoStateClient` for your own key-value state (`putKv`, `getKv`,
+`listKv`, ...), with typed errors for 401, 412, 413 and 429. The 0.3.x JavaScript SDK is not
+supported: a row written in another format is refused with `NasikoStateMalformedRow`.
 
 ---
 
