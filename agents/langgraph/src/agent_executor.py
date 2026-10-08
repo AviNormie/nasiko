@@ -24,8 +24,14 @@ class DeepAnalystAgentExecutor(AgentExecutor):
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         query = context.get_user_input()
-        task = context.current_task or new_task_from_user_message(context.message)
-        await event_queue.enqueue_event(task)
+        task = context.current_task
+        if task is None:
+            # Only a new task is enqueued whole. A message on an existing task (a human's answer to
+            # an input-required pause) must not re-enqueue it: the SDK ignores the replacement but
+            # still streams the stored, still input-required snapshot as the reply's first event,
+            # so the caller sees a fresh pause, and the new message never reaches the task history.
+            task = new_task_from_user_message(context.message)
+            await event_queue.enqueue_event(task)
 
         # a2a-sdk runs execute() in a background asyncio task. The incoming W3C
         # traceparent is extracted by TraceparentMiddleware (in telemetry.py) into
