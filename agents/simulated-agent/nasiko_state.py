@@ -615,7 +615,10 @@ class NasikoStateClient:
                     )
                     return
                 logger.warning(
-                    "registering %s state with the platform failed, retrying in %.0f s: %s", capability, delay, exc
+                    "registering %s state with the platform failed, retrying in %.0f s: %s",
+                    capability,
+                    delay,
+                    exc,
                 )
             time.sleep(delay)
             delay = min(delay * 2, REGISTER_RETRY_MAX_SECONDS)
@@ -1743,7 +1746,9 @@ class NasikoCheckpointSaver(BaseCheckpointSaver):  # type: ignore[misc]
             raise NasikoStateError("refusing to load a pickled value from the platform state")
         return self.serde.loads_typed((encoded["type"], base64.b64decode(encoded["data"])))
 
-    def _planned_checkpoint(self, config: Any, checkpoint: Any, metadata: Any, *, spill: bool) -> _CheckpointPlan:
+    def _planned_checkpoint(
+        self, config: Any, checkpoint: Any, metadata: Any, *, spill: bool
+    ) -> _CheckpointPlan:
         """What one put writes. Values go inline unless ``spill`` or the record would be too big."""
         thread_id, namespace = _thread_and_namespace(config)
         scalars, values = _split_channel_values(checkpoint["channel_values"])
