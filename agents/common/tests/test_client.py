@@ -320,7 +320,9 @@ class TestRateLimits:
 
         assert slept[0] >= 0.5
 
-    async def test_waits_are_spread_so_replicas_do_not_retry_in_step(self, client, state_server, style, slept):
+    async def test_waits_are_spread_so_replicas_do_not_retry_in_step(
+        self, client, state_server, style, slept
+    ):
         state_server.fail(429, times=10, headers={"Retry-After": "1"})
 
         assert await call(client, style, "get_task", "t1") is None

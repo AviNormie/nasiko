@@ -102,4 +102,3 @@ async def test_a_turn_with_history(state_server, client):
     assert second == expected
     assert third == expected
     assert sum(second.values()) == (8 if A2A_V1 else 7)
-
