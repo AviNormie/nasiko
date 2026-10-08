@@ -480,19 +480,17 @@ async fn source_import_deploy_carries_the_platform_env() {
     f.server.cleanup().await;
 }
 
-/// The clone pipeline the GitHub path ends in. Queued as the legacy `Clone` job, which the worker
-/// still runs: its arm and the GitHub arm assemble their env through the same `deploy_env::build`.
-#[tokio::test]
-#[serial]
-async fn clone_job_deploy_carries_the_platform_env() {
+/// Queues the legacy `Clone` job the worker still runs: its arm and the GitHub arm both end in
+/// `execute_clone_and_deploy`. The source builds (a Dockerfile and a valid `AgentCard.json`).
+async fn queue_clone_job(f: &Fixture, agent_id: Uuid, name: &str) {
     use std::io::Write;
-    let f = start().await;
-    let agent_id = f.agent_row("cloned-agent", None, "deploying").await;
+    let image = format!("nasiko/{name}:1.0.0");
     let build_id: Uuid = sqlx::query_scalar(
         "INSERT INTO agent_builds (agent_id, version_tag, image_reference) \
-         VALUES ($1, '1.0.0', 'nasiko/cloned-agent:1.0.0') RETURNING id",
+         VALUES ($1, '1.0.0', $2) RETURNING id",
     )
     .bind(agent_id)
+    .bind(&image)
     .fetch_one(&f.server.db)
     .await
     .unwrap();
@@ -500,7 +498,7 @@ async fn clone_job_deploy_carries_the_platform_env() {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        for (name, data) in [
+        for (file, data) in [
             ("AgentCard.json", br#"{"version": "1.0.0"}"#.as_slice()),
             ("Dockerfile", b"FROM scratch".as_slice()),
         ] {
@@ -508,7 +506,7 @@ async fn clone_job_deploy_carries_the_platform_env() {
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, name, data).unwrap();
+            builder.append_data(&mut header, file, data).unwrap();
         }
         builder.finish().unwrap();
     }
@@ -522,9 +520,9 @@ async fn clone_job_deploy_carries_the_platform_env() {
         agent_id,
         owner_id: f.admin_id,
         upload_id: "deploy-env-clone".into(),
-        name: "cloned-agent".into(),
+        name: name.into(),
         tar_gz_path: tar_path.to_string_lossy().into_owned(),
-        image_tag: "nasiko/cloned-agent:1.0.0".into(),
+        image_tag: image,
         ports: vec![8000],
         env: HashMap::new(),
     };
@@ -536,6 +534,16 @@ async fn clone_job_deploy_carries_the_platform_env() {
         .await
         .unwrap();
     let _ = f.server.state.build_tx.send(()).await;
+}
+
+/// The clone pipeline the GitHub path ends in; see `queue_clone_job`.
+#[tokio::test]
+#[serial]
+async fn clone_job_deploy_carries_the_platform_env() {
+    let f = start().await;
+    let agent_id = f.agent_row("cloned-agent", None, "deploying").await;
+
+    queue_clone_job(&f, agent_id, "cloned-agent").await;
 
     assert_platform_env(&f.first_spec(agent_id).await);
     f.server.cleanup().await;
@@ -748,6 +756,39 @@ async fn credential_rows(f: &Fixture, agent_id: Uuid) -> Vec<(String, String, Op
     .unwrap()
 }
 
+/// Makes `agent_id` look like a running agent that was built before and holds both credentials
+/// (and an older version, so a new upload or clone is not a version conflict); returns them.
+async fn running_agent_credentials(
+    f: &Fixture,
+    agent_id: Uuid,
+) -> Vec<(String, String, Option<String>)> {
+    use nasiko_mcp_gateway::agent_tokens::{self, TokenScope};
+    sqlx::query("UPDATE agents SET version = '0.9.0' WHERE id = $1")
+        .bind(agent_id)
+        .execute(&f.server.db)
+        .await
+        .unwrap();
+    // A prior successful build is what a running agent has, and it makes a failed deploy mark the
+    // agent failed instead of deleting it (and its credential rows with it).
+    sqlx::query(
+        "INSERT INTO agent_builds (agent_id, version_tag, image_reference, status) \
+         VALUES ($1, '0.9.0', 'nasiko/old:1', 'success')",
+    )
+    .bind(agent_id)
+    .execute(&f.server.db)
+    .await
+    .unwrap();
+    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::Gateway)
+        .await
+        .unwrap();
+    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::State)
+        .await
+        .unwrap();
+    let rows = credential_rows(f, agent_id).await;
+    assert_eq!(rows.len(), 2, "one row per scope: {rows:?}");
+    rows
+}
+
 async fn wait_for_failed_build(f: &Fixture, agent_id: Uuid) {
     for _ in 0..200 {
         let failed: bool = sqlx::query_scalar(
@@ -770,37 +811,34 @@ async fn wait_for_failed_build(f: &Fixture, agent_id: Uuid) {
 #[tokio::test]
 #[serial]
 async fn a_failed_upload_build_leaves_the_running_agents_credentials_unrotated() {
-    use nasiko_mcp_gateway::agent_tokens::{self, TokenScope};
     let f = start().await;
     let agent_id = f
         .agent_row("running-agent", Some("nasiko/old:1"), "running")
         .await;
-    sqlx::query("UPDATE agents SET version = '0.9.0' WHERE id = $1")
-        .bind(agent_id)
-        .execute(&f.server.db)
-        .await
-        .unwrap();
-    // A prior successful build is what a running agent has, and it makes the failed upload
-    // mark the agent failed instead of deleting it (and its credential rows with it).
-    sqlx::query(
-        "INSERT INTO agent_builds (agent_id, version_tag, image_reference, status) \
-         VALUES ($1, '0.9.0', 'nasiko/old:1', 'success')",
-    )
-    .bind(agent_id)
-    .execute(&f.server.db)
-    .await
-    .unwrap();
-    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::Gateway)
-        .await
-        .unwrap();
-    agent_tokens::mint_scoped(&f.server.db, agent_id, TokenScope::State)
-        .await
-        .unwrap();
-    let before = credential_rows(&f, agent_id).await;
-    assert_eq!(before.len(), 2, "one row per scope: {before:?}");
+    let before = running_agent_credentials(&f, agent_id).await;
     f.server.runtime.set_fail_build(true);
 
     assert_eq!(upload_zip(&f, "running-agent", vec![]).await, agent_id);
+    wait_for_failed_build(&f, agent_id).await;
+
+    assert_eq!(credential_rows(&f, agent_id).await, before);
+    assert!(f.specs_for(agent_id).is_empty(), "nothing was deployed");
+    f.server.cleanup().await;
+}
+
+/// Same guarantee for the clone pipeline (the legacy `Clone` job and the GitHub clone arm share
+/// it): a build that fails leaves the running agent's credentials alone.
+#[tokio::test]
+#[serial]
+async fn a_failed_clone_build_leaves_the_running_agents_credentials_unrotated() {
+    let f = start().await;
+    let agent_id = f
+        .agent_row("running-cloned-agent", Some("nasiko/old:1"), "running")
+        .await;
+    let before = running_agent_credentials(&f, agent_id).await;
+    f.server.runtime.set_fail_build(true);
+
+    queue_clone_job(&f, agent_id, "running-cloned-agent").await;
     wait_for_failed_build(&f, agent_id).await;
 
     assert_eq!(credential_rows(&f, agent_id).await, before);

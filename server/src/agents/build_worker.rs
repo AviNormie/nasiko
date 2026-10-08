@@ -501,20 +501,10 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
             ports,
             env,
         } => {
-            let platform_env = crate::agents::deploy_env::build(
-                &state,
-                agent_id,
-                owner_id,
-                env,
-                crate::agents::deploy_env::StateModeOnDeploy::Reset,
-            )
-            .await;
             // This legacy job variant is never actually enqueued anymore
             // (superseded by `GithubClone`), kept for in-flight compat.
             execute_clone_and_deploy(
-                state.runtime.clone(),
-                state.db.clone(),
-                state.http_client.clone(),
+                &state,
                 build_id,
                 agent_id,
                 owner_id,
@@ -522,13 +512,7 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
                 name,
                 std::path::PathBuf::from(&tar_gz_path),
                 ports,
-                platform_env,
-                state.config.openai_api_key.clone(),
-                state.config.openai_base_url.clone(),
-                state.config.agent_runtime.clone(),
-                state.config.agent_image_registry.clone(),
-                state.config.agent_max_replicas,
-                state.config.agent_default_memory.clone(),
+                env,
                 None,
                 // This legacy job variant is never actually enqueued
                 // anymore (superseded by `GithubClone`), so there's no
@@ -536,7 +520,6 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
                 None,
                 None,
                 None,
-                state.agent_deletion_hook.clone(),
             )
             .await;
         }
