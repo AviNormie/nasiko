@@ -13,9 +13,12 @@
 //! [`AgentRequestMetrics`] and [`AgentRequestGuard`].
 //!
 //! The in-flight count is kept in-process as well as exported, because the duration histogram is
-//! labelled with the count at request start (the "band") and an UpDownCounter cannot be read back.
-//! That count is per server process; the exported series are per-process too, so a deployment
-//! running several server processes must give each a distinct resource identity.
+//! labelled with the band a request started in and an UpDownCounter cannot be read back. The band
+//! is the load on one replica: the agent's in-flight count divided by its ready replicas, rounded
+//! up (`agent_replicas.rs` keeps that count off the request path). The `nasiko.agent.inflight`
+//! gauge stays agent-wide. Both counts are per server process; the exported series are
+//! per-process too, so a deployment running several server processes must give each a distinct
+//! resource identity.
 
 use dashmap::{DashMap, mapref::entry::Entry};
 use nasiko_types::agent_call::{AgentCallHandle, AgentCallMeter};
@@ -25,6 +28,7 @@ use opentelemetry::{
 };
 use std::{sync::Arc, time::Instant};
 
+use super::agent_replicas::ReadyReplicas;
 use super::genai::attr;
 
 /// Attribute carrying the in-flight band a request started in.
@@ -73,13 +77,20 @@ pub fn inflight_band(inflight: u64) -> &'static str {
     }
 }
 
-/// Instruments plus the in-process count behind the band.
+/// Requests in flight on one replica when `agent_inflight` are in flight across `ready_replicas`,
+/// rounded up so a replica holding the remainder is not undercounted. 0 replicas counts as one.
+fn per_replica_inflight(agent_inflight: u64, ready_replicas: u64) -> u64 {
+    agent_inflight.div_ceil(ready_replicas.max(1))
+}
+
+/// Instruments plus the in-process counts behind the band.
 #[derive(Clone)]
 pub struct AgentRequestMetrics {
     inflight_gauge: UpDownCounter<i64>,
     duration: Histogram<f64>,
     requests: Counter<u64>,
     inflight: Arc<DashMap<String, u64>>,
+    ready_replicas: ReadyReplicas,
 }
 
 impl AgentRequestMetrics {
@@ -102,7 +113,13 @@ impl AgentRequestMetrics {
                 .with_description("Requests forwarded to an agent, by outcome")
                 .build(),
             inflight: Arc::new(DashMap::new()),
+            ready_replicas: ReadyReplicas::default(),
         }
+    }
+
+    /// The ready-replica cache the band divides by, for the refresher to keep current.
+    pub fn ready_replicas(&self) -> ReadyReplicas {
+        self.ready_replicas.clone()
     }
 
     /// Count a request as in flight until the returned guard is dropped. The guard starts as
@@ -113,6 +130,8 @@ impl AgentRequestMetrics {
             *slot += 1;
             *slot
         };
+        let started = Instant::now();
+        let ready = self.ready_replicas.note_request(agent_id, started);
         self.inflight_gauge.add(
             1,
             &[KeyValue::new(attr::NASIKO_AGENT_ID, agent_id.to_string())],
@@ -120,8 +139,8 @@ impl AgentRequestMetrics {
         AgentRequestGuard {
             metrics: self.clone(),
             agent_id: agent_id.to_string(),
-            band: inflight_band(count),
-            started: Instant::now(),
+            band: inflight_band(per_replica_inflight(count, ready)),
+            started,
             outcome: RequestOutcome::Error,
         }
     }
@@ -266,6 +285,28 @@ mod tests {
         );
         assert_eq!(m.inflight_now("a"), 2);
         assert_eq!(m.inflight_now("b"), 1);
+    }
+
+    #[test]
+    fn the_band_is_the_in_flight_count_per_ready_replica() {
+        let m = metrics();
+        let replicas = m.ready_replicas();
+        replicas.note_request("a", Instant::now());
+        replicas.set_ready("a", 2);
+        let guards: Vec<_> = (0..10).map(|_| m.begin("a")).collect();
+        // 4 in flight on 2 replicas is 2 each; 10 is 5 each, where the agent-wide count of 10
+        // would have been "9-16".
+        assert_eq!(guards[3].band(), "2-4");
+        assert_eq!(guards[9].band(), "5-8");
+        assert_eq!(m.inflight_now("a"), 10);
+    }
+
+    #[test]
+    fn per_replica_inflight_rounds_up_and_treats_no_replicas_as_one() {
+        assert_eq!(per_replica_inflight(10, 2), 5);
+        assert_eq!(per_replica_inflight(5, 2), 3);
+        assert_eq!(per_replica_inflight(3, 0), 3);
+        assert_eq!(per_replica_inflight(1, 4), 1);
     }
 
     #[test]
