@@ -1,7 +1,7 @@
 //! Who is calling: the agent behind a bearer credential, charged against its request budget,
 //! and the issuing of that credential.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{FromRequestParts, Request, State};
 use axum::http::request::Parts;
@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::error::StateError;
 use crate::rate_limit::RateLimiter;
+use crate::telemetry::agent_replicas::ReadyReplicas;
 
 /// Length of the fixed window the per-agent request budget is counted over, and so also the
 /// longest a rejected caller can be told to wait (`Retry-After` is what is left of it).
@@ -43,14 +44,43 @@ pub(super) struct AuthenticatedAgent(pub(super) Uuid);
 pub(super) struct AgentAuth {
     db: PgPool,
     limiter: RateLimiter,
+    requests_per_replica_per_minute: u32,
+    ready_replicas: ReadyReplicas,
 }
 
 impl AgentAuth {
-    pub(super) fn new(db: PgPool, requests_per_minute: u32) -> Self {
+    /// An agent's budget is `requests_per_replica_per_minute` for each of its ready replicas, so
+    /// an autoscaled agent is not held to the allowance of one replica while its load, and so its
+    /// state traffic, grows with the replica count.
+    pub(super) fn new(
+        db: PgPool,
+        requests_per_replica_per_minute: u32,
+        ready_replicas: ReadyReplicas,
+    ) -> Self {
         Self {
             db,
-            limiter: RateLimiter::new(requests_per_minute, RATE_WINDOW),
+            // The limiter's own limit is unused: every check passes the agent's current budget.
+            limiter: RateLimiter::new(requests_per_replica_per_minute, RATE_WINDOW),
+            requests_per_replica_per_minute,
+            ready_replicas,
         }
+    }
+
+    /// Charge one request to `agent_id` against its budget now.
+    ///
+    /// The replica count is read from the cache only, never from the runtime, so this stays off
+    /// the slow path; an agent not in the cache yet, or reporting no ready replica, counts as one.
+    /// Noting the request also keeps the agent's count refreshed while it is calling.
+    fn charge(&self, agent_id: Uuid) -> Result<(), Duration> {
+        let key = agent_id.to_string();
+        let replicas = self.ready_replicas.note_request(&key, Instant::now());
+        self.limiter
+            .check_with_limit(&key, self.budget_for(replicas))
+    }
+
+    fn budget_for(&self, ready_replicas: u64) -> u32 {
+        let budget = u64::from(self.requests_per_replica_per_minute).saturating_mul(ready_replicas);
+        u32::try_from(budget).unwrap_or(u32::MAX)
     }
 }
 
@@ -80,9 +110,7 @@ async fn identify(auth: &AgentAuth, headers: &HeaderMap) -> Result<Authenticated
         .await
         .map_err(|e| StateError::Internal(format!("agent token lookup failed: {e}")))?
         .ok_or(StateError::Unauthorized)?;
-    auth.limiter
-        .check(&agent_id.to_string())
-        .map_err(StateError::rate_limited)?;
+    auth.charge(agent_id).map_err(StateError::rate_limited)?;
     Ok(AuthenticatedAgent(agent_id))
 }
 
@@ -149,6 +177,41 @@ mod tests {
         ] {
             assert_eq!(bearer_token(&headers_with(bad)), None, "{bad:?}");
         }
+    }
+
+    fn auth_with(per_replica: u32, ready_replicas: ReadyReplicas) -> AgentAuth {
+        let db = PgPool::connect_lazy("postgres://hermetic.invalid/none").unwrap();
+        AgentAuth::new(db, per_replica, ready_replicas)
+    }
+
+    fn requests_admitted(auth: &AgentAuth, agent: Uuid, attempts: u32) -> u32 {
+        (0..attempts)
+            .filter(|_| auth.charge(agent).is_ok())
+            .count()
+            .try_into()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_one_replica_gets_the_per_replica_budget() {
+        let auth = auth_with(5, ReadyReplicas::default());
+        assert_eq!(requests_admitted(&auth, Uuid::new_v4(), 50), 5);
+    }
+
+    #[tokio::test]
+    async fn two_ready_replicas_double_the_budget() {
+        let replicas = ReadyReplicas::default();
+        let agent = Uuid::new_v4();
+        replicas.note_request(&agent.to_string(), Instant::now());
+        replicas.set_ready(&agent.to_string(), 2);
+        let auth = auth_with(5, replicas);
+        assert_eq!(requests_admitted(&auth, agent, 50), 10);
+    }
+
+    #[tokio::test]
+    async fn a_budget_too_large_for_u32_saturates() {
+        let auth = auth_with(u32::MAX, ReadyReplicas::default());
+        assert_eq!(auth.budget_for(4), u32::MAX);
     }
 
     #[tokio::test]

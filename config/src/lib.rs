@@ -149,10 +149,13 @@ pub struct Config {
     /// bytes of that field as sent. AGENT_STATE_MAX_BODY_BYTES, default 1 MiB, floored at 1.
     /// Larger writes get a 413.
     pub agent_state_max_body_bytes: usize,
-    /// Requests per minute one agent may make to the agent state API.
-    /// AGENT_STATE_RATE_LIMIT_PER_MINUTE, default 600, floored at 1. Over it gets a 429. Counted
-    /// in memory by each server process, like the other limiters (`rate_limit.rs`), so the
-    /// ceiling across several processes is this value times their number.
+    /// Requests per minute one agent may make to the agent state API, for each of its ready
+    /// replicas: an agent running three replicas may make three times this. Replicas the server
+    /// does not know of yet count as one. AGENT_STATE_RATE_LIMIT_PER_MINUTE, default 1200,
+    /// floored at 1. The default leaves headroom over what a durable agent turn costs (a handful
+    /// of calls) so a burst of turns is not refused. Over it gets a 429. Counted in memory by
+    /// each server process, like the other limiters (`rate_limit.rs`), so the ceiling across
+    /// several processes is this value times their number.
     pub agent_state_rate_limit_per_minute: u32,
     /// Most body bytes one agent state listing page carries. AGENT_STATE_LIST_BYTES_BUDGET,
     /// default 8 MiB, floored at 1. A page stops before the next row would pass it and hands back
@@ -578,7 +581,7 @@ impl Config {
             hitl_lost_task_retries: env_parse("HITL_LOST_TASK_RETRIES", 3),
             agent_state_ttl_days: env_parse("AGENT_STATE_TTL_DAYS", 7).clamp(1, 365),
             agent_state_max_body_bytes: env_parse("AGENT_STATE_MAX_BODY_BYTES", 1_048_576).max(1),
-            agent_state_rate_limit_per_minute: env_parse("AGENT_STATE_RATE_LIMIT_PER_MINUTE", 600)
+            agent_state_rate_limit_per_minute: env_parse("AGENT_STATE_RATE_LIMIT_PER_MINUTE", 1200)
                 .max(1),
             agent_state_list_bytes_budget: env_parse(
                 "AGENT_STATE_LIST_BYTES_BUDGET",

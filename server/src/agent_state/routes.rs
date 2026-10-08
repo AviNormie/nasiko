@@ -36,6 +36,7 @@ pub fn router(state: &AppState) -> Router<AppState> {
     let auth = AgentAuth::new(
         state.db.clone(),
         state.config.agent_state_rate_limit_per_minute,
+        state.genai_metrics.agent_ready_replicas(),
     );
     let peer_limit = PeerLimit::new(state.config.agent_state_rate_limit_per_minute);
     let transport_limit = state

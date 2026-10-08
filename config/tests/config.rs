@@ -387,7 +387,7 @@ fn agent_state_limits_default_when_unset() {
     let cfg = Config::from_env().unwrap();
     assert_eq!(cfg.agent_state_ttl_days, 7);
     assert_eq!(cfg.agent_state_max_body_bytes, 1_048_576);
-    assert_eq!(cfg.agent_state_rate_limit_per_minute, 600);
+    assert_eq!(cfg.agent_state_rate_limit_per_minute, 1200);
     assert_eq!(cfg.agent_state_list_bytes_budget, 8 * 1024 * 1024);
 
     unset_required_vars();
