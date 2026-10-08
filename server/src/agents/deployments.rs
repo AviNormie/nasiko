@@ -342,19 +342,11 @@ pub(crate) async fn restart_deployment(
     let image = info.spec_image.unwrap_or_else(|| info.image.clone());
 
     // Resolve agent environment (platform vars + agent-specific secrets).
-    let mut secrets = state.agent_env(info.agent_id).await;
-    // Re-inject LLM router wiring (agent JWT + base URL) so the restarted agent
-    // keeps routing through the gateway. Best-effort — skipped if not configured.
-    crate::llm_router::wiring::inject_agent_llm_env(
-        &state.db,
-        &mut secrets,
-        info.agent_id,
-        Some(info.owner_id),
-    )
-    .await;
-    // Per-agent MCP gateway credential (rotates on restart; reaches the pod via
-    // the K8s secret refresh below, or the Docker recreate's env).
-    crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut secrets, info.agent_id).await;
+    // Platform credentials rotate on restart and reach the pod via the K8s secret
+    // refresh below, or the Docker recreate's env.
+    let secrets =
+        crate::agents::deploy_env::build(&state, info.agent_id, info.owner_id, Default::default())
+            .await;
 
     if let Some(k8s_name) = &info.k8s_deployment_name {
         // ── K8s path: scale-to-1 (avoids tearing down and recreating the Deployment) ──

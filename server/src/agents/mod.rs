@@ -1,5 +1,6 @@
 pub mod acl;
 pub mod build_worker;
+pub mod deploy_env;
 pub mod deployments;
 pub mod grants;
 pub mod hours_meter;

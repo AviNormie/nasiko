@@ -398,16 +398,8 @@ pub(crate) async fn build_and_deploy(
     // every other deploy path (agents/upload.rs, deployments.rs::restart) — this path
     // used to start from an empty map, so imported agents booted with no LLM env at
     // all and failed on their first call with a 401.
-    let mut env_vars = state.agent_env(agent_id).await;
-    crate::llm_router::wiring::inject_agent_llm_env(
-        &state.db,
-        &mut env_vars,
-        agent_id,
-        Some(owner_id),
-    )
-    .await;
-    // Per-agent MCP gateway credential (rotates on re-import).
-    crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env_vars, agent_id).await;
+    let env_vars =
+        crate::agents::deploy_env::build(&state, agent_id, owner_id, Default::default()).await;
     let mut spec = crate::agents::build_agent_spec(
         agent_id,
         &meta.name,
@@ -1116,16 +1108,8 @@ pub(crate) async fn import_registry(
         // every other deploy path (agents/upload.rs, deployments.rs::restart) — this path
         // used to start from an empty map, so imported agents booted with no LLM env at
         // all and failed on their first call with a 401.
-        let mut env_vars = state.agent_env(agent_id).await;
-        crate::llm_router::wiring::inject_agent_llm_env(
-            &state.db,
-            &mut env_vars,
-            agent_id,
-            Some(owner_id),
-        )
-        .await;
-        // Per-agent MCP gateway credential (rotates on redeploy).
-        crate::mcp::wiring::inject_agent_gateway_token(&state.db, &mut env_vars, agent_id).await;
+        let env_vars =
+            crate::agents::deploy_env::build(&state, agent_id, owner_id, Default::default()).await;
         let mut spec = crate::agents::build_agent_spec(
             agent_id,
             &agent_name,

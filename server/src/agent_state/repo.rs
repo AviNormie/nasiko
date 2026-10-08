@@ -233,6 +233,16 @@ pub(super) async fn mark_durable(db: &PgPool, agent_id: Uuid) -> Result<(), sqlx
     Ok(())
 }
 
+/// Records that the agent keeps its tasks in memory again, as every deploy starts it: a new image
+/// may not register a task store, and one that does re-registers when it starts.
+pub(super) async fn mark_memory(db: &PgPool, agent_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE agents SET state_mode = 'memory' WHERE id = $1 AND state_mode <> 'memory'")
+        .bind(agent_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 // ─── Tasks ──────────────────────────────────────────────────────────────────
 
 /// A task as an agent wants it stored. `sealed_body` is already ciphertext.

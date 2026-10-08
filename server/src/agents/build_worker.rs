@@ -18,7 +18,7 @@ const STUCK_JOB_MINS: i64 = 60;
 use super::update::{AgentVersionRow, execute_agent_rollback, execute_agent_update};
 use super::upload::{
     BuildJobPayload, McpBuildSourcePayload, execute_clone_and_deploy,
-    execute_github_clone_and_deploy, execute_upload_and_deploy,
+    execute_github_clone_and_deploy, execute_upload_and_deploy, open_job_env,
 };
 use crate::build::routes::execute_build;
 
@@ -371,11 +371,27 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
             image_tag,
             ports,
             env,
+            env_encrypted,
             writable,
             writable_path,
         } => {
-            let mut platform_env = state.agent_env(agent_id).await;
-            platform_env.extend(env);
+            let job_env = match open_job_env(owner_id, env, env_encrypted) {
+                Ok(env) => env,
+                Err(e) => {
+                    tracing::error!(job_id = %job.id, %agent_id, %e, "build worker: job env does not decrypt, failing");
+                    mark_job(
+                        &state.db,
+                        job.id,
+                        "failed",
+                        Some("job env could not be decrypted"),
+                    )
+                    .await;
+                    fail_agent_terminal(&state.db, agent_id, &state.agent_deletion_hook).await;
+                    return;
+                }
+            };
+            let platform_env =
+                crate::agents::deploy_env::build(&state, agent_id, owner_id, job_env).await;
             execute_upload_and_deploy(
                 state.runtime.clone(),
                 state.db.clone(),
@@ -497,8 +513,8 @@ async fn execute_claimed_job(state: AppState, job: BuildJob) {
             ports,
             env,
         } => {
-            let mut platform_env = state.agent_env(agent_id).await;
-            platform_env.extend(env);
+            let platform_env =
+                crate::agents::deploy_env::build(&state, agent_id, owner_id, env).await;
             // This legacy job variant is never actually enqueued anymore
             // (superseded by `GithubClone`), kept for in-flight compat.
             execute_clone_and_deploy(

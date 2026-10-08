@@ -66,17 +66,11 @@ pub async fn reconcile_agents_on_startup(state: &AppState) {
             "agent reconciliation: no live workload for a DB-running agent, redeploying"
         );
 
-        let mut env = state.agent_env(agent.id).await;
-        // Same env-wiring every other deploy path applies (rollback, seed,
-        // upload) — a redeployed-but-recovered agent must behave identically
-        // to one that was deployed normally, not miss router wiring.
-        crate::llm_router::wiring::inject_agent_llm_env(
-            &state.db,
-            &mut env,
-            agent.id,
-            Some(agent.owner_id),
-        )
-        .await;
+        // Same env every other deploy path gets - a redeployed-but-recovered
+        // agent must behave identically to one that was deployed normally.
+        let env =
+            crate::agents::deploy_env::build(state, agent.id, agent.owner_id, Default::default())
+                .await;
 
         let qualified_image =
             crate::agents::qualify_deploy_image(&state.config.agent_image_registry, &image);

@@ -132,7 +132,12 @@ pub enum BuildJobPayload {
         zip_path: String,
         image_tag: String,
         ports: Vec<u16>,
+        /// The caller's own `env` field. Values are sealed (`seal_job_env`) when
+        /// `env_encrypted` is set; rows queued before sealing existed carry plaintext and no
+        /// flag, and are still read (`open_job_env`).
         env: HashMap<String, String>,
+        #[serde(default)]
+        env_encrypted: bool,
         writable: bool,
         /// `--writable-path`; `None` = `/workspace`. `#[serde(default)]` so
         /// job rows queued before this field existed still deserialize.
@@ -256,6 +261,32 @@ pub enum BuildJobPayload {
         image_tag: String,
         env: HashMap<String, String>,
     },
+}
+
+/// Seals the values of a job's `env` with the owner's key, so a user's secrets are never
+/// plaintext in `build_jobs.payload`. The same scheme MCP connector builds use.
+pub fn seal_job_env(owner_id: Uuid, env: HashMap<String, String>) -> HashMap<String, String> {
+    let crypto = nasiko_secrets::SecretsCrypto::for_user(owner_id);
+    env.into_iter()
+        .map(|(key, value)| (key, crypto.encrypt(&value)))
+        .collect()
+}
+
+/// Reverses [`seal_job_env`]; plaintext (`encrypted == false`, a row queued before sealing
+/// existed) passes through. A sealed value that does not open is an error, not a dropped key:
+/// deploying without a variable the user set would fail later and more confusingly.
+pub fn open_job_env(
+    owner_id: Uuid,
+    env: HashMap<String, String>,
+    encrypted: bool,
+) -> Result<HashMap<String, String>, nasiko_secrets::SecretsError> {
+    if !encrypted {
+        return Ok(env);
+    }
+    let crypto = nasiko_secrets::SecretsCrypto::for_user(owner_id);
+    env.into_iter()
+        .map(|(key, value)| Ok((key, crypto.decrypt(&value)?)))
+        .collect()
 }
 
 /// Source payload for `BuildJobPayload::McpServerUpload` — mirrors
@@ -609,27 +640,14 @@ pub(crate) async fn upload_and_deploy(
         }
     };
 
-    // Wire the agent's LLM SDK through the gateway (mint JWT + inject base-URL/key per the
-    // agent's inbound_format). Best-effort; skipped (with a warning) if the gateway isn't
-    // configured. Injected before the build job is enqueued so the worker deploys with it.
-    //
-    // Both wiring calls read/write `agent_id` through `&mut *tx`, not `&state.db` — the
-    // `agents` row inserted above is still uncommitted at this point (commit happens after
-    // the build_jobs insert below), and a separate pool connection can't see it yet. Against
-    // `&state.db` this silently defaulted the LLM env wiring to the wrong inbound_format and
-    // made the gateway-token insert fail its `agent_gateway_tokens_agent_id_fkey` outright.
-    crate::llm_router::wiring::inject_agent_llm_env(&mut *tx, &mut env, agent_id, Some(owner_id))
-        .await;
-    // Per-agent MCP gateway credential — injected before the build job is
-    // enqueued, same as the LLM wiring above, so the worker deploys with it.
-    crate::mcp::wiring::inject_agent_gateway_token(&mut *tx, &mut env, agent_id).await;
-
+    // The platform's own env (LLM router wiring, gateway and state credentials) is NOT
+    // built here: the worker assembles it through `deploy_env` when it claims the job, so no
+    // credential is ever written into `build_jobs.payload`. What is queued is only the
+    // caller's own `env` field, sealed below because it may carry the user's secrets.
     let upload_id = build_id.to_string();
 
-    // NOTE: server-level secrets (OPENAI_API_KEY / OPENAI_BASE_URL) are deliberately
-    // NOT injected here — that would serialize the server API key in cleartext into
-    // build_jobs.payload (RUN-5). The worker injects them from live config at
-    // execution time (see execute_upload_and_deploy), mirroring update/rollback.
+    // Server-level secrets (OPENAI_API_KEY / OPENAI_BASE_URL) are likewise left to the
+    // worker (see execute_upload_and_deploy) so they are never persisted (RUN-5).
 
     // ── Insert build job (worker picks this up via SKIP LOCKED) ──────────────
     let payload = BuildJobPayload::Upload {
@@ -641,7 +659,8 @@ pub(crate) async fn upload_and_deploy(
         zip_path: zip_path.to_string_lossy().into_owned(),
         image_tag: image_tag.clone(),
         ports,
-        env,
+        env: seal_job_env(owner_id, env),
+        env_encrypted: true,
         writable,
         writable_path: writable_path.clone(),
     };
@@ -755,29 +774,13 @@ fn validate_agent_zip(
         return Err("Dockerfile has no FROM instruction".into());
     }
 
-    // The agent must declare how it starts — in a language-agnostic way. Either
-    // the Dockerfile carries its own CMD/ENTRYPOINT (any runtime: Node, Rust, Go,
-    // a prebuilt binary), or a conventional Python entrypoint file is present
-    // (kept for Python agents whose Dockerfile relies on the base image's CMD).
-    //
-    // This replaced a Python-only `main.py` requirement that was coupled to a
-    // long-removed Dockerfile OTel-patching step (`patch_dockerfile_for_otel`,
-    // deleted 2026-08-01) and wrongly rejected every non-Python agent even though
-    // the rest of the pipeline builds from the Dockerfile alone.
-    let dockerfile_declares_start = contents.lines().any(|l| {
-        let u = l.trim_start().to_ascii_uppercase();
-        u.starts_with("CMD ")
-            || u.starts_with("CMD[")
-            || u.starts_with("ENTRYPOINT ")
-            || u.starts_with("ENTRYPOINT[")
-    });
+    // At least one Python entrypoint must exist
     let entrypoints = ["main.py", "src/main.py", "src/__main__.py", "__main__.py"];
-    let has_entrypoint_file = entrypoints.iter().any(|p| dest.join(p).exists());
-    if !dockerfile_declares_start && !has_entrypoint_file {
-        tracing::warn!(zip_path = %zip_path.display(), reason = "no startup command", "upload rejected: invalid agent structure");
+    let has_entrypoint = entrypoints.iter().any(|p| dest.join(p).exists());
+    if !has_entrypoint {
+        tracing::warn!(zip_path = %zip_path.display(), reason = "missing entrypoint", "upload rejected: invalid agent structure");
         return Err(
-            "no startup command found — add a CMD or ENTRYPOINT to your Dockerfile, or include \
-             a Python entrypoint (main.py, src/main.py, __main__.py, or src/__main__.py)"
+            "no Python entrypoint found (main.py, src/main.py, __main__.py, or src/__main__.py)"
                 .into(),
         );
     }
@@ -1653,8 +1656,7 @@ pub async fn execute_github_clone_and_deploy(
     // values are consumed there to restore the row on a version conflict, so
     // neither the tag nor a placeholder binding for them belongs in this
     // function any more.
-    let mut platform_env = state.agent_env(agent_id).await;
-    platform_env.extend(env);
+    let platform_env = super::deploy_env::build(&state, agent_id, owner_id, env).await;
     execute_clone_and_deploy(
         state.runtime.clone(),
         state.db.clone(),
