@@ -736,7 +736,7 @@ pub(crate) async fn orchestrator_stream(
     // card / discovery fetches, where a long hang is the wrong behaviour. This
     // client makes real agent turns, including the `message/send` fallback taken
     // by agents that reject `message/stream`, so it carries the agent budget.
-    let a2a_client = nasiko_react_agent::A2aClient::new()
+    let a2a_client = nasiko_react_agent::A2aClient::with_http_client(state.agent_client.clone())
         .with_timeout(std::time::Duration::from_secs(
             state.config.agent_call_timeout_secs,
         ))
@@ -1467,14 +1467,12 @@ async fn agent_stream(
     // flow_participants record written above carry the user binding.
     let build_agent_req = || {
         state
-            .http_client
+            .agent_client
             .post(&endpoint)
             .header("A2A-Version", nasiko_types::a2a::A2A_VERSION_HEADER_VALUE)
             .header("traceparent", crate::telemetry::traceparent_for(&flow_ctx))
-            // Agent turns can legitimately run past the shared client's short
-            // default (long tool calls, multi-step orchestration); override
-            // per-request instead of raising the global default for every caller
-            // of `state.http_client`.
+            // Agent turns can legitimately run long (long tool calls,
+            // multi-step orchestration), so this hop carries the agent budget.
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
             ))

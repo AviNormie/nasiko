@@ -2048,7 +2048,7 @@ async fn post_a2a_request<T: serde::Serialize + ?Sized>(
     // with its own deploy-time MCP_GATEWAY_TOKEN, and the user binding rides
     // the forwarded traceparent + the flow_participants record written before
     // this call (docs/MCP_GATEWAY_AGENT_AUTH.md).
-    // No per-request timeout: `client` is the MAF worker's own, built with the
+    // No per-request timeout: `client` is the worker's agent client, built with the
     // platform's agent-call budget because agent A2A calls are all it makes.
     let resp = {
         let r = client

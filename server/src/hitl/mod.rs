@@ -522,7 +522,7 @@ async fn deliver(state: AppState, row: HitlRequest) {
     // step, forever.
     let build_req = |body: &nasiko_types::a2a::JsonRpcRequest| {
         state
-            .http_client
+            .agent_client
             .post(&endpoint)
             .timeout(Duration::from_secs(
                 AGENT_RESUME_REQUEST_TIMEOUT_SECS as u64,

@@ -30,10 +30,15 @@ pub struct LlmConfig {
 /// Spawn the MAF background worker as a detached tokio task.
 /// Call once at server startup — the worker reads from the Redis stream
 /// `nasiko:maf:execute` and drives execution of queued MAF jobs.
+///
+/// `http_client` serves the worker's LLM calls; `agent_client` its calls to agents,
+/// which it makes without a per-request timeout, so that client carries the agent
+/// call budget.
 pub fn start_worker(
     db: PgPool,
     redis: redis::Client,
     http_client: reqwest::Client,
+    agent_client: reqwest::Client,
     // Cascade-limit enforcement for each step's agent call. Received from the
     // composition root rather than constructed here, so MAF shares the very
     // same guard instance the A2A dispatch and proxy paths use.
@@ -45,7 +50,7 @@ pub fn start_worker(
     hitl_store: Arc<dyn nasiko_hitl::HitlStore>,
 ) {
     let llm = LlmClient::new(
-        http_client.clone(),
+        http_client,
         llm_config.api_key,
         llm_config.base_url,
         llm_config.model,
@@ -53,7 +58,7 @@ pub fn start_worker(
     tokio::spawn(worker::run(
         db,
         redis,
-        http_client,
+        agent_client,
         flow_guard,
         agent_calls,
         llm,

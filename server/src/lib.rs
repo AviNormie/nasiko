@@ -7,6 +7,7 @@
 pub mod acl;
 pub mod admin;
 pub mod admission;
+pub mod agent_client;
 pub mod agent_lifecycle;
 pub mod agent_proxy;
 pub mod agent_scaling;
@@ -170,11 +171,10 @@ where
             base_url: state.config.openai_base_url.clone(),
             model: state.config.openai_model.clone(),
         };
-        // The MAF worker's client makes nothing but agent A2A calls, so it
-        // carries the agent-call budget at the client level rather than
-        // repeating a per-request override at each of the executor's call
-        // sites. Its own pool, deliberately: a background worker's traffic
-        // profile has no business sharing the request path's.
+        // The MAF worker's LLM calls carry the agent-call budget at the client
+        // level. Their own pool, deliberately: a background worker's traffic
+        // profile has no business sharing the request path's. Its agent calls go
+        // through `agent_client`, which is built with the same budget.
         let maf_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
@@ -185,6 +185,7 @@ where
             state.db.clone(),
             state.redis.clone(),
             maf_client,
+            state.agent_client.clone(),
             // The same guard the A2A dispatch and agent-proxy paths use, so a
             // MAF step's agent call is bounded by exactly the cascade limits
             // every other inter-agent call already is.

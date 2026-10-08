@@ -25,6 +25,9 @@ pub struct AppState {
     pub oci_storage: Arc<dyn nasiko_runtime::BlobStore>,
     pub usage_tracker: UsageTracker,
     pub http_client: reqwest::Client,
+    /// The client every server-to-agent call goes through (see `agent_client`): no idle
+    /// connections, so requests spread across an agent's replicas.
+    pub agent_client: reqwest::Client,
     pub auth: Arc<dyn AuthService>,
     pub mcp: nasiko_mcp_gateway::McpState,
     pub flow_guard: FlowGuard,
@@ -184,15 +187,18 @@ impl AppState {
         let resource_stats = crate::observability::resources::build_provider(&config, db.clone());
 
         // Shared client for short, bounded calls: embeddings, registry probes,
-        // OAuth, provider requests. Agent hops are *not* short — every call site
-        // that forwards to an agent container overrides this per-request with
-        // `config.agent_call_timeout_secs` rather than raising the default here
-        // and handing every other caller a ten-minute hang.
+        // OAuth, provider requests. Agent hops are *not* short, and go through
+        // `agent_client` instead.
         let http_client = reqwest::Client::builder()
             .pool_max_idle_per_host(20)
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .expect("failed to build http client");
+        // Agent calls set their own per-request timeout where they need one other
+        // than the agent-call budget.
+        let agent_client = crate::agent_client::build(std::time::Duration::from_secs(
+            config.agent_call_timeout_secs,
+        ));
 
         let routing_engine: Arc<dyn RoutingEngine> = Arc::new(
             nasiko_orchestrator::OssRoutingEngine::from_config(&config, http_client.clone()),
@@ -307,6 +313,7 @@ impl AppState {
             usage_tracker,
             resource_stats,
             http_client,
+            agent_client,
             auth,
             mcp,
             flow_guard,
@@ -355,7 +362,7 @@ impl AppState {
             Arc::new(nasiko_hitl::RuntimeResumeNotifier::new(
                 state.db.clone(),
                 state.runtime.clone(),
-                state.http_client.clone(),
+                state.agent_client.clone(),
                 // Same bound `gateway.rs`'s `flow_user` enforces on the agent's retry, so the
                 // nudge never registers a window the gateway will reject.
                 i64::from(state.config.flow_timeout_secs),
