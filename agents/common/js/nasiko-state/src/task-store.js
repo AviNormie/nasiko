@@ -201,7 +201,11 @@ export class NasikoTaskStore {
     if (this.#slots.get(taskId) === slot) this.#slots.delete(taskId);
   }
 
-  /** tasks/list, served by the server; it can lag by one coalescing window. */
+  /**
+   * tasks/list, served by the server; it can lag by one coalescing window. totalSize is unknown
+   * and reported as 0 (the state API gives no totals). statusTimestampAfter is inclusive (>=),
+   * like the Python store and unlike the SDK's in-memory store.
+   */
   async list(params, _context) {
     const limit = params.pageSize || DEFAULT_PAGE_SIZE;
     const page = await this.#client.listTasks({
@@ -215,7 +219,7 @@ export class NasikoTaskStore {
       .filter((task) => statusChangedSince(task, params.statusTimestampAfter))
       .map((task) => shaped(task, params));
     // totalSize stays 0: the state API reports no totals, and this page's size would be a wrong one.
-    return { tasks, nextPageToken: page.nextCursor ?? "", pageSize: limit, totalSize: 0 };
+    return { tasks, nextPageToken: page.nextCursor ?? "", pageSize: tasks.length, totalSize: 0 };
   }
 
   /** Write everything pending, stop the timers. Rejects with the first failure, after trying all. */

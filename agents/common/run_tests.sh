@@ -19,7 +19,7 @@ python="${PYTHON:-python3}"
 # themselves where google-adk is absent. langgraph covers the checkpointer, bounded as the stock langgraph
 # agent bounds it (oss/agents/langgraph/pyproject.toml); anyio is pytest's async runner.
 suites=(
-  "a2a-0.3|a2a-sdk[http-server]>=0.3,<1|google-adk>=1.0,<3"
+  "a2a-0.3|a2a-sdk[http-server]>=0.3,<1|google-adk>=2.11,<3"
   "a2a-1.x|a2a-sdk[http-server]==1.1.1|"
 )
 shared_requirements=("langgraph>=1.0,<2" "langgraph-checkpoint>=4.1,<5" "pytest" "anyio")
