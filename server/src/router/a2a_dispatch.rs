@@ -1272,6 +1272,18 @@ async fn agent_stream(
 
     state.flow_guard.init_flow(&flow_ctx, &agent.name).await;
 
+    // Minimal-code eligibility + holdout, decided once up front so the flow row recorded below and
+    // the addendum injection further down (which only skips when withheld) can't disagree about
+    // which arm this flow landed in. See `nasiko_coding_policy::in_minimal_code_holdout` for why a
+    // control arm is withheld at all — same reasoning as the brevity directive's own holdout.
+    let minimal_code_eligible =
+        agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills);
+    let minimal_code_holdout = minimal_code_eligible
+        && nasiko_coding_policy::in_minimal_code_holdout(
+            &flow_id,
+            state.config.minimal_code_holdout_pct,
+        );
+
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — same reason as the orchestrator
     // branch above and `agent_proxy.rs`. Without it `derive_boundary_signals`
@@ -1280,7 +1292,14 @@ async fn agent_stream(
     //
     // Re-opens on conflict — see the orchestrator branch above: a repeat request
     // under one traceparent must not inherit the previous one's `completed`.
-    let flow_metadata = serde_json::json!({ "context_id": context_id });
+    let mut flow_metadata = serde_json::json!({ "context_id": context_id });
+    if minimal_code_eligible {
+        flow_metadata["minimal_code"] = if minimal_code_holdout {
+            serde_json::json!({ "applied": false, "skipped": "holdout" })
+        } else {
+            serde_json::json!({ "applied": true })
+        };
+    }
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
@@ -1336,19 +1355,25 @@ async fn agent_stream(
     // server-injected context (enterprise supplemental knowledge), and it is what the agent is
     // meant to receive. Building from `query` here silently dropped that injection — the
     // context was resolved on every dispatch and then thrown away.
-    let effective_query =
-        if agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills) {
-            let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
-            tracing::info!(
+    let effective_query = if minimal_code_eligible && !minimal_code_holdout {
+        let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
+        tracing::info!(
+            agent_id = %agent.id,
+            %context_id,
+            prior_turn_count,
+            "a2a_dispatch: injecting minimal-code ladder"
+        );
+        format!("{outbound_query}\n{addendum}")
+    } else {
+        if minimal_code_holdout {
+            tracing::debug!(
                 agent_id = %agent.id,
                 %context_id,
-                prior_turn_count,
-                "a2a_dispatch: injecting minimal-code ladder"
+                "a2a_dispatch: minimal-code ladder withheld for this flow's holdout arm"
             );
-            format!("{outbound_query}\n{addendum}")
-        } else {
-            outbound_query.to_string()
-        };
+        }
+        outbound_query.to_string()
+    };
 
     // Streaming first (`message/stream`): agents that stream (all the Rust
     // seed agents, and python a2a-sdk servers) deliver live tokens and tool
