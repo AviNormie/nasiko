@@ -399,7 +399,7 @@ pub(crate) async fn build_and_deploy(
     // used to start from an empty map, so imported agents booted with no LLM env at
     // all and failed on their first call with a 401.
     let env_vars =
-        crate::agents::deploy_env::build(&state, agent_id, owner_id, Default::default()).await;
+        crate::agents::deploy_env::build(state, agent_id, owner_id, Default::default()).await;
     let mut spec = crate::agents::build_agent_spec(
         agent_id,
         &meta.name,
