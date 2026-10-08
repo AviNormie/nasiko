@@ -15,6 +15,7 @@ pub use worker::STREAM_KEY;
 use std::sync::Arc;
 
 use nasiko_flow::FlowGuard;
+use nasiko_types::agent_call::AgentCallMeter;
 use sqlx::PgPool;
 
 use llm::LlmClient;
@@ -37,6 +38,9 @@ pub fn start_worker(
     // composition root rather than constructed here, so MAF shares the very
     // same guard instance the A2A dispatch and proxy paths use.
     flow_guard: Arc<FlowGuard>,
+    // Counts each step's agent call as in flight to its agent. Received for the same reason
+    // as `flow_guard`: MAF calls agents directly, not through the server's proxy.
+    agent_calls: Arc<dyn AgentCallMeter>,
     llm_config: LlmConfig,
     hitl_store: Arc<dyn nasiko_hitl::HitlStore>,
 ) {
@@ -51,6 +55,7 @@ pub fn start_worker(
         redis,
         http_client,
         flow_guard,
+        agent_calls,
         llm,
         hitl_store,
     ));

@@ -1,9 +1,9 @@
-use crate::outbound::OutboundPrefix;
 use std::sync::Arc;
 use std::time::Instant;
 
 use nasiko_flow::{FlowContext, FlowGuard};
 use nasiko_types::a2a::{PauseReason, StreamDisposition, build_send_request_for_task};
+use nasiko_types::agent_call::AgentCallMeter;
 use sqlx::PgPool;
 use tracing::Instrument as _;
 use uuid::Uuid;
@@ -36,6 +36,19 @@ enum StepLoopOutcome {
 /// This is deliberately kept alongside the spans added by `run_maf`: spans go
 /// to Tempo and are the only way to see the trace tree, but they produce
 /// nothing in a deployment with no collector, which is the common local case.
+/// Count one step's agent call as in flight to `agent_id` for exactly as long as `call` runs.
+/// A pause is a reply, so only an `Err` counts as a failed call.
+async fn metered<T>(
+    agent_calls: &Arc<dyn AgentCallMeter>,
+    agent_id: Uuid,
+    call: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    let mut in_flight = agent_calls.begin(agent_id);
+    let result = call.await;
+    in_flight.set_succeeded(result.is_ok());
+    result
+}
+
 async fn timed<T>(
     label: &'static str,
     execution_id: Uuid,
@@ -219,12 +232,12 @@ pub async fn run_maf(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
     llm: &LlmClient,
     content: Option<&str>,
-    outbound: &dyn OutboundPrefix,
 ) -> Result<StepOutcome, String> {
     // A MAF run is driven by a background worker, not a request, so there is
     // no inbound traceparent to continue — this span is legitimately a root.
@@ -250,12 +263,12 @@ pub async fn run_maf(
         client,
         db,
         flow_guard,
+        agent_calls,
         execution_id,
         user_id,
         maf_def,
         llm,
         content,
-        outbound,
     )
     .instrument(span)
     .await
@@ -266,17 +279,13 @@ async fn run_maf_inner(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
     llm: &LlmClient,
     content: Option<&str>,
-    outbound: &dyn OutboundPrefix,
 ) -> Result<StepOutcome, String> {
-    // Resolved ONCE for the whole execution, not per step: a run is one unit of work, and a
-    // change landing between step 2 and step 3 would otherwise leave a single execution governed
-    // by two different prefixes — harder to reason about, and harder to audit, than either end.
-    let outbound_prefix = outbound.resolve().await;
     // Seed one entry per step and persist immediately, so the full step list
     // is visible in the DB before the (possibly slow) planning LLM call even
     // starts.
@@ -418,6 +427,7 @@ async fn run_maf_inner(
             client,
             db,
             flow_guard,
+            agent_calls,
             execution_id,
             user_id,
             step,
@@ -428,7 +438,6 @@ async fn run_maf_inner(
             &mut total_tokens,
             &mut total_cost,
             llm,
-            outbound_prefix.as_deref(),
         )
         .await
         {
@@ -449,8 +458,6 @@ async fn run_maf_inner(
         total_cost,
         &output_generation,
         llm,
-        outbound,
-        outbound_prefix.as_deref(),
     )
     .await
 }
@@ -468,6 +475,7 @@ pub async fn run_maf_from(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
@@ -480,13 +488,7 @@ pub async fn run_maf_from(
     resume_task_id: String,
     resume_context_id: String,
     injected_answer: String,
-    outbound: &dyn OutboundPrefix,
 ) -> Result<StepOutcome, String> {
-    // Re-resolved on resume rather than carried across the pause. A paused execution can sit for
-    // days, and the steps that run after a human answers should run under the policy in force
-    // when they actually run — the stored `step_results[i].prompt` deliberately holds the clean
-    // prompt, never a prefixed copy, so there is nothing stale to carry.
-    let outbound_prefix = outbound.resolve().await;
     // `resume_index` comes from `hitl_requests.maf_step_index`, off the same DB row
     // `worker.rs::create_hitl_request` already bounds-checks against `maf_def.steps` before
     // ever persisting it — but that check happens once, on a different (and possibly
@@ -536,6 +538,7 @@ pub async fn run_maf_from(
         client,
         db,
         flow_guard,
+        agent_calls,
         execution_id,
         user_id,
         &maf_def.steps[resume_index],
@@ -563,6 +566,7 @@ pub async fn run_maf_from(
             client,
             db,
             flow_guard,
+            agent_calls,
             execution_id,
             user_id,
             &maf_def.steps[i],
@@ -573,7 +577,6 @@ pub async fn run_maf_from(
             &mut total_tokens,
             &mut total_cost,
             llm,
-            outbound_prefix.as_deref(),
         )
         .await
         {
@@ -594,8 +597,6 @@ pub async fn run_maf_from(
         total_cost,
         &output_generation,
         llm,
-        outbound,
-        outbound_prefix.as_deref(),
     )
     .await
 }
@@ -608,6 +609,7 @@ async fn execute_step(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     step: &MafStep,
@@ -618,7 +620,6 @@ async fn execute_step(
     total_tokens: &mut i64,
     total_cost: &mut f64,
     llm: &LlmClient,
-    outbound_prefix: Option<&str>,
 ) -> StepLoopOutcome {
     step_results[i].status = "running".to_string();
     persist_progress(db, execution_id, step_results, *total_tokens, *total_cost).await;
@@ -856,22 +857,21 @@ async fn execute_step(
         return StepLoopOutcome::Failed(err);
     }
 
-    // Org policy is appended as its own part inside `call_agent`, never composed back into
-    // `actual_prompt`: that value is persisted to `step_results[i].prompt` below and read back
-    // verbatim on resume, so folding the policy into it in place would put the policy in the
-    // record — and then re-append it to the already-appended copy on every resume.
     let raw_response = timed(
         "call_agent",
         execution_id,
         Some(step.step_index),
-        call_agent(
-            client,
-            &endpoint,
-            &execution_id.to_string(),
-            &user_id.to_string(),
-            &actual_prompt,
-            outbound_prefix,
-            &traceparent,
+        metered(
+            agent_calls,
+            step.agent_id,
+            call_agent(
+                client,
+                &endpoint,
+                &execution_id.to_string(),
+                &user_id.to_string(),
+                &actual_prompt,
+                &traceparent,
+            ),
         ),
     )
     .instrument(step_span)
@@ -976,6 +976,7 @@ async fn continue_paused_step(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     step: &MafStep,
@@ -1021,14 +1022,18 @@ async fn continue_paused_step(
     .execute(db)
     .await;
 
-    let call_result = call_agent_continuation(
-        client,
-        &step.agent_endpoint,
-        context_id,
-        task_id,
-        &user_id.to_string(),
-        injected_answer,
-        &traceparent,
+    let call_result = metered(
+        agent_calls,
+        step.agent_id,
+        call_agent_continuation(
+            client,
+            &step.agent_endpoint,
+            context_id,
+            task_id,
+            &user_id.to_string(),
+            injected_answer,
+            &traceparent,
+        ),
     )
     .await;
 
@@ -1246,8 +1251,6 @@ async fn finish_run(
     total_cost: f64,
     output_generation: &str,
     llm: &LlmClient,
-    outbound: &dyn OutboundPrefix,
-    outbound_prefix: Option<&str>,
 ) -> Result<StepOutcome, String> {
     // ── LLM call 4: synthesise final output ───────────────────────────────────
     // Use the guidelines generated by the planner at runtime.
@@ -1260,7 +1263,7 @@ async fn finish_run(
         user_id,
         None,
         llm,
-        generate_final_output(&step_results, guidelines, llm, outbound, outbound_prefix),
+        generate_final_output(&step_results, guidelines, llm),
     )
     .await
     .map_err(|e| format!("final output generation failed: {e}"))?;
@@ -1860,8 +1863,6 @@ async fn generate_final_output(
     step_results: &[StepResult],
     guidelines: &str,
     llm: &LlmClient,
-    outbound: &dyn OutboundPrefix,
-    outbound_prefix: Option<&str>,
 ) -> Result<(String, LlmUsage), String> {
     // System prompt matches Python's MAFExecutor._create_final_output exactly.
     let system = "You are a Multi-Agent Flow (MAF) final output generator.\n\
@@ -1931,21 +1932,10 @@ async fn generate_final_output(
         "additionalProperties": false
     });
 
-    // This is the one LLM on the MAF path whose output the USER reads. Every step's agent gets
-    // the prefix on its own prompt, but those agents only feed this synthesiser, which is then
-    // free to put anything it was handed into the final answer — so a rule like "never repeat a
-    // customer email address" is obeyed by every agent and then broken here, by the platform
-    // itself, unless the same text governs this call too. Prepended to the system prompt rather
-    // than the user turn so it also precedes the one-shot exchange below.
-    //
-    // With nothing configured `compose` returns `system` unchanged, so the prompt stays
-    // byte-identical to Python's `MAFExecutor._create_final_output`.
-    let system = outbound.compose(outbound_prefix, system);
-
     let (json, usage) = llm
         .chat_json_schema(
             vec![
-                ChatMessage::system(&system),
+                ChatMessage::system(system),
                 ChatMessage::user(one_shot_human),
                 ChatMessage::assistant(one_shot_assistant),
                 ChatMessage::user(user),
@@ -1993,23 +1983,8 @@ async fn call_agent(
     context_id: &str,
     user_id: &str,
     prompt: &str,
-    // Organization policy (L0), appended as its own part — never spliced into `prompt`, which is
-    // persisted verbatim to `step_results[i].prompt` and read back on resume (see this function's
-    // caller). Same representation `a2a_dispatch.rs`/`agent_proxy.rs`/`tool.rs` use for the exact
-    // same reason: a second, independently-addressable part rather than a merged string.
-    outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
-    // Untagged (`{"text": ...}`, no `"kind"`) — this always builds a proto-style `"SendMessage"`
-    // request (below), and this platform's real `a2a-lf` `Part` type has no `"kind"` field at all
-    // (field-presence union serialization); a real agent's strict parser rejects an unexpected
-    // one outright. See `nasiko_agent_proxy::context_part`'s module doc for the full dialect
-    // picture — this call site doesn't depend on that crate since its method name is a fixed
-    // literal, never negotiated.
-    let mut parts = vec![serde_json::json!({"text": prompt})];
-    if let Some(org) = outbound_prefix {
-        parts.push(serde_json::json!({ "text": org }));
-    }
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": "1",
@@ -2025,7 +2000,7 @@ async fn call_agent(
                 "messageId": uuid::Uuid::new_v4().to_string(),
                 "contextId": context_id,
                 "role": "ROLE_USER",
-                "parts": parts
+                "parts": [{"text": prompt}]
             }
         }
     });
@@ -2364,11 +2339,13 @@ mod resume_tests {
             nasiko_flow::FlowConfig::default(),
         ));
         let llm = LlmClient::new(reqwest::Client::new(), String::new(), None, String::new());
+        let agent_calls: Arc<dyn AgentCallMeter> = Arc::new(RecordingMeter::default());
 
         let result = run_maf_from(
             &client,
             &db,
             &flow_guard,
+            &agent_calls,
             Uuid::new_v4(),
             Uuid::new_v4(),
             &maf_def,
@@ -2381,7 +2358,6 @@ mod resume_tests {
             "task-1".into(),
             "ctx-1".into(),
             "the human's answer".into(),
-            &crate::outbound::NoOutboundPrefix,
         )
         .await;
 
@@ -2395,195 +2371,64 @@ mod resume_tests {
         );
     }
 
-    /// An `OutboundPrefix` that supplies a recognisable prefix and joins it the way the real
-    /// server adapter does (`nasiko_react_agent::prefixed`, which this crate cannot reach).
-    #[derive(Debug)]
-    struct FixedPrefix(&'static str);
+    /// Per call: the agent, the result it was told (if any), and whether its handle was dropped.
+    type RecordedCalls = Arc<std::sync::Mutex<Vec<(Uuid, Option<bool>, bool)>>>;
 
-    #[async_trait::async_trait]
-    impl crate::outbound::OutboundPrefix for FixedPrefix {
-        async fn resolve(&self) -> Option<String> {
-            Some(self.0.to_string())
-        }
-
-        /// Delegates to the real join rather than re-spelling it. A hand-rolled copy here made
-        /// the assertion below self-fulfilling: it would have kept passing if
-        /// `nasiko_react_agent::prefixed` changed, which is exactly the drift
-        /// `OutboundPrefix::compose` exists to prevent.
-        fn compose(&self, prefix: Option<&str>, body: &str) -> String {
-            nasiko_react_agent::prefixed(prefix, body)
-        }
+    /// Records what a step's agent call reports through the metering seam.
+    #[derive(Default)]
+    struct RecordingMeter {
+        calls: RecordedCalls,
     }
 
-    /// The MAF synthesiser (LLM call 4) is the only model on that path whose output the USER
-    /// reads. Every step's agent is handed the prefix on its own prompt, but those agents just
-    /// feed this call, which is then free to put anything it was given into the final answer — so
-    /// a rule like "never repeat a customer email address" is honoured by every agent and then
-    /// broken by the platform itself. Asserted on the wire, against the SYSTEM message, because
-    /// that is the only place the guarantee actually lives.
-    #[tokio::test]
-    async fn the_final_output_synthesiser_is_governed_by_the_outbound_prefix() {
-        let mut llm_api = mockito::Server::new_async().await;
-        let hit = llm_api
-            .mock("POST", "/chat/completions")
-            // Keys come out alphabetical (`serde_json` without `preserve_order`), so the
-            // message serialises as `{"content":...,"role":...}`. Anchoring on the content that
-            // STARTS with the prefix and still carries the synthesiser's own opening line pins
-            // the prefix to the system prompt specifically, not merely somewhere in the body.
-            .match_body(mockito::Matcher::Regex(
-                r#""content":"ORG POLICY[\s\S]*You are a Multi-Agent Flow"#.into(),
-            ))
-            .with_status(200)
-            .with_body(
-                r#"{"choices":[{"message":{"content":"{\"final_output\":\"done\"}"}}],"usage":{"total_tokens":7}}"#,
-            )
-            .create_async()
-            .await;
-
-        let llm = LlmClient::new(
-            reqwest::Client::new(),
-            "k".into(),
-            Some(llm_api.url()),
-            "test-model".into(),
-        );
-        let prefix = FixedPrefix("ORG POLICY");
-        let (out, _) = generate_final_output(&[], "guidelines", &llm, &prefix, Some("ORG POLICY"))
-            .await
-            .expect("synthesiser call");
-
-        hit.assert_async().await;
-        assert_eq!(out, "done");
+    struct RecordingHandle {
+        calls: RecordedCalls,
+        index: usize,
     }
 
-    /// And with nothing configured the system prompt must go out byte-identical to Python's
-    /// `MAFExecutor._create_final_output` — the parity this file's own comment claims.
-    #[tokio::test]
-    async fn an_unconfigured_deployment_leaves_the_synthesiser_prompt_untouched() {
-        let mut llm_api = mockito::Server::new_async().await;
-        let hit = llm_api
-            .mock("POST", "/chat/completions")
-            .match_body(mockito::Matcher::Regex(
-                r#""content":"You are a Multi-Agent Flow"#.into(),
-            ))
-            .with_status(200)
-            .with_body(
-                r#"{"choices":[{"message":{"content":"{\"final_output\":\"done\"}"}}],"usage":{"total_tokens":7}}"#,
-            )
-            .create_async()
-            .await;
-
-        let llm = LlmClient::new(
-            reqwest::Client::new(),
-            "k".into(),
-            Some(llm_api.url()),
-            "test-model".into(),
-        );
-        let (_, _) = generate_final_output(
-            &[],
-            "guidelines",
-            &llm,
-            &crate::outbound::NoOutboundPrefix,
-            None,
-        )
-        .await
-        .expect("synthesiser call");
-
-        hit.assert_async().await;
-    }
-
-    /// Organization policy, appended as its own `parts[]` entry — never composed into the prompt
-    /// text itself, which is what `step_results[i].prompt` persists and a resume reads back
-    /// verbatim (see `execute_step`'s call site: this must never leak the policy into that
-    /// record). Untagged (no `"kind"` field): `call_agent` always builds a proto-style
-    /// `"SendMessage"` request, and this platform's real `a2a-lf` agents reject an unexpected
-    /// `"kind"` outright.
-    #[tokio::test]
-    async fn call_agent_appends_org_policy_as_its_own_part() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/jsonrpc")
-            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "params": {"message": {"parts": [
-                    {"text": "do the thing"},
-                    {"text": "POLICY"}
-                ]}}
-            })))
-            .match_request(|request| forwarded_part_count(request) == 2)
-            .with_status(200)
-            .with_body(completed_agent_response())
-            .create_async()
-            .await;
-
-        let client = reqwest::Client::new();
-        let result = call_agent(
-            &client,
-            &server.url(),
-            "ctx-1",
-            "user-1",
-            "do the thing",
-            Some("POLICY"),
-            "00-trace-span-01",
-        )
-        .await;
-
-        mock.assert_async().await;
-        assert!(matches!(result, Ok(AgentCallOutcome::Completed(_))));
-    }
-
-    /// The ordinary case, alongside it: no policy configured must send exactly one part, the
-    /// prompt's own text, unchanged.
-    #[tokio::test]
-    async fn call_agent_sends_only_the_prompt_when_no_policy_is_configured() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/jsonrpc")
-            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "params": {"message": {"parts": [{"text": "do the thing"}]}}
-            })))
-            .match_request(|request| forwarded_part_count(request) == 1)
-            .with_status(200)
-            .with_body(completed_agent_response())
-            .create_async()
-            .await;
-
-        let client = reqwest::Client::new();
-        let result = call_agent(
-            &client,
-            &server.url(),
-            "ctx-1",
-            "user-1",
-            "do the thing",
-            None,
-            "00-trace-span-01",
-        )
-        .await;
-
-        mock.assert_async().await;
-        assert!(matches!(result, Ok(AgentCallOutcome::Completed(_))));
-    }
-
-    /// How many message parts a forwarded request carried. `mockito::Matcher::PartialJson` accepts
-    /// extra trailing array elements, so on its own it cannot say "and nothing else was sent"; a
-    /// test that claims an exact list pairs it with this.
-    fn forwarded_part_count(request: &mockito::Request) -> usize {
-        request
-            .body()
-            .ok()
-            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(raw).ok())
-            .and_then(|body| {
-                body.pointer("/params/message/parts")
-                    .and_then(serde_json::Value::as_array)
-                    .map(Vec::len)
+    impl AgentCallMeter for RecordingMeter {
+        fn begin(&self, agent_id: Uuid) -> Box<dyn nasiko_types::agent_call::AgentCallHandle> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push((agent_id, None, false));
+            Box::new(RecordingHandle {
+                calls: self.calls.clone(),
+                index: calls.len() - 1,
             })
-            .unwrap_or(0)
+        }
     }
 
-    fn completed_agent_response() -> String {
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}
+    impl nasiko_types::agent_call::AgentCallHandle for RecordingHandle {
+        fn set_succeeded(&mut self, succeeded: bool) {
+            self.calls.lock().unwrap()[self.index].1 = Some(succeeded);
+        }
+    }
+
+    impl Drop for RecordingHandle {
+        fn drop(&mut self) {
+            self.calls.lock().unwrap()[self.index].2 = true;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_metered_call_is_in_flight_only_while_it_runs_and_reports_its_result() {
+        let meter = RecordingMeter::default();
+        let calls = meter.calls.clone();
+        let meter: Arc<dyn AgentCallMeter> = Arc::new(meter);
+        let agent = Uuid::new_v4();
+
+        let observed = metered(&meter, agent, async {
+            // Mid-call: begun, no result yet, still held.
+            Ok::<_, String>(calls.lock().unwrap().clone())
         })
-        .to_string()
+        .await
+        .unwrap();
+        assert_eq!(observed, vec![(agent, None, false)]);
+        assert_eq!(calls.lock().unwrap()[0], (agent, Some(true), true));
+
+        let failed = metered(&meter, agent, async {
+            Err::<(), _>("HTTP 502".to_string())
+        })
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(calls.lock().unwrap()[1], (agent, Some(false), true));
     }
 }

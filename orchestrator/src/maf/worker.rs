@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 use nasiko_flow::FlowGuard;
 use nasiko_hitl::{HitlStore, NewHitlRequest};
+use nasiko_types::agent_call::AgentCallMeter;
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -36,6 +37,7 @@ pub async fn run(
     redis: redis::Client,
     http_client: reqwest::Client,
     flow_guard: Arc<FlowGuard>,
+    agent_calls: Arc<dyn AgentCallMeter>,
     llm: LlmClient,
     hitl_store: Arc<dyn HitlStore>,
 ) {
@@ -65,6 +67,7 @@ pub async fn run(
         &db,
         &http_client,
         &flow_guard,
+        &agent_calls,
         &llm,
         &hitl_store,
         &consumer,
@@ -102,6 +105,7 @@ pub async fn run(
                             &db,
                             &http_client,
                             &flow_guard,
+                            &agent_calls,
                             &llm,
                             &hitl_store,
                         )
@@ -256,6 +260,7 @@ async fn process_job(
     db: &PgPool,
     http_client: &reqwest::Client,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
 ) {
@@ -332,6 +337,7 @@ async fn process_job(
                     http_client,
                     db,
                     flow_guard,
+                    agent_calls,
                     execution_id,
                     user_id,
                     &maf_def,
@@ -346,6 +352,7 @@ async fn process_job(
                         http_client,
                         db,
                         flow_guard,
+                        agent_calls,
                         execution_id,
                         user_id,
                         &maf_def,
@@ -644,11 +651,13 @@ async fn re_enqueue(
     let _: redis::RedisResult<String> = xadd.query_async(conn).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reclaim_pending(
     conn: &mut redis::aio::MultiplexedConnection,
     db: &PgPool,
     http_client: &reqwest::Client,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
     consumer: &str,
@@ -700,6 +709,7 @@ async fn reclaim_pending(
                 db,
                 http_client,
                 flow_guard,
+                agent_calls,
                 llm,
                 hitl_store,
             )

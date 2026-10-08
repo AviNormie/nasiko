@@ -187,6 +187,8 @@ where
             // MAF step's agent call is bounded by exactly the cascade limits
             // every other inter-agent call already is.
             std::sync::Arc::new(state.flow_guard.clone()),
+            // Step calls bypass the proxy, so they report their load through this seam.
+            state.genai_metrics.agent_call_meter(),
             llm_config,
             state.hitl_store.clone(),
         );
