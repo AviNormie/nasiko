@@ -314,7 +314,8 @@ install_shutdown_hooks(app)  # flushes pending writes when the server stops
 same code runs unchanged on your laptop; otherwise it registers your agent as durable at startup,
 in the background. A LangGraph agent swaps `MemorySaver()` for `make_checkpointer()` the same
 way. `oss/agents/common/check_vendored.py` fails CI when a copy drifts from the original. Each
-agent may make 600 state calls a minute by default, across its replicas; a rate-limited call
+agent may make 1200 state calls a minute per ready replica by default
+(`AGENT_STATE_RATE_LIMIT_PER_MINUTE`, so the budget grows as the agent scales); a rate-limited call
 waits out `Retry-After` (30 s at most), then raises. A turn of `oss/agents/langgraph` (its graph
 runs with `durability="exit"`: one checkpoint per run) costs 7 calls, 8 on a2a-sdk 1.x.
 
