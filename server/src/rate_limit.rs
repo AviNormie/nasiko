@@ -45,13 +45,20 @@ impl RateLimiter {
     /// [`allow`](Self::allow), saying on refusal how long remains until
     /// `key`'s window resets, which is when a retry can first succeed.
     pub(crate) fn check(&self, key: &str) -> Result<(), Duration> {
+        self.check_with_limit(key, self.limit)
+    }
+
+    /// [`check`](Self::check) against `limit` instead of the one the limiter was built with, for
+    /// a caller whose budget changes while its window is open (it is compared with the count so
+    /// far, which is kept).
+    pub(crate) fn check_with_limit(&self, key: &str, limit: u32) -> Result<(), Duration> {
         let now = Instant::now();
         let mut entry = self.buckets.entry(key.to_owned()).or_insert((now, 0));
         let elapsed = now.duration_since(entry.0);
         if elapsed > self.window {
             *entry = (now, 1);
             Ok(())
-        } else if entry.1 < self.limit {
+        } else if entry.1 < limit {
             entry.1 += 1;
             Ok(())
         } else {
@@ -138,6 +145,15 @@ mod tests {
         let wait = limiter.check("a").expect_err("over the limit");
         assert!(wait <= window - Duration::from_millis(20), "{wait:?}");
         assert!(wait > window - Duration::from_secs(5), "{wait:?}");
+    }
+
+    #[test]
+    fn a_raised_limit_applies_to_the_window_already_open() {
+        let limiter = RateLimiter::new(1, Duration::from_secs(60));
+        assert_eq!(limiter.check_with_limit("a", 1), Ok(()));
+        assert!(limiter.check_with_limit("a", 1).is_err());
+        assert_eq!(limiter.check_with_limit("a", 2), Ok(()));
+        assert!(limiter.check_with_limit("a", 2).is_err());
     }
 
     #[test]

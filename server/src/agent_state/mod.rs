@@ -41,7 +41,8 @@
 //! - **Opaque.** A task body or value is stored and returned byte for byte as the agent sent it,
 //!   never parsed into a JSON tree and re-encoded (`payload`).
 //! - **Bounded.** A value over `AGENT_STATE_MAX_BODY_BYTES` as sent is a 413, and an agent
-//!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute gets a 429, with
+//!   making more than `AGENT_STATE_RATE_LIMIT_PER_MINUTE` requests a minute for each of its ready
+//!   replicas (cached count, at least one, never read from the runtime per request) gets a 429, with
 //!   `Retry-After` set to what is left of the window. Before any credential is looked up, one
 //!   network address may make ten agents' worth of requests (`peer`).
 //! - **Encrypted at rest.** Task bodies and values are stored as AES-256-GCM ciphertext under the
