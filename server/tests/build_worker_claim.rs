@@ -13,7 +13,7 @@
 //!
 //! Run with infra up (`just infra`):
 //!   `just test-one build_worker_claim`
-//! Override the admin DSN with TEST_PG_ADMIN_URL if Postgres isn't on :5432.
+//! TEST_PG_ADMIN_URL (the admin DSN of a disposable Postgres) is required; the test panics without it.
 
 use nasiko_server::agents::build_worker::claim_next_job;
 use sqlx::PgPool;
@@ -21,8 +21,10 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 fn admin_url() -> String {
+    // No default: a fallback to a developer's local Postgres would run this test's scratch-database
+    // DDL against whatever happens to be listening there.
     std::env::var("TEST_PG_ADMIN_URL")
-        .unwrap_or_else(|_| "postgres://nasiko:nasiko@localhost:5432/nasiko_dev".to_string())
+        .expect("TEST_PG_ADMIN_URL must be set to the admin URL of a disposable PostgreSQL")
 }
 
 /// Provision an isolated, migrated database, hand its URL to `body`, and drop

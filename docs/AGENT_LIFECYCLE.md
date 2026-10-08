@@ -344,12 +344,13 @@ replaced, never used.
 | `MCP_GATEWAY_TOKEN` | Your agent's credential for the gateway; rotated on every deploy |
 | `MCP_GATEWAY_CONNECT_URL` | The gateway endpoint with the credential in the path, for MCP clients that accept only a URL |
 | `OPENAI_BASE_URL`, `OPENAI_API_KEY` (or the Anthropic/Gemini equivalents) | Routes your LLM SDK through the platform's LLM gateway with an agent identity token |
-| `NASIKO_STATE_URL` | Base URL of the agent state API (`/api/agent-state`); set when the platform's public URL is configured |
-| `NASIKO_AGENT_TOKEN` | Your agent's credential for the state API, separate from the gateway credential; rotated on every deploy |
+| `NASIKO_STATE_URL` | Base URL of the agent state API (`/api/agent-state`). Absent when `MCP_GATEWAY_PUBLIC_URL` does not end in `/api/mcp` |
+| `NASIKO_AGENT_TOKEN` | Your agent's credential for the state API, separate from the gateway credential; rotated on every deploy. Absent together with `NASIKO_STATE_URL` |
 
 A rotated credential keeps its predecessor valid for 15 minutes, so a rollout still in progress
-is not cut off. A redeploy marks the agent's state as in-memory again until your task store
-registers at startup.
+is not cut off. A deploy of a new image (update, rollback, upload, import) marks the agent's state
+as in-memory again until your task store registers at startup; a restart or startup recovery of the
+same image leaves the recorded mode as it was.
 
 ---
 
