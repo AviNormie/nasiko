@@ -220,6 +220,10 @@ pub struct TestServer {
     /// response.
     #[allow(dead_code)]
     pub flow_events: nasiko_flow::FlowEventBus,
+    /// Clone of the running server's `AppState::genai_metrics`: lets a test read the
+    /// in-process per-agent in-flight count while a request is held open.
+    #[allow(dead_code)]
+    pub genai_metrics: nasiko_server::telemetry::genai::GenAiMetrics,
     db_name: String,
     admin_pool: PgPool,
 }
@@ -327,6 +331,7 @@ impl TestServer {
         let state =
             AppState::from_config_with_db(config, auth, runtime, oci_storage, db.clone()).await;
         let flow_events = state.flow_events.clone();
+        let genai_metrics = state.genai_metrics.clone();
 
         let app = nasiko_server::build_app(state, fallback);
 
@@ -343,6 +348,7 @@ impl TestServer {
             db: db.clone(),
             runtime: fake_handle,
             flow_events,
+            genai_metrics,
             db_name,
             admin_pool: admin,
         }
