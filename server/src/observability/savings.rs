@@ -974,8 +974,6 @@ pub async fn get_savings(db: &PgPool, q: &SavingsQuery<'_>) -> Result<SavingsDat
 /// starts lying in the other direction.
 const UNINSTRUMENTED_LAYERS: &[&str] = &[
     "compress_tool_result", // IP-3, oss/react-agent/src/context.rs
-    "compress_history",     // IP-4, oss/orchestrator/src/session_history.rs
-    "context_selection",    // the PACMS budget effect
     "prompt_comments",      // measured agent-side; no span attribute carries it out yet
 ];
 
@@ -1241,13 +1239,27 @@ mod tests {
 
     #[test]
     fn an_uninstrumented_program_says_so_instead_of_claiming_nothing_happened() {
-        // The bug this guards: "No session exceeded its context budget" reads as a measurement
-        // when the truth is that nothing measures it. A dashboard that mis-explains a zero is
-        // worse than one that leaves it bare.
-        let note = zero_note("pacms", &[]);
+        // The bug this guards: a zero explained as a finding ("nothing exceeded its budget") when
+        // the truth is that nothing measures it. A dashboard that mis-explains a zero is worse
+        // than one that leaves it bare.
+        //
+        // `prompt_comments` is the remaining case: the coding agent measures it and no span
+        // attribute carries it out. PACMS left this list when its writer shipped.
+        let note = zero_note("prompt_comments", &[]);
         assert!(note.contains("not measured yet"), "{note}");
-        // The old wording claimed no session had exceeded its budget, which reads as a finding.
         assert!(!note.contains("exceeded"), "{note}");
+    }
+
+    /// The counterpart to the test above, and the reason that list is a `const` and not a comment:
+    /// a layer that is now written must stop claiming it is not, or the note lies in the other
+    /// direction and understates a real figure forever.
+    #[test]
+    fn a_layer_with_a_writer_no_longer_claims_to_be_unmeasured() {
+        assert!(!UNINSTRUMENTED_LAYERS.contains(&"context_selection"));
+        assert!(!UNINSTRUMENTED_LAYERS.contains(&"compress_history"));
+        assert!(!program_uninstrumented("pacms"));
+        let note = zero_note("pacms", &[]);
+        assert!(!note.contains("not measured yet"), "{note}");
     }
 
     #[test]
@@ -1258,12 +1270,14 @@ mod tests {
 
     #[test]
     fn a_partially_counted_program_declares_itself_an_under_estimate() {
-        // Caveman reports payload compression but not the tool-result or history layers, so its
+        // Caveman reports payload and history compression but not the tool-result layer, so its
         // total is real and low. Saying so is the difference between understated and wrong.
-        let note = partial_note("caveman").expect("caveman is partial while IP-3/IP-4 are silent");
+        let note = partial_note("caveman").expect("caveman is partial while IP-3 is silent");
         assert!(note.contains("higher than this"), "{note}");
         // Named in plain words, not by the ledger's layer key.
-        assert!(note.contains("chat history"), "{note}");
+        assert!(note.contains("repeated tool output"), "{note}");
+        // History compression has a writer now, so it must not still be listed as uncounted.
+        assert!(!note.contains("chat history"), "{note}");
         assert!(
             !note.contains("compress_"),
             "no internal layer names in user copy: {note}"

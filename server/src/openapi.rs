@@ -99,6 +99,16 @@ use crate::state::AppState;
         crate::observability::handler::get_span_details,
         crate::observability::handler::get_agent_stats,
         crate::observability::handler::get_finops_dashboard,
+        // The four FinOps read sources the React data layer consumes; they
+        // were annotated but never registered, so the snapshot the frontend
+        // generates its client from lacked them (react/docs/phase0 X8).
+        crate::observability::handler::get_context_savings,
+        crate::observability::handler::get_context_savings_agents,
+        crate::observability::handler::get_context_savings_top_requests,
+        crate::observability::handler::get_finops_spend_timeseries,
+        crate::observability::handler::get_finops_spend_calendar,
+        crate::observability::handler::get_finops_spend_calendar_day,
+        crate::observability::handler::get_finops_attributions,
         crate::observability::handler::get_finops_insights,
         crate::observability::handler::get_agent_hours,
         crate::observability::routes::agent_logs,
