@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import nasiko_state
 import pytest
 from fake_state_server import Row
 from nasiko_state import (
@@ -100,6 +101,49 @@ class TestRoundTrip:
         await store.get("t1")
 
         assert state_server.registrations == []
+
+
+class TestLookups:
+    """What a read costs: the platform rate-limits per agent, and a2a-sdk 1.x reads a new task often."""
+
+    async def test_a_task_not_found_is_not_asked_for_again_right_away(self, store, state_server):
+        results = [await store.get("fresh") for _ in range(3)]
+
+        assert results == [None, None, None]
+        assert len(state_server.calls("GET", "/tasks/fresh")) == 1
+
+    async def test_a_miss_is_asked_again_once_it_is_old(self, store, state_server, monkeypatch):
+        monkeypatch.setattr(nasiko_state, "ABSENT_CACHE_SECONDS", 0)
+
+        await store.get("fresh")
+        await store.get("fresh")
+
+        assert len(state_server.calls("GET", "/tasks/fresh")) == 2
+
+    async def test_a_save_after_a_miss_is_what_get_returns(self, store, state_server):
+        await store.get("t1")
+
+        await store.save(new_task("t1", "working"))
+
+        assert state_name(await store.get("t1")) == "working"
+
+    async def test_a_task_that_exists_is_always_read_from_the_server(self, store, state_server):
+        await store.save(new_task("t1", "working"))
+        state_server.requests.clear()
+
+        await store.get("t1")
+        await store.get("t1")
+
+        assert len(state_server.calls("GET", "/tasks/t1")) == 2  # another replica may have changed it
+
+    async def test_a_deleted_task_is_looked_up_again(self, store, state_server):
+        await store.get("t1")
+        await store.save(new_task("t1", "working"))
+        await store.delete("t1")
+        state_server.requests.clear()
+
+        assert await store.get("t1") is None
+        assert len(state_server.calls("GET", "/tasks/t1")) == 1
 
 
 class TestFailures:
