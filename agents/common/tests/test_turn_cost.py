@@ -34,8 +34,10 @@ class StockLanggraphTurn(AgentExecutor):
         self.checkpointer = checkpointer
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        task = context.current_task or start_task(context.message)
-        await event_queue.enqueue_event(task)
+        task = context.current_task
+        if task is None:
+            task = start_task(context.message)
+            await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue, task.id, task.context_id)
         graph = react_agent_with_one_tool_call(self.checkpointer)
         config = {"configurable": {"thread_id": task.context_id}}

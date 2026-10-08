@@ -88,8 +88,12 @@ class DocReaderExecutor(AgentExecutor):
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         query = context.get_user_input() or ""
-        task = context.current_task or new_task_from_user_message(context.message)
-        await event_queue.enqueue_event(task)
+        task = context.current_task
+        if task is None:
+            # Enqueue only a new task. Re-enqueueing a stored input-required task on resume makes
+            # the SDK replay the stale pause as the first event and drop the human's answer.
+            task = new_task_from_user_message(context.message)
+            await event_queue.enqueue_event(task)
 
         tracer = trace.get_tracer("doc-reader-agent")
         parent_ctx = request_otel_context.get() or otel_context.Context()
