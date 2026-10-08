@@ -395,3 +395,23 @@ def _load_google_adk_agent():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+async def test_the_agent_survives_losing_the_session_create_race_to_another_replica(monkeypatch):
+    module = _load_google_adk_agent()
+    agent = module.ResearchAgent()
+    created = []
+
+    class RacedService:
+        async def get_session(self, **_):
+            return None
+
+        async def create_session(self, **kwargs):
+            created.append(kwargs)
+            raise AlreadyExistsError("another replica created it")
+
+    agent._session_service = RacedService()
+
+    await agent._ensure_session("ctx-1")
+
+    assert [c["session_id"] for c in created] == ["ctx-1"]
