@@ -16,7 +16,9 @@ Configuration is the same environment as nasiko_state.py (``NASIKO_STATE_URL`` a
 ``NASIKO_AGENT_TOKEN``). With ``NASIKO_STATE_URL`` unset the factory returns ADK's own
 ``InMemorySessionService`` and nothing is registered, so the same code runs on a laptop.
 
-Layout. Every component is percent-encoded, so '/' only ever separates components:
+Layout. Every component is percent-encoded, so '/' only ever separates components. The whole
+encoded key may be at most 512 bytes and percent-encoding can triple an id's length (every byte
+of a non-ASCII or reserved character becomes three), so keep app, user and session ids short:
 
     adk/session/{app}/{user}/{session_id}   one session: its own JSON serialization
     adk/user/{app}/{user}                   state shared by all of a user's sessions ("user:" keys)
@@ -29,6 +31,10 @@ Concurrency. Several replicas can append to one session. Each append reads the s
 the event to it and writes it back conditional on the version it read (If-Match). When another
 replica wrote first, the append is re-read and re-applied, up to MAX_CONFLICT_ATTEMPTS times, and
 then fails with NasikoStateError instead of dropping the event.
+
+An append writes the shared app:/user: state before the session row, so a failure between the
+two leaves that shared delta one event ahead of the session. Retrying the append is safe: the
+delta is merged again with the same values and the event is then stored once.
 
 This file is vendored next to the agent's main module, like nasiko_state.py (which it imports);
 oss/agents/common is canonical and check_vendored.py fails when a copy drifts.
@@ -66,6 +72,9 @@ logger = logging.getLogger("nasiko_adk_sessions")
 
 # How often one append retries after losing the version race before it gives up.
 MAX_CONFLICT_ATTEMPTS = 5
+
+# The version the state API reports for a row that does not exist (or has expired).
+ABSENT_VERSION = 0
 
 SESSION_FAMILY = "adk/session"
 USER_STATE_FAMILY = "adk/user"
@@ -168,8 +177,6 @@ class NasikoSessionService(BaseSessionService):
         session_id: Optional[str] = None,
     ) -> Session:
         session_id = session_id.strip() if session_id else None
-        if session_id and await self._client.aget_kv(_key(SESSION_FAMILY, app_name, user_id, session_id)):
-            raise AlreadyExistsError(f"Session with id {session_id} already exists.")
         app_delta, user_delta, session_state = _split_state(state or {})
         await self._merge_shared(APP_STATE_FAMILY, (app_name,), app_delta)
         await self._merge_shared(USER_STATE_FAMILY, (app_name, user_id), user_delta)
@@ -181,7 +188,11 @@ class NasikoSessionService(BaseSessionService):
             last_update_time=time.time(),
         )
         key = _key(SESSION_FAMILY, app_name, user_id, session.id)
-        await self._client.aput_kv(key, _serialize(session))
+        try:
+            # If-Match 0 means "only if the row is not there yet", so a racing create cannot overwrite.
+            await self._client.aput_kv(key, _serialize(session), if_match=ABSENT_VERSION)
+        except NasikoStateConflict as exc:
+            raise AlreadyExistsError(f"Session with id {session.id} already exists.") from exc
         return await self._with_shared(session)
 
     async def get_session(
@@ -284,7 +295,11 @@ class NasikoSessionService(BaseSessionService):
             if value is _UNCHANGED:
                 return
             try:
-                await self._client.aput_kv(key, value, if_match=None if record is None else record.version)
+                # A missing row is written with If-Match 0 (only if still absent), never unconditionally,
+                # so two first writers cannot overwrite each other.
+                await self._client.aput_kv(
+                    key, value, if_match=ABSENT_VERSION if record is None else record.version
+                )
             except NasikoStateConflict:
                 logger.info("row %s changed by another writer; re-reading", key)
                 continue

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("google.adk")
 
-from fake_state_server import BASE_URL, TOKEN  # noqa: E402
+from fake_state_server import BASE_URL, TOKEN, Row  # noqa: E402
 from google.adk.errors.already_exists_error import AlreadyExistsError  # noqa: E402
 from google.adk.errors.session_not_found_error import SessionNotFoundError  # noqa: E402
 from google.adk.events.event import Event  # noqa: E402
@@ -73,6 +76,49 @@ async def test_creating_an_existing_session_is_refused(service):
 
     with pytest.raises(AlreadyExistsError):
         await new_session(service)
+
+
+async def test_a_create_racing_an_existing_row_is_refused_and_leaves_it_alone(service, state_server):
+    key = f"adk/session/{APP}/u1/s1"
+
+    async def another_replica_creates_first(request):
+        # Between this create's merge of shared state and its session write, a second replica wins.
+        if request.method == "PUT" and request.url.path.endswith("s1") and key not in state_server.kv:
+            state_server.kv[key] = Row({"key": key, "value": {"id": "s1", "theirs": True}}, 1, 99)
+
+    state_server.gate = another_replica_creates_first
+
+    with pytest.raises(AlreadyExistsError):
+        await new_session(service)
+
+    assert state_server.kv[key].value["value"] == {"id": "s1", "theirs": True}
+
+
+async def test_two_concurrent_first_merges_of_different_user_keys_both_survive(service, state_server):
+    first = await new_session(service, session_id="a")
+    second = await new_session(service, session_id="b")
+    user_key = f"adk/user/{APP}/u1"
+    state_server.kv.pop(user_key, None)  # the shared row does not exist yet for either writer
+    reads_done = asyncio.Event()
+    waiting = {"count": 0}
+
+    async def hold_both_first_writes_until_both_have_read(request):
+        # Each merge has read the missing row by the time its first write arrives; neither write is
+        # served until both have arrived: the lost-update interleaving.
+        if request.method == "PUT" and "adk%2Fuser" in request.url.raw_path.decode():
+            waiting["count"] += 1
+            if waiting["count"] == 2:
+                reads_done.set()
+            await reads_done.wait()
+
+    state_server.gate = hold_both_first_writes_until_both_have_read
+
+    await asyncio.gather(
+        service.append_event(first, text_event("one", timestamp=1.0, delta={"user:a": 1})),
+        service.append_event(second, text_event("two", timestamp=2.0, delta={"user:b": 2})),
+    )
+
+    assert state_server.kv[user_key].value["value"] == {"a": 1, "b": 2}
 
 
 async def test_the_row_is_stored_under_the_documented_key_as_the_sessions_own_json(service, state_server):
@@ -246,6 +292,7 @@ async def test_delete_removes_the_session_and_is_idempotent(service):
 
 async def test_a_conflicting_append_rereads_and_reapplies_the_event(service, state_server):
     session = await new_session(service)
+    requests_before = len(state_server.requests)
     key = f"adk/session/{APP}/u1/s1"
     racing = {"armed": True}
 
@@ -263,17 +310,21 @@ async def test_a_conflicting_append_rereads_and_reapplies_the_event(service, sta
     loaded = await service.get_session(app_name=APP, user_id="u1", session_id="s1")
 
     assert [e.content.parts[0].text for e in loaded.events] == ["theirs", "mine"]
-    assert len([r for r in state_server.writes("kv") if r.path.endswith("s1") and "if-match" in r.headers]) == 2
+    conditional = [
+        r for r in state_server.requests[requests_before:] if r.method == "PUT" and r.path.endswith("s1")
+    ]
+    assert len(conditional) == 2
 
 
 async def test_an_append_that_keeps_conflicting_fails_loudly(service, state_server):
     session = await new_session(service)
+    requests_before = len(state_server.requests)
     state_server.fail(412, times=MAX_CONFLICT_ATTEMPTS + 5, when=lambda r: r.method == "PUT")
 
     with pytest.raises(NasikoStateError, match="kept changing"):
         await service.append_event(session, text_event("never lands"))
 
-    puts = [r for r in state_server.writes("kv") if "if-match" in r.headers]
+    puts = [r for r in state_server.requests[requests_before:] if r.method == "PUT" and "if-match" in r.headers]
     assert len(puts) == MAX_CONFLICT_ATTEMPTS
 
 
@@ -336,3 +387,31 @@ async def test_serialization_is_plain_json(service, state_server):
     await service.append_event(session, text_event("hi", delta={"n": 1}))
 
     json.dumps(state_server.kv[f"adk/session/{APP}/u1/s1"].value["value"])  # must not raise
+
+
+def _load_google_adk_agent():
+    path = Path(__file__).resolve().parents[2] / "google-adk" / "src" / "agent.py"
+    spec = importlib.util.spec_from_file_location("google_adk_agent_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_the_agent_survives_losing_the_session_create_race_to_another_replica(monkeypatch):
+    module = _load_google_adk_agent()
+    agent = module.ResearchAgent()
+    created = []
+
+    class RacedService:
+        async def get_session(self, **_):
+            return None
+
+        async def create_session(self, **kwargs):
+            created.append(kwargs)
+            raise AlreadyExistsError("another replica created it")
+
+    agent._session_service = RacedService()
+
+    await agent._ensure_session("ctx-1")
+
+    assert [c["session_id"] for c in created] == ["ctx-1"]

@@ -280,9 +280,11 @@ def _only_keys(body: Any, allowed: set[str], *, required: set[str]) -> bool:
 
 def _version_conflict(existing: Row | None, recorded: Recorded) -> httpx.Response | None:
     expected = recorded.headers.get("if-match")
-    if expected is None or existing is None or int(expected) == existing.version:
+    # Like the server: an absent row is at version 0, so If-Match: 0 means "only if absent".
+    current = 0 if existing is None else existing.version
+    if expected is None or int(expected) == current:
         return None
-    return httpx.Response(412, json={"error": "version_conflict", "current_version": existing.version})
+    return httpx.Response(412, json={"error": "version_conflict", "current_version": current})
 
 
 def _matches(id_name: str, row_id: str, row: Row, query: dict[str, str]) -> bool:
