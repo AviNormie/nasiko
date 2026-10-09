@@ -426,7 +426,11 @@ mod tests {
         for flow in ["flow-a", "flow-b", "0af7651916cd43dd8448eb211c80319c"] {
             let first = in_minimal_code_holdout(flow, 50);
             for _ in 0..100 {
-                assert_eq!(in_minimal_code_holdout(flow, 50), first, "{flow} changed arms");
+                assert_eq!(
+                    in_minimal_code_holdout(flow, 50),
+                    first,
+                    "{flow} changed arms"
+                );
             }
         }
     }

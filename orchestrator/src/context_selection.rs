@@ -472,7 +472,9 @@ pub async fn compression_state(pool: &PgPool, user_id: Uuid) -> (bool, Vec<Uuid>
 /// Off means every request carries recent history as read, with no budget applied. Defaults to on,
 /// so a deployment that predates the column behaves exactly as it did.
 pub async fn selection_enabled(pool: &PgPool, user_id: Uuid) -> bool {
-    selection_enabled_checked(pool, user_id).await.unwrap_or(true)
+    selection_enabled_checked(pool, user_id)
+        .await
+        .unwrap_or(true)
 }
 
 /// Same check, but a real database error is reported rather than swallowed into the default

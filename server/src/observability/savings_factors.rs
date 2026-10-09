@@ -139,7 +139,9 @@ async fn refresh_once_minimal_code(
     min_samples: i64,
     window_days: i64,
 ) -> Result<(), String> {
-    let rows = minimal_code_arms(db, window_days).await.map_err(|e| e.to_string())?;
+    let rows = minimal_code_arms(db, window_days)
+        .await
+        .map_err(|e| e.to_string())?;
     let Some(factor) = pooled_factor(&rows, min_samples) else {
         tracing::debug!(
             target: "nasiko::savings::factors",
