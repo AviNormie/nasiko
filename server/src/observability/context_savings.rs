@@ -204,15 +204,33 @@ fn push_filters<'a>(qb: &mut QueryBuilder<'a, Postgres>, q: &'a ContextSavingsQu
 /// `context_reports` with its agent resolved. Every query here starts from this shape, so
 /// `eff.agent_id` means the same thing in all of them.
 ///
-/// The agent is resolved rather than read: an orchestrator-routed chat selects history before
-/// routing picks one, so the row's own column is NULL and `session_traces` — written by that same
-/// turn as it dispatches — is what says where it went.
+/// The agent is resolved rather than read: an orchestrator-routed chat selects history *before*
+/// routing picks one, so the row's own column is NULL and the agent has to be recovered from what
+/// the turn did next. Three sources, in descending order of directness:
+///
+/// 1. `context_reports.agent_id` — set at write time by the direct-agent proxy path, which knows
+///    its target before it reads history.
+/// 2. `session_traces.agent_id` — set when a turn is dispatched *at* a named agent.
+/// 3. `token_usage.agent_id` — the agents the turn actually billed against.
+///
+/// (3) exists because the orchestrator writes its own `session_traces` row with a NULL agent and
+/// the name `'orchestrator'`, so (2) resolves to nothing for the main chat path and every routed
+/// turn fell out of the per-agent views. The LLM calls a turn makes are the surviving evidence of
+/// where it went. A turn the orchestrator answered itself has no agent in any of the three, which
+/// is correct — it belongs in the totals and in no per-agent row.
 const REPORTS_FROM: &str = "FROM context_reports cr \
      LEFT JOIN LATERAL ( \
          SELECT st.agent_id FROM session_traces st \
-          WHERE st.trace_id = cr.trace_id LIMIT 1 \
+          WHERE st.trace_id = cr.trace_id AND st.agent_id IS NOT NULL LIMIT 1 \
      ) st ON true \
-     LEFT JOIN LATERAL (SELECT COALESCE(cr.agent_id, st.agent_id) AS agent_id) eff ON true ";
+     LEFT JOIN LATERAL ( \
+         SELECT tu.agent_id FROM token_usage tu \
+          WHERE tu.session_id = cr.trace_id AND tu.agent_id IS NOT NULL \
+          ORDER BY tu.created_at ASC LIMIT 1 \
+     ) tua ON true \
+     LEFT JOIN LATERAL ( \
+         SELECT COALESCE(cr.agent_id, st.agent_id, tua.agent_id) AS agent_id \
+     ) eff ON true ";
 
 /// Each report priced at its own request's first LLM call.
 ///
@@ -301,6 +319,9 @@ async fn recorded_since(
 /// Counted from the user's own turns rather than from `context_reports`, because the gap between
 /// the two is the point: a turn whose history was empty ran selection and wrote no report, and the
 /// page says "based on R of E requests" precisely to show that.
+///
+/// Callers pass the result through [`at_least_reports`]: this count alone can come out below the
+/// number of reports, and a ratio above 1 is worse than an imprecise one.
 async fn eligible_requests(
     db: &PgPool,
     q: &ContextSavingsQuery<'_>,
@@ -341,6 +362,20 @@ struct BucketRow {
     reports: i64,
     pool_tokens: i64,
     sent_tokens: i64,
+}
+
+/// A report proves its own request was eligible, so eligibility can never be the smaller number.
+///
+/// Both figures are counted from different tables over the same window, and within one turn the
+/// `chat_messages` row lands *before* the `context_reports` row. The turn that establishes
+/// `recorded_since` therefore falls microseconds below its own floor and is missed by the count —
+/// leaving the page to render "Based on 4 of 3 requests", a ratio above 1 that reads as a bug in
+/// the figure rather than in the counting.
+///
+/// Raising the denominator rather than lowering the numerator keeps the claim conservative: the
+/// share of requests we can speak for never overstates itself.
+fn at_least_reports(counted: i64, reports: i64) -> i64 {
+    counted.max(reports)
 }
 
 #[derive(sqlx::FromRow)]
@@ -406,7 +441,10 @@ async fn series(
         let el = eligible.iter().find(|r| r.bucket_start == at);
         points.push(SavingsPoint {
             bucket_start: at,
-            eligible_requests: el.map_or(0, |r| r.eligible),
+            eligible_requests: at_least_reports(
+                el.map_or(0, |r| r.eligible),
+                row.map_or(0, |r| r.reports),
+            ),
             reports: row.map_or(0, |r| r.reports),
             pool_tokens: row.map_or(0, |r| r.pool_tokens),
             sent_tokens: row.map_or(0, |r| r.sent_tokens),
@@ -430,7 +468,10 @@ pub async fn get_context_savings(
     let recorded_since = recorded_since(db, q).await?;
 
     Ok(ContextSavings {
-        eligible_requests: eligible_requests(db, q, recorded_since).await?,
+        eligible_requests: at_least_reports(
+            eligible_requests(db, q, recorded_since).await?,
+            totals.reports,
+        ),
         reports: totals.reports,
         priced_reports: totals.priced_reports,
         pool_tokens: totals.pool_tokens,
@@ -655,6 +696,36 @@ mod tests {
         let out = redact(row(Uuid::new_v4()), &query(Uuid::new_v4(), true));
         assert!(out.own);
         assert!(out.chat_title.is_some());
+    }
+
+    /// The live symptom this guards: four reports against three counted turns rendered as
+    /// "Based on 4 of 3 requests".
+    #[test]
+    fn eligibility_is_never_smaller_than_the_reports_it_covers() {
+        assert_eq!(at_least_reports(3, 4), 4);
+        assert_eq!(at_least_reports(0, 1), 1);
+    }
+
+    /// The clamp must not invent eligibility where the count is already the larger figure — a turn
+    /// that selected over empty history is eligible and reports nothing, which is the gap the page
+    /// exists to show.
+    #[test]
+    fn a_larger_count_is_left_alone() {
+        assert_eq!(at_least_reports(116, 4), 116);
+        assert_eq!(at_least_reports(0, 0), 0);
+    }
+
+    /// Every per-agent view filters on the resolved agent, so the chain that resolves it is the
+    /// difference between those views working and being permanently empty.
+    #[test]
+    fn the_agent_resolution_chain_has_all_three_sources() {
+        assert!(REPORTS_FROM.contains("COALESCE(cr.agent_id, st.agent_id, tua.agent_id)"));
+        // `token_usage` is the one that recovers orchestrator-routed turns: the orchestrator writes
+        // its own `session_traces` row with a NULL agent, so without this they resolve to nothing.
+        assert!(REPORTS_FROM.contains("FROM token_usage tu"));
+        // A NULL in an earlier source must not win the LIMIT 1 and mask a later one.
+        assert!(REPORTS_FROM.contains("st.agent_id IS NOT NULL"));
+        assert!(REPORTS_FROM.contains("tu.agent_id IS NOT NULL"));
     }
 
     #[test]
