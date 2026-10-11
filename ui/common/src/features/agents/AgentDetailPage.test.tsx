@@ -75,7 +75,7 @@ describe('resolving the URL', () => {
 })
 
 describe('tabs', () => {
-  it('a manager sees all seven tabs', async () => {
+  it('a manager sees all eight tabs', async () => {
     renderApp(url(0))
     await title()
     // Builds (plans/feat-deploy.md §6, design review 1) and MCP (plans/feat-mcp.md §5.2) joined the manage-only tabs.
@@ -87,6 +87,8 @@ describe('tabs', () => {
       'MCP',
       'Access',
       'Settings',
+      // Today's Overview facts, since the agent hub took the Overview (plans/feat-agent-centric.md PR1c).
+      'Details',
     ])
   })
 
@@ -97,11 +99,11 @@ describe('tabs', () => {
     await waitFor(() => expect(router.state.location.search).toEqual({}))
   })
 
-  it('a non-manager sees three tabs and who owns the agent', async () => {
+  it('a non-manager sees four tabs and, on Details, who owns the agent', async () => {
     configureMocks({ seed, now, loggedIn: true, persona: 'sam' })
-    renderApp(url(0, 'settings'))
+    renderApp(url(0, 'details'))
     await title()
-    expect(tabNames()).toEqual(['Overview', 'Activity', 'Versions'])
+    expect(tabNames()).toEqual(['Overview', 'Activity', 'Versions', 'Details'])
     expect(
       await screen.findByText(/^Owned by .+ Only the owner or a superuser/),
     ).toBeInTheDocument()
@@ -123,8 +125,8 @@ describe('overview', () => {
     expect(await within(card).findByText(/worker exited with code 137/)).toBeInTheDocument()
   })
 
-  it('shows the active version and the call command', async () => {
-    renderApp(url(0))
+  it('Details shows the active version and the call command', async () => {
+    renderApp(url(0, 'details'))
     const section = await screen.findByRole('region', { name: 'Active version' })
     expect(await within(section).findByText(/registry\.local\//)).toBeInTheDocument()
     expect(screen.getByText(`nasiko chat --agent ${running.id} "hello"`)).toBeInTheDocument()
@@ -145,7 +147,7 @@ describe('overview', () => {
     const reqs = recordRequests()
     try {
       const hits = () => reqs.urls.filter((u) => u.pathname.endsWith('agent-card.json'))
-      renderApp(url(0))
+      renderApp(url(0, 'details'))
       await title()
       expect(hits()).toHaveLength(0)
       await userEvent.click(screen.getByText('Live agent card'))
@@ -625,7 +627,7 @@ describe('owner-controlled text', () => {
 
   it('renders as text and never links or loads a javascript: URL', async () => {
     server.use(http.get(`/api/agents/${evil.id}`, () => HttpResponse.json({ data: evil })))
-    renderApp(`/agents/${evil.id}`)
+    renderApp(`/agents/${evil.id}?tab=details`)
     expect(await title()).toHaveTextContent('<img src=x onerror=alert(1)>')
     expect(screen.getByText('<script>alert(2)</script>')).toBeInTheDocument()
     expect(
@@ -637,7 +639,7 @@ describe('owner-controlled text', () => {
 
 describe('Try it (chat plan §9)', () => {
   it('a running agent links to Chat from the header and from Call this agent', async () => {
-    renderApp(url(0))
+    renderApp(url(0, 'details'))
     await title()
     const links = await screen.findAllByRole('link', { name: 'Try it' })
     expect(links).toHaveLength(2)
@@ -687,7 +689,7 @@ describe('more states (plan §10)', () => {
     const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
     renderApp(`/agents/${harness.id}`)
     await title()
-    expect(tabNames()).toEqual(['Overview', 'MCP'])
+    expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
     expect(screen.getByRole('link', { name: /See usage on Harnesses/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/harnesses'),
@@ -695,7 +697,7 @@ describe('more states (plan §10)', () => {
     expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
   })
 
-  it('a coding harness Overview carries the Token optimization switch for its owner (eng D10)', async () => {
+  it('a coding harness Overview carries the Token optimization switch for its owner, on the Optimization card (eng D10)', async () => {
     const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
       id: string
       tags?: string[]
@@ -706,7 +708,7 @@ describe('more states (plan §10)', () => {
     expect(sw).toHaveAccessibleDescription(
       `${copy.tokenOptimizationHint} ${copy.tokenOptimizationHarness}`,
     )
-    expect(tabNames()).toEqual(['Overview', 'MCP'])
+    expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
   })
 
   it('a coding harness’s MCP tab lists servers for its owner, like any agent', async () => {
@@ -742,7 +744,7 @@ describe('more states (plan §10)', () => {
   })
 
   it('View raw shows the unnormalized detail as text', async () => {
-    renderApp(url(0))
+    renderApp(url(0, 'details'))
     await title()
     await userEvent.click(screen.getByText('View raw'))
     expect(await screen.findByText(new RegExp(`"id": "${running.id}"`))).toBeInTheDocument()
@@ -814,7 +816,7 @@ describe('more states (plan §10)', () => {
     server.use(
       http.get('/api/agents/:id/deployment', () => HttpResponse.json({ available: false })),
     )
-    renderApp(url(0))
+    renderApp(url(0, 'details'))
     expect(
       await screen.findByText("Deployment details aren't available for your role."),
     ).toBeInTheDocument()

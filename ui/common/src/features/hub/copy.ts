@@ -103,6 +103,72 @@ export const copy = {
     select: 'Select',
   },
 
+  needs: {
+    title: 'Needs you',
+    clear: 'No issues found in checked data',
+    checked: (parts: string[]) => `Checked ${parts.join(', ')}.`,
+    partRequests: 'pending requests',
+    partStatus: 'its health (rated on the last 7 days)',
+    partSessions: (checked: number, found: number, scanned: number) =>
+      found === 0
+        ? `the latest ${scanned} sessions (none of them this agent's)`
+        : `${checked} of this agent's ${found} sessions found in the latest ${scanned}`,
+    requests: (n: number) => `${n} ${n === 1 ? 'request is' : 'requests are'} waiting for you`,
+    answer: 'Answer',
+    statusAction: 'Needs action',
+    statusWatch: 'Watch',
+    ratedOn: 'rated on the last 7 days',
+    sessions: (failed: number, checked: number) =>
+      `${failed} of the ${checked} sessions checked failed`,
+    openFailed: 'Open failed sessions',
+    failed: {
+      requests: "Pending requests couldn't load",
+      status: "Its health couldn't be rated (a cost input is missing)",
+      sessions: "Its sessions couldn't be checked",
+    },
+  },
+
+  runs: {
+    sessions: 'Recent sessions',
+    sessionsWindow: 'last 7 days',
+    sessionsNone: (scanned: number) => `None in the latest ${scanned} sessions checked.`,
+    sessionsAll: (name: string) => `Sessions for ${name}`,
+    sessionsShared: 'Another visible agent has the same name: these may be its sessions.',
+    sessionsError: "Sessions couldn't load",
+    flows: 'Flows started by this agent',
+    flowsNone: 'No flows started by this agent in this window.',
+    flowsNoneCapped: (n: number) => `None in the latest ${n} flows across the fleet.`,
+    flowsAll: 'Open Flows',
+    flowsError: "Flows couldn't load",
+    failed: 'failed',
+  },
+
+  cards: {
+    title: 'Layers',
+    routing: 'Routing',
+    routingNone: 'Not routed: uses the default model',
+    routingSetUp: 'Set up routing',
+    routingOpen: 'Open LLM router',
+    routingPinned: 'pinned',
+    tools: 'Tools',
+    toolsConnected: (n: number) => `${n} connected`,
+    toolsBlocked: (n: number, capped: boolean) =>
+      `${n} ${n === 1 ? 'tool' : 'tools'} blocked by rule${capped ? ' (first connectors checked)' : ''}`,
+    toolsNone: 'No tools connected',
+    toolsOpen: 'MCP tab',
+    optimization: 'Optimization',
+    compressOn: 'Token optimization on',
+    compressOff: 'Token optimization off',
+    historyBy: (name: string) => `History: ${name}`,
+    savedIn: (tokens: string, basis: string) => `${tokens} tokens saved in this window (${basis})`,
+    optimizationOpen: 'Open Optimization',
+    budget: 'Budget',
+    budgetUse: (used: string, limit: string) => `${used} of ${limit} this month`,
+    budgetNone: 'No budget set',
+    budgetSetUp: 'Set a budget',
+    budgetUpdated: (rel: string) => `budget use · updated ${rel}`,
+  },
+
   keyboard: 'Arrow keys move between buckets; Enter selects one.',
   bucketButton: (name: string, spend: string, requests: string) => `${name}: ${spend}, ${requests}`,
 }

@@ -43,6 +43,7 @@ import { relTime } from './format'
 import { ACTION_LABEL, useLifecycleFlow } from './lifecycleFlow'
 import { ActivityTab } from './detail/ActivityTab'
 import { AccessTab } from './detail/AccessTab'
+import { DetailsTab } from './detail/DetailsTab'
 import { OverviewTab } from './detail/OverviewTab'
 import { SettingsTab } from './detail/SettingsTab'
 import { VersionsTab } from './detail/VersionsTab'
@@ -147,8 +148,9 @@ function ResolveByName({ name, tab }: { name: string; tab?: string }) {
 
 function tabsFor(agent: AgentView): DetailTab[] {
   // A harness is an ordinary agent id to the MCP gateway, so its manager gets the MCP tab too.
-  if (agent.isHarness) return agent.canManage ? ['overview', 'mcp'] : ['overview']
-  return agent.canManage ? [...DETAIL_TABS] : ['overview', 'activity', 'versions']
+  if (agent.isHarness)
+    return agent.canManage ? ['overview', 'mcp', 'details'] : ['overview', 'details']
+  return agent.canManage ? [...DETAIL_TABS] : ['overview', 'activity', 'versions', 'details']
 }
 
 function AgentDetail({ id, tab }: { id: string; tab?: string }) {
@@ -212,6 +214,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
     mcp: copy.tabMcp,
     access: copy.tabAccess,
     settings: copy.tabSettings,
+    details: copy.tabDetails,
   }
 
   return (
@@ -290,6 +293,11 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
         {allowed.includes('access') ? (
           <TabsContent value="access" className="pt-3">
             <AccessTab agent={agent} />
+          </TabsContent>
+        ) : null}
+        {allowed.includes('details') ? (
+          <TabsContent value="details" className="pt-3">
+            <DetailsTab agent={agent} display={display} ownerLabel={ownerLabel} />
           </TabsContent>
         ) : null}
         {allowed.includes('settings') ? (

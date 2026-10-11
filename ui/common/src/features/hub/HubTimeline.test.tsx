@@ -18,7 +18,9 @@ afterEach(() => configureMocks({ seed, now, loggedIn: true, variant: null }))
 
 const agent = seed.agents[0]!
 const url = (q = '') => `/agents/${agent.id}${q}`
-const paths = (urls: URL[], path: string) => urls.filter((u) => u.pathname.endsWith(path))
+// This agent's reads only: Needs you rates the agent with the Overview's own fleet reads (their own keys, no agent_id).
+const paths = (urls: URL[], path: string) =>
+  urls.filter((u) => u.pathname.endsWith(path) && u.searchParams.get('agent_id') === agent.id)
 
 async function lanes() {
   return screen.findByRole('group', { name: copy.keyboard })

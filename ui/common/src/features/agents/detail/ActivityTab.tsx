@@ -1,8 +1,7 @@
 /**
- * Activity (plan §7.3): 24 h stats, resources, recent sessions (name-matched from the first
- * 100 session/list rows, created after the agent), and logs (newest first) with a live tail.
+ * Activity (plan §7.3): 24 h stats, resources, and logs (newest first) with a live tail. Recent sessions moved to the
+ * Overview's hub, which reads a bounded 7-day sample (plans/feat-agent-centric.md PR1c, eng "Hub sessions").
  */
-import { Link } from '@tanstack/react-router'
 import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Field, FieldLabel } from '@/components/ui/field'
@@ -18,18 +17,10 @@ import { SearchInput } from '@/components/shared/search-input'
 import { LogDrawer } from '@/features/sessions/LogDrawer'
 import { fmtInt, fmtLatency, fmtMoney } from '@/lib/format'
 import { ApiError } from '@/lib/api/client'
-import {
-  useAgentLogs,
-  useAgentResources,
-  useAgentSessions,
-  useAgentStats,
-  useAgentsDirectory,
-} from '../api'
+import { useAgentLogs, useAgentResources, useAgentStats } from '../api'
 import { ErrorNote, LearnMore, Section } from '../components/bits'
-import { relTime } from '../format'
 import { copy } from '../copy'
 import type { AgentView } from '../normalize'
-import { RECENT_SESSIONS_SHOWN, SESSIONS_SCAN } from '../tuning'
 
 const LEVELS = ['', 'ERROR', 'WARN', 'INFO'] as const
 /** Radix Select items can't have an empty value: "all levels" travels as this key. */
@@ -46,13 +37,10 @@ export function ActivityTab({
 }) {
   const stats = useAgentStats(agent.id, true)
   const resources = useAgentResources(agent.id, true)
-  const sessions = useAgentSessions(agent.name, agent.createdAt, true)
-  const dir = useAgentsDirectory()
   const [level, setLevel] = useState<(typeof LEVELS)[number]>('')
   const [term, setTerm] = useState('')
   const levelId = useId()
   const logs = useAgentLogs(agent.id, level, true)
-  const shared = (dir.byNameAll.get(agent.name)?.length ?? 0) > 1
   const obsOff = (e: unknown) => e instanceof ApiError && e.status === 503
   const lines = (logs.data ?? []).filter(
     (l) => !term || l.message.toLowerCase().includes(term.toLowerCase()),
@@ -107,36 +95,6 @@ export function ActivityTab({
             <Stat label={copy.memory} value={mb(resources.data.usage.memory_usage_bytes)} />
             <Stat label={copy.memoryLimit} value={mb(resources.data.usage.memory_limit_bytes)} />
           </dl>
-        )}
-      </Section>
-
-      <Section title={copy.recentSessions}>
-        {shared ? <p className="text-xs text-muted-foreground">{copy.nameCollision}</p> : null}
-        {sessions.isPending ? (
-          <Skeleton className="h-16" />
-        ) : sessions.isError ? (
-          <ErrorNote error={sessions.error} onRetry={() => void sessions.refetch()} />
-        ) : sessions.data.length ? (
-          <ul className="divide-y divide-border text-sm">
-            {sessions.data.slice(0, RECENT_SESSIONS_SHOWN).map((s) => (
-              <li
-                key={s.session_id}
-                className="flex flex-wrap items-center justify-between gap-2 py-1.5"
-              >
-                <Link
-                  to="/sessions/$sessionId"
-                  params={{ sessionId: s.session_id }}
-                  search={{}}
-                  className="font-mono text-xs underline-offset-4 hover:underline"
-                >
-                  {s.session_id.slice(0, 8)}
-                </Link>
-                <span className="text-xs text-muted-foreground">{relTime(s.start_time)}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-muted-foreground">{copy.noSessions(SESSIONS_SCAN)}</p>
         )}
       </Section>
 

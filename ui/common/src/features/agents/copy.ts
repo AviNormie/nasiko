@@ -87,6 +87,7 @@ export const copy = {
   tabMcp: 'MCP',
   tabAccess: 'Access',
   tabSettings: 'Settings',
+  tabDetails: 'Details',
 
   crashTitle: 'This agent crashed',
   crashOss: 'The runtime reports this agent as crashed. Recent error lines:',
@@ -140,10 +141,6 @@ export const copy = {
   noResources: 'Resource usage appears when the agent is running.',
   obsOff:
     'Observability is not configured: set OTEL_EXPORTER_OTLP_ENDPOINT, TEMPO_URL and LOKI_URL.',
-  recentSessions: 'Recent sessions',
-  noSessions: (n: number) => `No sessions for this agent in the latest ${n} sessions.`,
-  nameCollision:
-    "Matched by name; may include sessions of another owner's agent, or a deleted one, with the same name.",
   logs: 'Logs',
   noLogs: 'No log lines yet.',
   liveTail: 'Live tail',

@@ -40,6 +40,8 @@ export const DETAIL_TABS = [
   'mcp',
   'access',
   'settings',
+  // Today's Overview facts, since the hub took the Overview over (plans/feat-agent-centric.md PR1c).
+  'details',
 ] as const
 export type DetailTab = (typeof DETAIL_TABS)[number]
 // The detail route's schema is the hub's (`features/hub/search.ts`): `tab` plus the hub's window, slice and marker.
