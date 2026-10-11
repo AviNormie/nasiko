@@ -176,7 +176,13 @@ describe('first-run guide', () => {
   it('treats an older server (bare 404) as finished', async () => {
     configureMocks({ variant: 'onboarding-absent' })
     renderApp('/')
-    expect(await screen.findByRole('button', { name: 'Setup guide' })).toBeInTheDocument()
+    // The home paints before the onboarding read settles, so the button turns into the older server's sheet trigger.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Setup guide' })).toHaveAttribute(
+        'aria-haspopup',
+        'dialog',
+      ),
+    )
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(within(nav()).getByRole('link', { name: 'Overview' })).toBeInTheDocument()
   })

@@ -4,7 +4,7 @@
  * hidden unless asked for; they never run and the Harnesses page owns their usage.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Link, type HistoryState } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { Bot, RotateCw, SearchX, X } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -21,7 +21,6 @@ import { ErrorState, StateCard } from '@/features/observability/StateCard'
 import { useFleetHealth } from '@/features/overview/api'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { meQuery } from '@/lib/api/auth'
-import { useSiblingState } from '@/lib/siblings'
 import { useCatalogAgents, useCatalogTabs, useUsers } from './api'
 import { AgentMark, AgentsNav, FirstRunSteps, StatusBadge } from './components/bits'
 import { copy } from './copy'
@@ -44,7 +43,8 @@ export function CatalogPage({
   const inputRef = useRef<HTMLInputElement>(null)
   // Ratings are fetched only while the Overview's ?health= filter is on (eng review R1).
   const [now] = useState(() => new Date())
-  const fleet = useFleetHealth(now, !!search.health)
+  // Members never read the fleet-wide spend series (the home and the hub rate them the same way).
+  const fleet = useFleetHealth(now, !!search.health, !!me?.is_superuser)
 
   // "/" focuses search unless the user is already typing somewhere.
   useEffect(() => {
@@ -99,8 +99,6 @@ export function CatalogPage({
       }),
     [pool, search.health, rated, search.tag, search.yours, term, me?.sub],
   )
-  // Previous/Next on the agent page walks the cards as shown when one is clicked.
-  const linkState = useSiblingState(shown.map((a) => a.id))
 
   const header = (
     <>
@@ -259,7 +257,6 @@ export function CatalogPage({
                 meId={me?.sub}
                 ownerName={names?.get(a.owner_id)}
                 reason={search.health ? rated?.get(a.id)?.reasons[0]?.text : undefined}
-                linkState={linkState}
               />
             </li>
           ))}
@@ -297,13 +294,11 @@ const AgentCard = memo(function AgentCard({
   meId,
   ownerName,
   reason,
-  linkState,
 }: {
   agent: Agent
   meId?: string
   ownerName?: string
   reason?: string
-  linkState: () => HistoryState
 }) {
   const harness = isHarness(agent)
   const name = agent.display_name || agent.name
@@ -317,7 +312,7 @@ const AgentCard = memo(function AgentCard({
       asChild
       className="h-full gap-2 p-4 transition-[color,border-color,box-shadow] hover:border-primary/40 hover:shadow-lg focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}} state={linkState}>
+      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
         <div className="flex items-start gap-3">
           <AgentMark name={name} iconUrl={agent.icon_url} size={36} />
           <div className="min-w-0 flex-1">

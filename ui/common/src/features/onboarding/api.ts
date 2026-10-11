@@ -23,6 +23,13 @@ const onboardingQuery = queryOptions({
 
 const useOnboarding = () => useQuery(onboardingQuery)
 
+/** The viewer's persona for defaults (the home's scope): settled once the read answers or fails (an older server's
+ * bare 404 settles as no persona). */
+export function usePersona(): { persona: Persona | null; settled: boolean } {
+  const q = useOnboarding()
+  return { persona: q.data?.persona ?? null, settled: !q.isPending }
+}
+
 /** Saves the persona; the server's first PATCH also completes onboarding. */
 export function useSavePersona() {
   const qc = useQueryClient()
