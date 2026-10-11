@@ -17,6 +17,7 @@ import { EmptyState } from '@/components/shared/state-card'
 import { SearchInput } from '@/components/shared/search-input'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/toggle'
+import { useChatProbe } from '@/features/chat/api'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
 import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import {
@@ -272,6 +273,8 @@ export function SessionTracePage({
     : copy.unknownAgent
   const agentRow = agentRaw ? agents.byName.get(agentRaw) : undefined
   const agentIsHarness = !!agentRow && isHarness(agentRow)
+  // The ledger reads the chat's messages, which only its owner can: chat's own probe (shared with Open chat) says so.
+  const ownChat = useChatProbe(sessionId, agentIsHarness).state === 'yours'
   const sessionCost = session.data?.cost_summary.total.cost
   const numTraces = session.data?.num_traces ?? traces.length
   const firstStart = traces[0]?.root_span.start_time
@@ -335,8 +338,8 @@ export function SessionTracePage({
         }
         actions={
           <>
-            {agentIsHarness ? (
-              <Button asChild variant="outline" size="sm">
+            {agentIsHarness && ownChat ? (
+              <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
                 <Link
                   to="/sessions/$sessionId"
                   params={{ sessionId }}

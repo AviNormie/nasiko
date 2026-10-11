@@ -11,6 +11,7 @@ import { Panel, PanelSkeleton } from '@/components/shared/panel'
 import { Badge } from '@/components/ui/badge'
 import { useAgentsDirectory } from '@/features/agents/api'
 import { relTime } from '@/features/agents/format'
+import { fmtUtcDayTime } from '@/lib/format'
 import type { useHarnessChats, useHubFlows, useHubSessions } from '../api'
 import { copy } from '../copy'
 import { RetryLine } from './RetryLine'
@@ -36,7 +37,7 @@ export function RecentRuns({
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {harnessChats ? (
-        <HarnessSessions chats={harnessChats} />
+        <HarnessSessions agentName={agentName} chats={harnessChats} />
       ) : (
         <SessionsList agentName={agentName} sessions={sessions} statuses={statuses} />
       )}
@@ -109,36 +110,52 @@ function SessionsList({
   )
 }
 
-function HarnessSessions({ chats }: { chats: ReturnType<typeof useHarnessChats> }) {
+function HarnessSessions({
+  agentName,
+  chats,
+}: {
+  agentName: string
+  chats: ReturnType<typeof useHarnessChats>
+}) {
   return (
     <Panel title={copy.runs.sessions} subtitle={copy.runs.harnessWindow}>
       {chats.isPending ? (
         <PanelSkeleton height={96} />
       ) : chats.isError ? (
         <RetryLine label={copy.runs.sessionsError} onRetry={() => void chats.refetch()} />
-      ) : chats.data.length ? (
-        <ul className="m-0 list-none divide-y divide-border p-0 text-sm">
-          {chats.data.slice(0, RUNS_SHOWN).map((s) => (
-            <li
-              key={s.session_id}
-              className="flex flex-wrap items-center justify-between gap-2 py-1.5"
-            >
-              <Link
-                to="/sessions/$sessionId"
-                params={{ sessionId: s.session_id }}
-                search={{ view: 'ledger' }}
-                className="min-w-0 truncate underline-offset-4 hover:underline pointer-coarse:py-3"
-              >
-                {s.title}
-              </Link>
-              <span className="text-xs text-muted-foreground">
-                {relTime(s.updated_at ?? s.created_at)}
-              </span>
-            </li>
-          ))}
-        </ul>
       ) : (
-        <p className="m-0 text-sm text-muted-foreground">{copy.runs.harnessNone}</p>
+        <div className="space-y-2">
+          {chats.data.length ? (
+            <ul className="m-0 list-none divide-y divide-border p-0 text-sm">
+              {chats.data.slice(0, RUNS_SHOWN).map((s) => (
+                <li
+                  key={s.session_id}
+                  className="flex flex-wrap items-center justify-between gap-2 py-1.5"
+                >
+                  {/* Every recorded harness session has the server's one title: the row is its time and size. */}
+                  <Link
+                    to="/sessions/$sessionId"
+                    params={{ sessionId: s.session_id }}
+                    search={{ view: 'ledger' }}
+                    className="inline-flex min-w-0 items-center truncate underline-offset-4 hover:underline pointer-coarse:min-h-11"
+                  >
+                    {copy.runs.harnessRow(fmtUtcDayTime(s.created_at), s.message_count)}
+                  </Link>
+                  <span className="text-xs text-muted-foreground">
+                    {relTime(s.updated_at ?? s.created_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="m-0 text-sm text-muted-foreground">{copy.runs.harnessNone}</p>
+          )}
+          <p className="m-0">
+            <Link to="/sessions" search={{ agent: agentName, preset: '7d' }} className={LINK}>
+              {copy.runs.sessionsAll(agentName)}
+            </Link>
+          </p>
+        </div>
       )}
     </Panel>
   )

@@ -32,8 +32,10 @@ const PUBLIC = {
     'rememberTarget',
     'types',
     'waiting',
-    // The harness session ledger maps recorded tool calls (plans/feat-agent-centric.md eng PUBLIC adds for PR1b).
+    // The harness session ledger maps recorded tool calls (plans/feat-agent-centric.md eng PUBLIC adds for PR1b) and
+    // finds its chat past the rail's loaded pages.
     'recorded',
+    'sessionLookup',
   ],
   deploy: [
     'AgentBuildsTab',

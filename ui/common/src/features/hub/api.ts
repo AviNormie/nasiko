@@ -581,14 +581,24 @@ export function useHubNeeds(
  * cache). The messages route answers only the chat's owner (no superuser bypass, `chat/routes.rs` `list_messages`): a
  * 404 means "not yours or not a chat", and the ledger shows metadata only. Older pages load on request.
  */
-export function useLedgerHistory(sessionId: string, preview = isPreview('chat')) {
+export function useLedgerHistory(sessionId: string) {
   const q = useChatHistory(sessionId)
   const pages = historyPages(q.data)
-  const complete = q.isSuccess && !q.hasNextPage
+  // From the pages held, not the query's status: a failed background refresh keeps them, and must neither make the
+  // ledger a "subtotal" nor hide that it failed (review: Codex, adversarial).
+  const complete = !!q.data && !q.hasNextPage
   // The React Compiler memoises this on the query's data (the module is compiled).
-  const ledger = q.data ? buildLedger(pages, { complete, preview }) : null
-  const notOwner = q.error instanceof ApiError && q.error.status === 404
-  return { query: q, ledger, complete, notOwner }
+  const ledger = q.data ? buildLedger(pages, { complete, preview: isPreview('chat') }) : null
+  // A 404 before anything loaded: not a chat this viewer owns (or no chat at all). Once pages are held, a later 404
+  // is a refresh failure, and the ledger it already showed is withheld, never kept exportable (review: Codex).
+  const denied = q.error instanceof ApiError && q.error.status === 404
+  return {
+    query: q,
+    ledger: denied ? null : ledger,
+    complete,
+    notOwner: denied,
+    refreshFailed: !denied && q.isRefetchError,
+  }
 }
 
 /**
@@ -601,7 +611,8 @@ export function useSessionBudgets(sessionId: string, enabled: boolean) {
     queryKey: ['router', 'budgets', 'session', sessionId],
     queryFn: ({ signal }) =>
       apiData<SessionBudget[]>(path, { signal, schema: sessionBudgetsSchema }),
-    enabled: enabled && isPreview('router'),
+    // Both previews: the budgets are mock seed data, so they never sit beside live messages.
+    enabled: enabled && isPreview('router') && isPreview('chat'),
     meta: { path: '/api/budgets/session/:id' },
   })
 }

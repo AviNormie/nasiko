@@ -37,6 +37,7 @@ const when = (iso: string) =>
 export function SessionsList({
   items,
   linkable,
+  ledger = false,
   title,
   note,
   emptyText = 'No harness sessions in this window.',
@@ -44,6 +45,9 @@ export function SessionsList({
 }: {
   items: SessionItem[]
   linkable: boolean
+  /** The viewer's own sessions: links open the ledger (plans/feat-agent-centric.md PR1b). Anyone else's open the
+   * trace, since only a chat's owner can read its messages. */
+  ledger?: boolean
   title: string
   note?: string
   emptyText?: string
@@ -74,8 +78,7 @@ export function SessionsList({
                   <Link
                     to="/sessions/$sessionId"
                     params={{ sessionId: s.session_id }}
-                    // A harness session opens its ledger (plans/feat-agent-centric.md PR1b).
-                    search={{ view: 'ledger' }}
+                    search={ledger ? { view: 'ledger' } : {}}
                     className="inline-flex min-h-8 items-center gap-1 hover:underline"
                   >
                     {label}
