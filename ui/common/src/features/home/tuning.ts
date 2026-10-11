@@ -16,3 +16,14 @@ export const ROW_READS = 4
 export const ROW_READ_STALE_MS = 5 * 60_000
 /** The budget column's "updated …" stamp moves this often. */
 export const STAMP_TICK_MS = 30_000
+/** A row must stay on screen this long before its reads start, so rows scrolled straight past cost nothing. */
+export const ROW_DWELL_MS = 250
+/** Rows this close to the viewport count as on screen, so their cells are filled by the time they scroll in. */
+export const ROW_MARGIN = '200px 0px'
+/** Below this width the rows are two lines each (design "Responsive": < 640 px). */
+export const PHONE_QUERY = '(max-width: 639px)'
+/** A row's sparkline box (px). */
+export const SPARK_W = 64
+export const SPARK_H = 20
+/** Rows a phone list draws before "Show N more" (decision #50). */
+export const PHONE_ROWS = 25

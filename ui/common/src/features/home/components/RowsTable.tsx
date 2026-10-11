@@ -8,14 +8,13 @@ import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { Badge } from '@/components/ui/badge'
-import { relTime } from '@/features/agents/format'
 import { displayStatus } from '@/features/agents/status'
 import { RATED_STATUSES, type Rating } from '@/features/overview/health'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import type { Range } from '@/features/overview/search'
 import type { ResolvedWindow } from '@/features/tokenops/window'
 import { fmtMoney, fmtTokens } from '@/lib/format'
-import { useNow } from '@/lib/useNow'
+import { useBudgetStamp } from '../useBudgetStamp'
 import type { HomeBudgets, SourceStatus } from '../api'
 import { copy } from '../copy'
 import {
@@ -27,7 +26,7 @@ import {
   type Sort,
   type SortKey,
 } from '../rows'
-import { STAMP_TICK_MS, TOUCH } from '../tuning'
+import { TOUCH } from '../tuning'
 import { BudgetUse, LastChangeCell, SpendCell } from './RowCells'
 
 const SORTABLE: Record<string, SortKey> = {
@@ -44,7 +43,7 @@ export interface RowsProps {
   days: number
   range: Range
   now: Date
-  win: Pick<ResolvedWindow, 'key' | 'params' | 'start' | 'end'>
+  win: Pick<ResolvedWindow, 'start' | 'end'>
   /** Draw spend sparklines (superusers: the series isn't ACL-scoped). */
   series: boolean
   ratingsPending: boolean
@@ -69,6 +68,7 @@ export function GroupLabel({ group }: { group: RowGroup }) {
 export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const groups = rowGroups(p.rows, p.grouped, p.ownerName)
+  const byKey = new Map(groups?.map((g) => [g.key, g]) ?? [])
   const groupOf = new Map(groups?.flatMap((g) => g.rows.map((r) => [r.id, g] as const)) ?? [])
   const data = groups ? groups.flatMap((g) => g.rows) : p.rows
   const budgetsOn = p.budgets.state !== 'off'
@@ -177,7 +177,7 @@ export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void
             ? {
                 of: (r) => groupOf.get(r.id)?.key ?? '',
                 header: (key) => {
-                  const g = groups.find((x) => x.key === key)
+                  const g = byKey.get(key)
                   return g ? <GroupLabel group={g} /> : null
                 },
                 collapsed,
@@ -195,23 +195,23 @@ export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void
   )
 }
 
-/** "Budget use", the preview badge, and when it was last read ("updated 2 minutes ago"). */
-export function BudgetHeader({ budgets }: { budgets: HomeBudgets }) {
-  // Its own clock: the stamp moves every minute while the page's "now" stays frozen for the visit.
-  const now = useNow(STAMP_TICK_MS)
+/**
+ * "Budget use", the preview badge, and when it was last read ("updated 2 minutes ago"). The badge and stamp are shown,
+ * not announced: they'd be read with every budget cell as part of the column's name. The strip's note says both once.
+ */
+function BudgetHeader({ budgets }: { budgets: HomeBudgets }) {
+  const updated = useBudgetStamp(budgets.updatedAt)
   return (
     <span className="flex flex-col gap-0.5 py-1">
       <span className="flex items-center gap-1.5">
         {copy.table.budget}
-        <Badge variant="outline" className="text-3xs">
+        <Badge aria-hidden variant="outline" className="text-3xs">
           {copy.budget.preview}
         </Badge>
       </span>
-      {budgets.updatedAt ? (
-        <span className="font-normal">
-          {copy.budget.updated(
-            relTime(new Date(budgets.updatedAt).toISOString(), Math.max(now, budgets.updatedAt)),
-          )}
+      {updated ? (
+        <span aria-hidden className="font-normal">
+          {updated}
         </span>
       ) : null}
     </span>

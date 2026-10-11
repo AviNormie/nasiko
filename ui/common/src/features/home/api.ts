@@ -16,14 +16,14 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
-import { fetchAgentBuilds } from '@/features/deploy/api'
+import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
-import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/router/api'
+import { useBudgets, useBudgetStatus } from '@/features/router/api'
 import type { Budget, BudgetStatus } from '@/features/router/types'
 import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
 import type { ResolvedWindow } from '@/features/tokenops/window'
-import { apiData, withQuery } from '@/lib/api/client'
+import { ApiError, apiData, withQuery } from '@/lib/api/client'
 import { isPreview } from '@/lib/env'
 import { isHarness } from '@/features/agents/status'
 import { usePendingRequests } from '@/features/chat/api'
@@ -70,7 +70,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
   const ready = !!fleet.error || (!!fleet.summary && any)
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const pending = usePendingRequests(me.sub, true)
-  const budgets = useHomeBudgets(any)
+  const budgets = useHomeBudgets(any, me.sub)
 
   const agents: HomeAgent[] = (dir.data ?? []).map((a) => ({
     id: a.id,
@@ -170,9 +170,13 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
 
 /**
  * Where budgets stand: `off` when this server has none (a bare 404) or they aren't a preview here (every budget is
- * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep.
+ * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep (a 401
+ * or 403 included: it ends the poll but isn't "not set up"); `stale` when a refresh failed and the last figures stay.
  */
-export type BudgetsState = 'off' | 'loading' | 'failed' | 'ok'
+export type BudgetsState = 'off' | 'loading' | 'failed' | 'stale' | 'ok'
+
+/** Budget figures are drawn while they are current or kept from the last successful read. */
+export const budgetsShown = (s: BudgetsState) => s === 'ok' || s === 'stale'
 
 export interface HomeBudgets {
   state: BudgetsState
@@ -184,36 +188,43 @@ export interface HomeBudgets {
   updatedAt: number
 }
 
+/** Whole cents: a recomputed sum like 0.1 + 0.7 must still meet a $0.80 limit. */
+const cents = (v: number) => Math.round(v * 100)
+
 function rowBudget(b: Budget, st: BudgetStatus, now: Date): RowBudget {
-  const days = st.daily.map((d) => ({
-    date: d.date,
-    spend_usd: d.cost_usd,
-    operations: 0,
-    intensity: 0,
-  }))
+  const days = st.daily.map((d) => ({ date: d.date, spend_usd: d.cost_usd }))
   return {
     used: st.used_usd,
     limit: b.limit_usd,
     resetsAt: st.resets_at,
     unpriced: st.unpriced_calls > 0,
-    crossing: crossingDate(b.limit_usd, days, now),
+    // "Limit reached" follows the same figure the cell prints (`used_usd`), never a recomputed sum of the days.
+    crossing:
+      b.limit_usd > 0 && cents(st.used_usd) >= cents(b.limit_usd)
+        ? { kind: 'reached' }
+        : crossingDate(b.limit_usd, days, now),
   }
 }
 
-function useHomeBudgets(any: boolean): HomeBudgets {
+function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
   const preview = isPreview('router')
-  const list = useBudgets(preview && any)
+  // Both reads poll together: a limit changed elsewhere, or a new budget, shows with the next status.
+  const list = useBudgets(preview && any, BUDGET_POLL_MS)
   const status = useBudgetStatus(preview && !!list.data?.length, BUDGET_POLL_MS)
-  const off = !preview || budgetPollEnds(list.error) || budgetPollEnds(status.error)
+  const absent = (e: unknown) => e instanceof ApiError && e.status === 404
+  const off = !preview || absent(list.error) || absent(status.error)
   const failed = (list.isError && !list.data) || (status.isError && !status.data)
+  const stale = list.isError || status.isError
   const state: BudgetsState = off
     ? 'off'
     : failed
       ? 'failed'
       : list.isPending || (!!list.data?.length && status.isPending)
         ? 'loading'
-        : 'ok'
-  if (state !== 'ok' || !list.data) return { state, byAgent: null, own: null, updatedAt: 0 }
+        : stale
+          ? 'stale'
+          : 'ok'
+  if (!budgetsShown(state) || !list.data) return { state, byAgent: null, own: null, updatedAt: 0 }
   // The status' own read time: the elapsed days and its daily series must agree (router budgets' rule).
   const now = new Date(status.dataUpdatedAt)
   const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
@@ -223,12 +234,13 @@ function useHomeBudgets(any: boolean): HomeBudgets {
     const st = byId.get(b.id)
     if (!st) continue
     if (b.scope === 'agent' && b.agent_id) byAgent.set(b.agent_id, rowBudget(b, st, now))
-    else if (b.scope === 'owner') own = rowBudget(b, st, now)
+    // Only the viewer's own: a list that also carries other people's owner budgets never labels theirs "Your budget".
+    else if (b.scope === 'owner' && b.owner_id === meSub) own = rowBudget(b, st, now)
   }
   return { state, byAgent, own, updatedAt: status.dataUpdatedAt }
 }
 
-/** Row reads in flight across the page (eng "Home execution table": limiter of 4). */
+/** Row reads in flight across the page (eng "Home execution table": `ROW_READS`). */
 const rowLimiter = createLimiter(ROW_READS)
 
 const FINOPS = '/api/observability/finops'
@@ -237,22 +249,37 @@ const FINOPS = '/api/observability/finops'
  * One agent's spend series for the window, for its sparkline. Superusers only: `/finops/spend-timeseries` is fleet-wide
  * on the server, not ACL-scoped (eng "Member money"). Mounted only while the row is on screen; leaving it cancels the
  * read, or drops it from the limiter's queue.
+ *
+ * The bounds are the page's frozen window, sent explicitly: a relative `range` read when a row scrolls in later would
+ * describe a later window than the totals beside it. Every read is a Tempo search plus a fetch per trace on the
+ * server, so a failure isn't retried (the row keeps its total) and a batched per-agent series is a server ask.
  */
-export function useRowSeries(id: string, win: Pick<ResolvedWindow, 'key' | 'params'>) {
-  const path = withQuery(`${FINOPS}/spend-timeseries`, { ...win.params, agent_id: id })
+export function useRowSeries(id: string, win: Pick<ResolvedWindow, 'start' | 'end'>) {
+  const bounds = { start_time: win.start.toISOString(), end_time: win.end.toISOString() }
+  const path = withQuery(`${FINOPS}/spend-timeseries`, { ...bounds, agent_id: id })
   return useQuery({
-    queryKey: ['home', 'series', id, win.key],
+    queryKey: ['home', 'series', id, bounds.start_time, bounds.end_time],
     queryFn: ({ signal }) =>
-      rowLimiter(signal, () => apiData<FinopsSpendTimeseries>(path, { signal })),
+      rowLimiter(signal, async () => {
+        const body = await apiData<FinopsSpendTimeseries>(path, { signal })
+        // A malformed body costs this row its line, never the table (it renders during the cell's render).
+        if (!body || !Array.isArray(body.points))
+          throw new ApiError(200, body, path, `GET ${path} → unexpected response (no points)`)
+        return body
+      }),
     staleTime: ROW_READ_STALE_MS,
+    retry: false,
     meta: { path: `${FINOPS}/spend-timeseries` },
   })
 }
 
-/** One agent's build records (newest 20), for its last change; `{available:false}` without deploy rights. */
+/**
+ * One agent's build records (newest 20), for its last change; `{available:false}` without deploy rights. The deploy
+ * feature's own key, so a build started, finished or invalidated anywhere in the app reaches the row.
+ */
 export function useRowBuilds(id: string) {
   return useQuery({
-    queryKey: ['home', 'builds', id],
+    queryKey: agentBuildsKey(id),
     queryFn: ({ signal }) => rowLimiter(signal, () => fetchAgentBuilds(id, signal)),
     staleTime: ROW_READ_STALE_MS,
     retry: false,

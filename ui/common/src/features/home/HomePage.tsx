@@ -37,14 +37,15 @@ import { meQuery, type Me } from '@/lib/api/auth'
 import { fmtLocalTime, fmtMoney, fmtMoneyFloor, fmtTokens } from '@/lib/format'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
-import { useHome, type HomeBudgets, type SourceStatus } from './api'
+import { budgetsShown, useHome, type HomeBudgets, type SourceStatus } from './api'
 import { PhoneRows } from './components/PhoneRows'
 import { RowsTable } from './components/RowsTable'
 import { copy } from './copy'
 import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import type { HomeSearch, Scope } from './search'
-import { RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
+import { PHONE_QUERY, RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
+import { useBudgetStamp } from './useBudgetStamp'
 
 type SetSearch = (patch: Partial<HomeSearch>, opts?: { replace?: boolean }) => void
 
@@ -105,8 +106,9 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const now = useFrozenNow(returnTick)
   useEffect(() => {
     if (!returnTick) return
-    // Window-keyed reads move with `now`; the directory doesn't, so refresh it.
+    // Window-keyed reads move with `now`; the directory and the rows' build records don't, so refresh them.
     void qc.invalidateQueries({ queryKey: ['agents'], exact: true })
+    void qc.invalidateQueries({ queryKey: ['builds', 'agent'] })
   }, [returnTick, qc])
 
   // Scope: the URL, else the stored choice, else the persona's default once it settles (scope.ts).
@@ -139,7 +141,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const { needsYou } = home
   const pausedFlows = usePausedFlows(needsYou.needs.rows.some((r) => r.kind === 'request'))
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT)
-  const phone = useMediaQuery(PHONE, false)
+  const phone = useMediaQuery(PHONE_QUERY, false)
   const rows = home.rows ? sortRows(home.rows, sort) : null
   const t = rows ? totals(rows) : null
   const sentence = t
@@ -325,7 +327,8 @@ function Strip({
   const savedKnown = savedStatus === 'ok' || savedStatus === 'stale'
   // Yours shows the viewer's own monthly budget; Fleet has no authoritative fleet budget to show, and owner and agent
   // budgets overlap, so they are never summed into one (design "Home scope semantics").
-  const own = scope === 'yours' && budgets.state === 'ok' ? budgets.own : null
+  const own = scope === 'yours' && budgetsShown(budgets.state) ? budgets.own : null
+  const stamp = useBudgetStamp(budgets.updatedAt)
   return (
     <section aria-label={copy.strip.label} className="flex flex-col gap-1">
       <div
@@ -374,13 +377,17 @@ function Strip({
         {own ? (
           <KpiTile
             label={copy.budget.own}
-            title={copy.budget.ownHint}
             aside={
               <Badge variant="outline" className="text-3xs">
                 {copy.budget.preview}
               </Badge>
             }
-            value={`${Math.round((own.used / own.limit) * 100)}%`}
+            // Floored, so 99.6% never reads as a full 100% while under the limit; a floor (≥) with unpriced calls.
+            value={
+              own.limit > 0
+                ? copy.budget.pct(Math.floor((own.used / own.limit) * 100), own.unpriced)
+                : '—'
+            }
           >
             <span className="text-xs text-muted-foreground">
               {copy.budget.use(
@@ -389,23 +396,27 @@ function Strip({
                 budgetMonth(own.resetsAt),
               )}
             </span>
+            <span className="text-xs text-muted-foreground">{copy.budget.ownHint}</span>
           </KpiTile>
         ) : null}
         <KpiTile label={copy.strip.needs} value={t.needing === null ? '—' : String(t.needing)} />
       </div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs text-muted-foreground">
-        <p className="m-0">
+        {/* One note for both layouts: the table header's badge and stamp aren't announced, and phones have no header. */}
+        <p
+          className="m-0"
+          role={budgets.state === 'failed' || budgets.state === 'stale' ? 'status' : undefined}
+        >
           {budgets.state === 'off'
             ? copy.budget.off
             : budgets.state === 'failed'
               ? copy.budget.failed
-              : null}
+              : budgets.state === 'stale'
+                ? `${copy.budget.stale} · ${copy.budget.note(stamp)}`
+                : copy.budget.note(stamp)}
         </p>
         {asOf ? <p className="m-0">{copy.strip.asOf(fmtLocalTime(asOf))}</p> : null}
       </div>
     </section>
   )
 }
-
-/** Below this the rows are two lines each (design "Responsive": < 640 px). */
-const PHONE = '(max-width: 639px)'

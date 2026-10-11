@@ -92,13 +92,13 @@ export interface DataTableGroups<T> {
   /** The group a row belongs to; consecutive rows with the same key form one group. */
   of: (row: T) => string
   /** The header row's content (a name, a count, a subtotal): it is also the collapse button's name. */
-  header: (key: string, rows: T[]) => ReactNode
+  header: (key: string) => ReactNode
   collapsed: ReadonlySet<string>
   onToggle: (key: string) => void
 }
 
 type Item<T extends RowData> =
-  { kind: 'group'; key: string; rows: Row<Features, T>[] } | { kind: 'row'; row: Row<Features, T> }
+  { kind: 'group'; key: string } | { kind: 'row'; row: Row<Features, T> }
 
 function itemsOf<T extends RowData>(
   rows: Row<Features, T>[],
@@ -106,16 +106,11 @@ function itemsOf<T extends RowData>(
 ): Item<T>[] {
   if (!groups) return rows.map((row) => ({ kind: 'row', row }))
   const out: Item<T>[] = []
-  const heads: Extract<Item<T>, { kind: 'group' }>[] = []
+  let last: string | undefined
   for (const row of rows) {
     const key = groups.of(row.original)
-    let head = heads.at(-1)
-    if (head?.key !== key) {
-      head = { kind: 'group', key, rows: [] }
-      heads.push(head)
-      out.push(head)
-    }
-    head.rows.push(row)
+    if (key !== last) out.push({ kind: 'group', key })
+    last = key
     if (!groups.collapsed.has(key)) out.push({ kind: 'row', row })
   }
   return out
@@ -271,10 +266,7 @@ export function DataTable<T extends RowData>({
                       ) : (
                         <ChevronDown aria-hidden />
                       )}
-                      {groups.header(
-                        item.key,
-                        item.rows.map((r) => r.original),
-                      )}
+                      {groups.header(item.key)}
                     </Button>
                   </TableCell>
                 </TableRow>

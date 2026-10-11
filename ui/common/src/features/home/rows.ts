@@ -17,6 +17,7 @@
 import type { AgentHealth } from '@/features/overview/health'
 import type { SpendTimeseriesPoint } from '@/features/tokenops/types'
 import type { Crossing } from '@/features/tokenops/forecast'
+import { zeroFillTimeline } from '@/features/tokenops/series'
 import { copy } from './copy'
 import type { Scope } from './search'
 
@@ -175,23 +176,24 @@ export interface RowGroup {
 }
 
 /** The group every owner the viewer can't name falls into (members read no user list). */
-export const OTHER_OWNERS = 'other-owners'
+const OTHER_OWNERS = 'other-owners'
 const MINE = 'mine'
 
 /**
- * Fleet's owner groups: the viewer's own first, then each named owner by name; owners the viewer can't name share one
- * group, last. Rows keep their order inside a group.
+ * Fleet's owner groups in display order, or null for Yours' one list: the viewer's own first, then each named owner by
+ * name; owners the viewer can't name share one group, last. Rows keep their order inside a group.
  */
-export function groupByOwner(
+export function rowGroups(
   rows: readonly HomeRow[],
+  grouped: boolean,
   ownerName: (id: string) => string | null,
-  labels: { you: string; others: string },
-): RowGroup[] {
+): RowGroup[] | null {
+  if (!grouped) return null
   const groups = new Map<string, RowGroup>()
   for (const r of rows) {
-    const name = r.mine ? labels.you : ownerName(r.ownerId)
+    const name = r.mine ? copy.groups.you : ownerName(r.ownerId)
     const key = r.mine ? MINE : name ? `owner:${r.ownerId}` : OTHER_OWNERS
-    const g = groups.get(key) ?? { key, label: name ?? labels.others, rows: [], spend: 0 }
+    const g = groups.get(key) ?? { key, label: name ?? copy.groups.others, rows: [], spend: 0 }
     g.rows.push(r)
     g.spend = g.spend === null || r.spend === null ? null : g.spend + r.spend
     groups.set(key, g)
@@ -200,38 +202,26 @@ export function groupByOwner(
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label))
 }
 
-const HOUR = 3_600_000
-const DAY = 86_400_000
+/**
+ * A row's spend per bucket across the window, zero-filled by TokenOps' own timeline (`series.ts`: the series is
+ * sparse, an omitted bucket is a real zero, bucket starts are floored to the UTC hour or day).
+ */
+export const sparkPoints = (
+  series: { bucket: 'hour' | 'day'; points: SpendTimeseriesPoint[] },
+  win: { start: Date; end: Date },
+): number[] =>
+  zeroFillTimeline(series.points, series.bucket, win.start, win.end).map((p) => p.spend)
 
 /**
- * A row's spend per bucket across the window, zero-filled: the timeseries is sparse (only buckets with data appear),
- * and an omitted bucket is a real zero (TokenOps' `series.ts` rule).
+ * The budget period's month ("Oct"): the period that resets at `resetsAt` is the month before it (UTC). Empty for a
+ * time that doesn't parse.
  */
-export function sparkPoints(
-  series: { bucket: 'hour' | 'day'; points: readonly SpendTimeseriesPoint[] },
-  win: { start: Date; end: Date },
-): number[] {
-  const step = series.bucket === 'hour' ? HOUR : DAY
-  const byStart = new Map(series.points.map((p) => [Date.parse(p.bucket_start), p.spend_usd]))
-  const out: number[] = []
-  for (let t = Math.floor(win.start.getTime() / step) * step; t < win.end.getTime(); t += step)
-    out.push(byStart.get(t) ?? 0)
-  return out
+export function budgetMonth(iso: string): string {
+  const t = Date.parse(iso)
+  return Number.isNaN(t)
+    ? ''
+    : new Date(t - 1).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
 }
-
-/** The budget period's month ("Oct"): the period that resets at `resetsAt` is the month before it (UTC). */
-export const budgetMonth = (iso: string) =>
-  new Date(Date.parse(iso) - 1).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
-
-/** Fleet's owner groups in display order, or null for Yours' one list. */
-export const rowGroups = (
-  rows: readonly HomeRow[],
-  grouped: boolean,
-  ownerName: (id: string) => string | null,
-): RowGroup[] | null =>
-  grouped
-    ? groupByOwner(rows, ownerName, { you: copy.groups.you, others: copy.groups.others })
-    : null
 
 /** A row's owner line: "You", the owner's name, or "Another user" when the viewer can't name them. */
 export const ownerLine = (r: HomeRow, ownerName: (id: string) => string | null) =>

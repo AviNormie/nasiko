@@ -6,7 +6,19 @@ import { homeNarrative } from '@/features/narrative/home'
 import { homeScopeFor } from '@/features/onboarding/logic'
 import { PERSONAS } from '@/features/onboarding/types'
 import type { AgentHealth } from '@/features/overview/health'
-import { buildRows, DEFAULT_SORT, needsByAgent, sortRows, totals, type HomeAgent } from './rows'
+import {
+  budgetMonth,
+  buildRows,
+  DEFAULT_SORT,
+  needsByAgent,
+  rowGroups,
+  sortRows,
+  sparkPoints,
+  totals,
+  type HomeAgent,
+  type HomeRow,
+} from './rows'
+import { copy } from './copy'
 import { rememberScope, resolveScope, storedScope } from './scope'
 
 describe('scope', () => {
@@ -164,5 +176,82 @@ describe('the sentence', () => {
         needing: null,
       }),
     ).toBeNull()
+  })
+})
+
+describe('owner groups, sparklines, budget month (PR2b)', () => {
+  const row = (over: Partial<HomeRow>): HomeRow => ({
+    id: over.id ?? 'a',
+    name: 'a',
+    displayName: over.id ?? 'a',
+    ownerId: 'o',
+    harness: false,
+    status: 'running',
+    mine: false,
+    health: null,
+    needs: 0,
+    spend: 1,
+    requests: 1,
+    saved: null,
+    savedBasis: null,
+    budget: null,
+    ...over,
+  })
+
+  it('orders groups: yours, then named owners by name, then the owners you can’t name', () => {
+    const groups = rowGroups(
+      [
+        row({ id: '1', ownerId: 'z' }),
+        row({ id: '2', ownerId: 'me', mine: true }),
+        row({ id: '3', ownerId: 'b' }),
+        row({ id: '4', ownerId: 'a' }),
+        row({ id: '5', ownerId: 'y' }),
+      ],
+      true,
+      (id) => ({ a: 'Ana', b: 'Bea' })[id] ?? null,
+    )!
+    expect(groups.map((g) => g.label)).toEqual([copy.groups.you, 'Ana', 'Bea', copy.groups.others])
+    expect(groups.at(-1)!.rows.map((r) => r.id)).toEqual(['1', '5'])
+    expect(rowGroups([row({})], false, () => null)).toBeNull()
+  })
+
+  it('a group’s spend is unknown while any of its rows is', () => {
+    const [g] = rowGroups(
+      [row({ id: '1', spend: 2 }), row({ id: '2', spend: null })],
+      true,
+      () => 'X',
+    )!
+    expect(g!.spend).toBeNull()
+    const [h] = rowGroups(
+      [row({ id: '1', spend: 2 }), row({ id: '2', spend: 3 })],
+      true,
+      () => 'X',
+    )!
+    expect(h!.spend).toBe(5)
+  })
+
+  it('zero-fills sparse buckets across the window', () => {
+    const point = (bucket_start: string, spend_usd: number) => ({
+      bucket_start,
+      spend_usd,
+      operations: 1,
+      tool_calls: 0,
+      top_agent_name: null,
+      top_agent_spend_usd: null,
+      p50_latency_ms: null,
+      p95_latency_ms: null,
+      p99_latency_ms: null,
+    })
+    const win = { start: new Date('2026-03-01T00:00:00Z'), end: new Date('2026-03-05T00:00:00Z') }
+    expect(sparkPoints({ bucket: 'day', points: [point('2026-03-03T00:00:00Z', 4)] }, win)).toEqual(
+      [0, 0, 4, 0],
+    )
+    expect(sparkPoints({ bucket: 'day', points: [] }, win)).toEqual([0, 0, 0, 0])
+  })
+
+  it('names the period’s month (the one before the reset), across a year boundary', () => {
+    expect(budgetMonth('2027-01-01T00:00:00Z')).toBe('Dec')
+    expect(budgetMonth('2026-11-01T00:00:00Z')).toBe('Oct')
+    expect(budgetMonth('not a date')).toBe('')
   })
 })

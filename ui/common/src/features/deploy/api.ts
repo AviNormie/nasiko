@@ -193,6 +193,9 @@ export function useBuild(id: string, live: boolean) {
   })
 }
 
+/** The key of an agent's build records, shared by every reader so one invalidation reaches them all. */
+export const agentBuildsKey = (agentId: string) => buildKeys.forAgent(agentId)
+
 /** `GET /api/builds/agent/{id}`: the agent's newest 20 build records, or `{available:false}` without deploy rights. */
 export const fetchAgentBuilds = async (agentId: string, signal: AbortSignal) =>
   gated(

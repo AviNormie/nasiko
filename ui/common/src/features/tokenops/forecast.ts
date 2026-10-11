@@ -30,8 +30,8 @@ const DAY = 86_400_000
 export const FORECAST_MIN_DAYS = 3
 
 export function summarizeMonth(
-  thisMonth: SpendCalendarDay[],
-  lastMonth: SpendCalendarDay[],
+  thisMonth: Pick<SpendCalendarDay, 'date' | 'spend_usd'>[],
+  lastMonth: Pick<SpendCalendarDay, 'date' | 'spend_usd'>[],
   now: Date,
 ): MonthSummary {
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
@@ -96,12 +96,13 @@ export type Crossing = { kind: 'reached' } | { kind: 'crosses'; date: string }
  */
 export function crossingDate(
   limit: number,
-  thisMonth: SpendCalendarDay[],
+  thisMonth: Pick<SpendCalendarDay, 'date' | 'spend_usd'>[],
   now: Date,
 ): Crossing | null {
   if (!(limit > 0)) return null
   const m = summarizeMonth(thisMonth, [], now)
-  if (m.mtd >= limit) return { kind: 'reached' }
+  // Whole cents: 0.1 + 0.7 is 0.7999…, and still meets a $0.80 limit.
+  if (Math.round(m.mtd * 100) >= Math.round(limit * 100)) return { kind: 'reached' }
   if (!m.show || m.high === null || m.high < limit) return null
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
   const completed = Math.floor(m.elapsedDays)
