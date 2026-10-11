@@ -283,7 +283,10 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
 
   return (
     <Frame description={sentence ?? undefined} actions={actions}>
-      <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} pausedFlows={pausedFlows} />
+      {/* An empty fleet (only reachable here through a unit link) reads no sessions, so Needs you would never settle. */}
+      {home.dir.data?.length === 0 ? null : (
+        <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} pausedFlows={pausedFlows} />
+      )}
       {rows && t ? (
         <Strip
           totals={t}
