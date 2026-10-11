@@ -84,7 +84,9 @@ function markerSentence(i: HubNarrativeInput): string | null {
     case 'crash':
       return `It last crashed ${at}.`
     case 'event':
-      return `${m.label.replace(/\.\s*$/, '')} ${at}.`
+      // The server's summary leads with its own verb ("Token optimization turned on"): put the date first, so a summary
+      // ending in "on" never reads "turned on on Sep 30" (QA ISSUE-001).
+      return `O${at.slice(1)}: ${m.label.replace(/\.\s*$/, '')}.`
   }
 }
 
