@@ -488,7 +488,8 @@ export function useHubNeeds(
   const qc = useQueryClient()
   const superuser = !!me?.is_superuser
   const waiting = useWaiting(me?.sub ?? '', superuser)
-  const pending = usePendingRequests(me?.sub ?? '', !!me && !superuser)
+  // The same query `useWaiting` runs (one key): its rows carry the agent, which the match drops.
+  const pending = usePendingRequests(me?.sub ?? '', !!me)
   const chats = useChatSessions()
   const rating = useAgentRating(agent, superuser, gate, now)
   const dir = useAgentsDirectory()
@@ -503,16 +504,21 @@ export function useHubNeeds(
       .filter((r) => mineReq(r.execution.agent_id))
       .map((r) => ({ chat: c.sessionId, id: r.id })),
   )
+  const forAgent = (pending.data?.items ?? []).filter(
+    (r) => r.status === 'pending' && mineReq(r.execution.agent_id),
+  )
   const all = superuser
     ? provable
-    : (pending.data?.items ?? [])
-        .filter((r) => r.status === 'pending' && mineReq(r.execution.agent_id))
-        .map((r) => ({ chat: provable.find((p) => p.id === r.id)?.chat ?? null, id: r.id }))
+    : forAgent.map((r) => ({ chat: provable.find((p) => p.id === r.id)?.chat ?? null, id: r.id }))
+  // Only this agent's unprovable requests hold the verdict back: another agent's say nothing about this one (QA).
+  const unproven = superuser
+    ? forAgent.filter((r) => !provable.some((p) => p.id === r.id)).length
+    : 0
   // Matching needs the chat list (it proves a superuser's requests): pending or failed, the source can't answer yet.
   const requests: HubNeedsInput['requests'] =
     waiting.failedCold || waiting.stale || (superuser && chats.isError)
       ? { state: 'failed' }
-      : !me || waiting.isPending || chats.isPending || (!superuser && pending.isPending)
+      : !me || waiting.isPending || chats.isPending || pending.isPending
         ? { state: 'loading' }
         : {
             state: 'ok',
@@ -520,7 +526,7 @@ export function useHubNeeds(
               count: all.length,
               firstChat: all.find((r) => r.chat)?.chat ?? null,
               firstRequest: all.find((r) => r.chat)?.id ?? null,
-              unproven: superuser ? waiting.match.dropped : 0,
+              unproven,
             },
           }
 

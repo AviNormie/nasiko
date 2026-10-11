@@ -21,7 +21,7 @@ interface Requests {
   count: number
   firstChat: string | null
   firstRequest: string | null
-  /** A superuser's pending requests (any agent) no chat proves theirs yet: the source can't vouch for "none". */
+  /** A superuser's pending requests for this agent no chat proves theirs yet: the source can't vouch for "none". */
   unproven: number
 }
 
