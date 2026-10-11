@@ -255,3 +255,54 @@ describe('owner groups, sparklines, budget month (PR2b)', () => {
     expect(budgetMonth('not a date')).toBe('')
   })
 })
+
+describe('org levels in the core (PR2c)', () => {
+  it('the scope schema takes yours, fleet and unit:<id>, and drops junk', async () => {
+    const { homeSearchSchema } = await import('./search')
+    const scope = (v: unknown) => homeSearchSchema.parse({ scope: v }).scope
+    expect(scope('yours')).toBe('yours')
+    expect(scope('unit:5eed0014-0000-4000-8000-000000000001')).toBe(
+      'unit:5eed0014-0000-4000-8000-000000000001',
+    )
+    expect(scope('unit:')).toBeUndefined()
+    expect(scope('unit:<script>')).toBeUndefined()
+    expect(scope('team')).toBeUndefined()
+  })
+
+  it('a unit is never remembered as the default scope', () => {
+    rememberScope('u-unit', 'fleet')
+    rememberScope('u-unit', 'unit:abc')
+    expect(storedScope('u-unit')).toBe('fleet')
+  })
+
+  it('a unit keeps the rows its owners own, the viewer’s only when the viewer is one', () => {
+    const agents: HomeAgent[] = ['me', 'a', 'b'].map((owner, i) => ({
+      id: `id${i}`,
+      name: `n${i}`,
+      displayName: `n${i}`,
+      ownerId: owner,
+      harness: false,
+      status: 'running',
+    }))
+    const base = { agents, meSub: 'me', spend: null, saved: null, ratings: null, needs: null }
+    const ids = (owners: string[]) =>
+      buildRows({ ...base, scope: 'unit:x', owners: new Set(owners) }).map((r) => r.ownerId)
+    expect(ids(['a'])).toEqual(['a'])
+    expect(ids(['a', 'me'])).toEqual(['me', 'a'])
+    expect(buildRows({ ...base, scope: 'unit:x', owners: null })).toEqual([])
+  })
+
+  it('the sentence names the unit', () => {
+    expect(
+      homeNarrative({
+        scope: 'unit',
+        unitName: 'Platform',
+        agents: 3,
+        harnesses: 1,
+        spend: 12,
+        days: 30,
+        needing: 0,
+      }),
+    ).toBe("Platform's 3 agents and 1 harness spent $12.00 in the last 30 days.")
+  })
+})

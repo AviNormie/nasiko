@@ -39,7 +39,9 @@ export function storedScope(sub: string | undefined): Scope | null {
   }
 }
 
+/** Yours and Fleet are remembered; an org level isn't (the unit may be gone, or no longer visible, next time). */
 export function rememberScope(sub: string, scope: Scope) {
+  if (scope !== 'yours' && scope !== 'fleet') return
   try {
     localStorage.setItem(key(sub), scope)
   } catch {

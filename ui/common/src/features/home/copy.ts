@@ -7,6 +7,8 @@ export const copy = {
     yoursHint: 'Agents and harnesses you own',
     fleetHint: 'Every agent and harness you can see',
     sharedWithYou: 'Shared with you: every agent and harness you can see',
+    unitLabel: 'Organization unit',
+    unitPlaceholder: 'Unit…',
   },
   strip: {
     label: 'Totals',
@@ -80,9 +82,14 @@ export const copy = {
     noOwned: "You don't own an agent yet.",
     noOwnedBody: 'Agents and harnesses you own show here. The fleet has the ones shared with you.',
     showFleet: 'Show the fleet',
+    unknownUnit: "That unit isn't one you can see.",
+    noUnitRows: "This unit's members own no agents you can see.",
+    noUnitRowsBody:
+      'A unit shows the agents and harnesses its members own, its sub-units included.',
     noUsage: (days: number) => `No usage in the last ${days} days.`,
   },
   error: "The agents couldn't load",
+  unitFailed: "This unit's members couldn't load",
   moneyFailed: "Spend or savings couldn't load: those columns show —",
   moneyStale: "Couldn't refresh spend or savings: the figures are from the last successful read",
   retry: 'Retry',

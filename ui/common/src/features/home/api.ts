@@ -15,6 +15,8 @@
  * timeseries isn't ACL-scoped) and its build records (last change). A row read is dropped when its row scrolls away.
  */
 import { useQuery } from '@tanstack/react-query'
+import { useSlots } from '@/app/edition-context'
+import type { HomeLevel } from '@/app/edition'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
 import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
@@ -34,7 +36,7 @@ import type { Range } from '@/features/overview/search'
 import { useDashboard, useSavings } from '@/features/tokenops/api'
 import type { Me } from '@/lib/api/auth'
 import { buildRows, needsByAgent, type HomeAgent, type RowBudget } from './rows'
-import type { Scope } from './search'
+import { isUnitScope, unitOf, type Scope } from './search'
 import { BUDGET_POLL_MS, ROW_READ_STALE_MS, ROW_READS, SAVINGS_ROWS } from './tuning'
 
 /** Where a source stands for the current window: its numbers are shown only when `ok` (or `stale`, kept and labelled). */
@@ -71,6 +73,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const pending = usePendingRequests(me.sub, true)
   const budgets = useHomeBudgets(any, me.sub)
+  const org = useOrgLevel(scope)
 
   const agents: HomeAgent[] = (dir.data ?? []).map((a) => ({
     id: a.id,
@@ -127,8 +130,9 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
         requestAgents: requests.filter((r) => r.proven).map((r) => r.agentId),
       })
 
+  // An org level's rows wait for its owners: never the whole fleet under a unit's name.
   const rows =
-    scope && dir.data
+    scope && dir.data && (!isUnitScope(scope) || org.state === 'ok')
       ? buildRows({
           agents,
           meSub: me.sub,
@@ -139,6 +143,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
           ratings: fleet.ratingsPending ? null : (fleet.summary?.byId ?? null),
           needs: needsMap,
           budgets: budgets.byAgent,
+          owners: org.owners,
         })
       : null
 
@@ -150,6 +155,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
     rows,
     ratingsPending: fleet.ratingsPending,
     budgets,
+    org,
     win,
     owner: (id: string) => users.data?.get(id) ?? null,
     spendStatus,
@@ -287,4 +293,62 @@ export function useRowBuilds(id: string) {
     retry: false,
     meta: { path: '/api/builds/agent/{id}' },
   })
+}
+
+// ─── PR2c: the org levels an edition layer adds (`homeOrgScope`) ─────────────────────────────────────────────
+
+/**
+ * Where an org level stands: `none` without the slot or on Yours/Fleet; `unknown` when the URL names a unit the viewer
+ * can't pick (deleted, or outside a manager's subtrees); `failed` when the units or the unit's members couldn't load.
+ */
+export type OrgLevelState = 'none' | 'loading' | 'ok' | 'unknown' | 'failed'
+
+export interface OrgLevel {
+  /** Levels the scope control offers after Yours and Fleet (empty without the slot, or for a member). */
+  levels: readonly HomeLevel[]
+  state: OrgLevelState
+  /** The chosen level, once the units answered. */
+  level: HomeLevel | null
+  /** Its owners (members, subtree included), once read. */
+  owners: ReadonlySet<string> | null
+  retry: () => void
+}
+
+const NO_QUERY = { queryKey: ['home', 'org', 'none'], queryFn: async () => null }
+
+function useOrgLevel(scope: Scope | null): OrgLevel {
+  const slot = useSlots().homeOrgScope
+  const levelsQ = useQuery({ ...(slot?.levels.query ?? NO_QUERY), enabled: !!slot })
+  const levels = slot && levelsQ.data !== undefined ? slot.levels.list(levelsQ.data) : []
+  const unitId = isUnitScope(scope) ? unitOf(scope) : null
+  const level = unitId ? (levels.find((l) => l.id === unitId) ?? null) : null
+  const ownersQ = useQuery({
+    ...(slot && unitId ? slot.owners.query(unitId) : NO_QUERY),
+    enabled: !!slot && !!level,
+  })
+  const state: OrgLevelState = !unitId
+    ? 'none'
+    : !slot
+      ? 'unknown'
+      : levelsQ.isError && levelsQ.data === undefined
+        ? 'failed'
+        : levelsQ.data === undefined
+          ? 'loading'
+          : !level
+            ? 'unknown'
+            : ownersQ.isError && ownersQ.data === undefined
+              ? 'failed'
+              : ownersQ.data === undefined || ownersQ.data === null
+                ? 'loading'
+                : 'ok'
+  return {
+    levels,
+    state,
+    level,
+    owners: state === 'ok' && slot && ownersQ.data ? slot.owners.ids(ownersQ.data) : null,
+    retry: () => {
+      if (levelsQ.isError) void levelsQ.refetch()
+      if (ownersQ.isError) void ownersQ.refetch()
+    },
+  }
 }

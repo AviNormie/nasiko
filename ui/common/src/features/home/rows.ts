@@ -65,11 +65,19 @@ export interface HomeInput {
   ratings: ReadonlyMap<string, AgentHealth> | null
   needs: ReadonlyMap<string, number> | null
   budgets?: ReadonlyMap<string, RowBudget> | null
+  /** An org level's owners (PR2c): the rows they own, the viewer's own included only when the viewer is one. */
+  owners?: ReadonlySet<string> | null
 }
 
 export function buildRows(i: HomeInput): HomeRow[] {
   return i.agents
-    .filter((a) => i.scope === 'fleet' || a.ownerId === i.meSub)
+    .filter((a) =>
+      i.scope === 'fleet'
+        ? true
+        : i.scope === 'yours'
+          ? a.ownerId === i.meSub
+          : !!i.owners?.has(a.ownerId),
+    )
     .map((a) => {
       const money = i.spend ? (i.spend.get(a.id) ?? { cost: 0, operations: 0 }) : null
       const saved = i.saved?.get(a.id)
