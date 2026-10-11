@@ -111,7 +111,8 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
     gate.canFetch && compare && bucket === 'day',
   )
   const savings = useHubSavings(agent.id, win, gate.canFetch)
-  const savedSeries = useHubSavedSeries(agent.id, win, bucket, gate.canFetch)
+  // Coding harnesses run no history selection, so there is no savings series to ask for (QA ISSUE-004).
+  const savedSeries = useHubSavedSeries(agent.id, win, bucket, gate.canFetch && !agent.isHarness)
   const markers = useHubMarkers(agent.id, win, agent.isHarness)
   // Only data the gate vouches for renders: nothing fetched after its last success while it revalidates.
   const tsData = ts.data && gate.authorizes(ts.dataUpdatedAt) ? ts.data : undefined
