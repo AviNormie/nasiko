@@ -513,7 +513,9 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
   })
   const c5 = '5eedc000-0000-4000-8000-00000000c005'
   chats.set(c5, {
-    row: recorded(c5, CODING_SESSION_TITLE, now - 9 * 86_400_000),
+    // 10 days back: Older in the rail, and off the demo's spike day now that session/list lists recorded chats too
+    // (docs/designs/openruntime-demo-script.md pins that day's session count).
+    row: recorded(c5, CODING_SESSION_TITLE, now - 10 * 86_400_000),
     messages: [],
     hitl: [],
   })

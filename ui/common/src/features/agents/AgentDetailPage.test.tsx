@@ -14,6 +14,7 @@ import { fmtMoney } from '@/lib/format'
 import { configureMocks } from '@/mocks/handlers'
 import { ADMIN_ID } from '@/mocks/seed-harness'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
+import { agentWhere } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequestBodies, recordRequests, server } from '@/test/setup'
 import { copy as mcpCopy, STANCE } from '@/features/mcp/copy'
@@ -647,11 +648,7 @@ describe('Try it (chat plan §9)', () => {
   })
 
   it('a harness has no Try it', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    renderApp(`/agents/${rows.find((a) => a.tags?.includes('coding-agent'))!.id}`)
+    renderApp(`/agents/${(await agentWhere((a) => !!a.tags?.includes('coding-agent'))).id}`)
     await title()
     expect(screen.queryByRole('link', { name: 'Try it' })).toBeNull()
   })
@@ -682,11 +679,7 @@ describe('Try it (chat plan §9)', () => {
 
 describe('more states (plan §10)', () => {
   it('a coding harness shows Overview and MCP and points at Harnesses', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
+    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
     renderApp(`/agents/${harness.id}`)
     await title()
     expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
@@ -698,11 +691,7 @@ describe('more states (plan §10)', () => {
   })
 
   it('a coding harness Overview carries the Token optimization switch for its owner, on the Optimization card (eng D10)', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
+    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
     renderApp(`/agents/${harness.id}`)
     const sw = await screen.findByRole('switch', { name: copy.tokenOptimizationSwitch })
     expect(sw).toHaveAccessibleDescription(
@@ -712,11 +701,7 @@ describe('more states (plan §10)', () => {
   })
 
   it('a coding harness’s MCP tab lists servers for its owner, like any agent', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
+    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
     renderApp(`/agents/${harness.id}?tab=mcp`)
     expect(await screen.findByText(mcpCopy.agentMcpSubHarness)).toBeInTheDocument()
     // No Ask: a harness call has no flow, so the gateway stores no approval to answer (PR #631 reverted f5cb65e7).
@@ -729,15 +714,12 @@ describe('more states (plan §10)', () => {
   })
 
   it('a harness its viewer can’t manage shows no Token optimization switch', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      owner_id: string
-      tags?: string[]
-    }[]
     // A harness someone else owns, opened by a plain member (the non-manager test's persona).
     configureMocks({ seed, now, loggedIn: true, persona: 'sam' })
     const me = (await (await fetch('/api/me')).json()) as { sub: string }
-    const harness = rows.find((a) => a.tags?.includes('coding-agent') && a.owner_id !== me.sub)!
+    const harness = await agentWhere(
+      (a) => !!a.tags?.includes('coding-agent') && a.owner_id !== me.sub,
+    )
     renderApp(`/agents/${harness.id}`)
     await title()
     expect(screen.queryByRole('switch', { name: copy.tokenOptimizationSwitch })).toBeNull()

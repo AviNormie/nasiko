@@ -128,6 +128,7 @@ import { parseVersion } from '@/features/deploy/version'
 import { DEFAULT_REGISTRY, parseReference } from '@/features/deploy/registry'
 import type { BuildStatus, UploadPipelineStatus } from '@/features/deploy/types'
 import type { ChatMessage, ChatSessionRow } from '@/features/chat/types'
+import { CODING_SESSION_TITLE } from '@/features/chat/serverContract'
 import type { SessionSummary } from '@/features/observability/types'
 import { PERSONAS, type Persona } from '@/features/onboarding/types'
 
@@ -645,7 +646,6 @@ const text = (body: string, status: number) =>
 /** No cookie: `require_auth` → `validate_bearer`'s reason. */
 const unauthorized = () => authRejection('missing or invalid token')
 
-/** Session/trace/span answers are `{data: …}` (no status_code/message) and plain-text errors. */
 /** A recorded chat as a `session/list` row: the DB-only fallback (no harness traces in the mock), raw agent name. */
 function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummary {
   return {
@@ -667,6 +667,7 @@ function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummar
   }
 }
 
+/** Session/trace/span answers are `{data: …}` (no status_code/message) and plain-text errors. */
 function traceStore(fn: () => Response): Response {
   if (!loggedIn) return unauthorized()
   const v = variant()
@@ -1371,27 +1372,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       const p = params(request)
       const v = variant()
       if (v === 'scan-fail' && Number(p.offset ?? 0) >= 100) return text('internal error', 500)
-      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down')
-      // session/list reads chat_sessions, so a recorded harness chat is a session too (service.rs); without harness
-      // traces in the mock it is the DB-only row. First page only: the extra rows don't shift later offsets.
-      if (!Number(p.offset ?? 0)) {
-        ensureChatSeed(chatCtx)
-        const start = p.start_time ? Date.parse(p.start_time) : nowFn() - 7 * 86_400_000
-        const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
-        const recorded = chatMockRows()
-          .filter(
-            (r) =>
-              r.is_coding_agent &&
-              r.user_id === ADMIN_ID &&
-              Date.parse(r.created_at) >= start &&
-              Date.parse(r.created_at) <= nowFn(),
-          )
-          .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
-        const limit = Math.min(100, Math.max(1, Number.parseInt(p.limit ?? '', 10) || 25))
-        body.data.sessions = [...recorded, ...body.data.sessions]
-          .sort((a, b) => Date.parse(b.start_time ?? '') - Date.parse(a.start_time ?? ''))
-          .slice(0, limit)
-      }
+      // session/list reads chat_sessions, so a recorded harness chat is a session too (service.rs): the viewer's own,
+      // or everyone's for a superuser. Without harness traces in the mock it is the DB-only row.
+      ensureChatSeed(chatCtx)
+      const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
+      const recorded = chatMockRows()
+        .filter((r) => r.is_coding_agent && (superuser() || r.user_id === ADMIN_ID))
+        .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
+      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down', recorded)
       if (v === 'empty')
         body.data = {
           ...body.data,
@@ -2078,7 +2066,6 @@ function harnessAgentDetail(a: HarnessSeed['agents'][number]) {
   }
 }
 
-/** Own-only, newest first (ORDER BY updated_at DESC), optionally one agent (`?agent_id=`), as chat/routes.rs. */
 /**
  * A harness session's recorded messages (the ledger, plans/feat-agent-centric.md PR1b): a recorded chat stores a user and
  * an assistant message per turn with the CLI's usage, so the viewer's own seed sessions answer `/messages` as the chat
@@ -2155,6 +2142,7 @@ function harnessMessages(sessionId: string): ChatMessage[] | null {
     })
 }
 
+/** Own-only, newest first (ORDER BY updated_at DESC), optionally one agent (`?agent_id=`), as chat/routes.rs. */
 function chatSessions(limit: number, agentId?: string) {
   const hs = harnessData()
   const me = viewer()
@@ -2175,7 +2163,8 @@ function chatSessions(limit: number, agentId?: string) {
       user_id: x.user_id,
       agent_id: x.agent_id,
       agent_url: `/api/agents/${x.agent_id}`,
-      title: `${agent(x.agent_id)?.display_name ?? 'Session'}`,
+      // The server titles every recorded harness session the same (coding_agent_telemetry.rs, observability/service.rs).
+      title: CODING_SESSION_TITLE,
       created_at: x.started_at,
       updated_at: updated,
       agent_name: agent(x.agent_id)?.name ?? null,

@@ -145,6 +145,9 @@ export const copy = {
         : `None in the latest ${sessionsN(scanned)} checked.`,
     sessionsAll: (name: string) => `Sessions for ${name}`,
     harnessWindow: 'your recorded sessions',
+    /** Recorded harness sessions share one title on the server ("Coding session"): rows are told apart by time. */
+    harnessRow: (when: string, messages: number | null | undefined) =>
+      messages == null ? when : `${when} · ${plural(messages, 'message', 'messages')}`,
     harnessNone: 'No recorded sessions with this harness yet.',
     sessionsShared: 'Another visible agent has the same name: these may be its sessions.',
     sessionsError: "Sessions couldn't load",
@@ -223,6 +226,9 @@ export const copy = {
     totals: {
       label: 'Session totals',
       turns: (n: number) => plural(n, 'turn', 'turns'),
+      /** Only some turns reported the value: the sum is a floor over those. */
+      partly: (value: string, reported: number, of: number) =>
+        `≥ ${value} (${reported} of ${of} turns reported)`,
       calls: (n: number, failed: number) =>
         `${plural(n, 'tool call', 'tool calls')}${failed ? ` · ${failed} failed` : ''}`,
       tokens: (tin: string, tout: string) => `${tin} in · ${tout} out`,
@@ -236,15 +242,17 @@ export const copy = {
     csvName: (id: string) => `ledger-${id.slice(0, 8)}.csv`,
     csvSubtotal: 'Exports the loaded turns only',
     loading: 'Loading the ledger',
-    error: "The ledger couldn't load",
+    refreshError: "Couldn't refresh the ledger: it shows the turns as last loaded.",
     notOwner:
-      "Only the session's owner can read its messages, so the ledger shows what the trace recorded instead.",
+      "No recorded messages you can read for this session: only a chat's owner can read its messages, and a session without a recorded chat has none. Here is what the trace recorded.",
     notOwnerTraces: (traces: number, cost: string) =>
       `${plural(traces, 'trace', 'traces')} · ${cost}`,
     notOwnerNoTrace: 'No trace data is available for this session either.',
     empty: 'No messages were recorded for this session.',
     metadataOnly:
       'This session was recorded under the metadata-only policy: the harness kept counts, not messages or tool calls.',
+    cachedLine: (tokens: string) => `incl. ${tokens} cached`,
+    budgetSessionOnly: (pct: string) => `${pct} by this session (earlier use not recorded)`,
     budgets: {
       title: 'Budget use',
       session: "this session's budget",
@@ -257,6 +265,26 @@ export const copy = {
       tightest: 'Tightest',
       none: 'No budget applies to this session.',
       error: "Budgets couldn't load",
+    },
+    csv: {
+      headers: {
+        turn: 'turn',
+        time: 'time (UTC)',
+        tools: 'tool names',
+        tokensIn: 'tokens in',
+        cacheRead: 'of which cache reads',
+        cacheWrite: 'of which cache writes',
+        tokensOut: 'tokens out',
+        context: 'context tokens',
+        memory: 'memory tokens',
+        controls: 'controls applied',
+        source: 'source',
+        coverage: 'coverage',
+      },
+      notRecorded: 'not recorded',
+      source: { recorded: 'recorded', preview: 'preview (mock data)' },
+      coverage: (complete: boolean, turns: number) =>
+        complete ? 'whole session' : `latest ${plural(turns, 'turn', 'turns')} loaded`,
     },
     controlsNow: {
       title: 'Controls set now',
