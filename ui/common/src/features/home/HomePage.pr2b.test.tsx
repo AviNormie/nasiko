@@ -28,6 +28,7 @@ afterEach(() => {
     persona: null,
     superuser: null,
     chatVariants: [],
+    routerVariants: [],
     onboarding: { persona: null, completed: true },
   })
 })
@@ -225,5 +226,114 @@ describe('phone width', () => {
       expect.stringMatching(/^\/agents\//),
     )
     await waitFor(() => expect(rows[0]).toHaveTextContent(copy.table.spend(30)))
+  })
+})
+
+describe('review fixes', () => {
+  it('a failed budgets read says so, keeps the column with "—", and shows no budget tile', async () => {
+    configureMocks({ routerVariants: ['router-budgets-fail'] })
+    renderApp('/?scope=yours')
+    const t = await table()
+    expect(await screen.findByText(copy.budget.failed, {}, { timeout: 5_000 })).toBeInTheDocument()
+    expect(within(t).getByRole('columnheader', { name: /Budget use/ })).toBeInTheDocument()
+    expect(await tile(copy.budget.own)).toBeNull()
+  })
+
+  it('the budget column’s name stays "Budget use"; the strip says it is a preview, once', async () => {
+    renderApp('/?scope=yours')
+    const t = await table()
+    expect(await within(t).findByRole('columnheader', { name: 'Budget use' })).toBeInTheDocument()
+    expect(
+      await screen.findByText(/^Budget use is a preview: needs server support/),
+    ).toBeInTheDocument()
+  })
+
+  async function oneAgentBuilds(
+    build: (b: Record<string, unknown>) => Parameters<typeof HttpResponse.json>[0],
+    status = 200,
+  ) {
+    const page = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as Record<
+      string,
+      unknown
+    >[]
+    const agent = page.find((a) => (a.status as string) === 'running')!
+    const records = (await (
+      await fetch(`/api/builds/agent/${agent.id as string}`)
+    ).json()) as Record<string, unknown>[]
+    const base = records[0] ?? {}
+    server.use(
+      http.get('/api/agents', ({ request }) =>
+        HttpResponse.json(
+          Number(new URL(request.url).searchParams.get('offset') ?? 0) ? [] : [agent],
+        ),
+      ),
+      http.get('/api/builds/agent/:id', () =>
+        status === 200 ? HttpResponse.json(build(base)) : new HttpResponse('boom', { status }),
+      ),
+    )
+    return agent
+  }
+
+  it('last change links its marker when it is inside the hub’s window, and not when it is older', async () => {
+    const recent = new Date(now() - 2 * 86_400_000).toISOString()
+    await oneAgentBuilds((b) => [{ ...b, status: 'success', updated_at: recent }])
+    renderApp('/?scope=fleet')
+    const link = await within(await table()).findByRole('link', { name: /Build completed/ })
+    expect(link.getAttribute('href')).toMatch(/marker=build/)
+  })
+
+  it('an old build links the hub without a marker it would drop', async () => {
+    const old = new Date(now() - 60 * 86_400_000).toISOString()
+    await oneAgentBuilds((b) => [{ ...b, status: 'success', updated_at: old }])
+    renderApp('/?scope=fleet')
+    const link = await within(await table()).findByRole('link', { name: /Build completed/ })
+    expect(link.getAttribute('href')).not.toMatch(/marker=/)
+  })
+
+  it('build records the viewer can’t read, or that fail, say why instead of a bare "—"', async () => {
+    await oneAgentBuilds(() => ({ available: false }))
+    renderApp('/?scope=fleet')
+    expect(await within(await table()).findByText(copy.lastChange.hidden)).toBeInTheDocument()
+  })
+
+  it('a failed build read says it couldn’t load', async () => {
+    await oneAgentBuilds(() => null, 500)
+    renderApp('/?scope=fleet')
+    expect(await within(await table()).findByText(copy.lastChange.failed)).toBeInTheDocument()
+  })
+
+  it('on a phone, an unknown needs count says so rather than looking like none', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 639px)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    configureMocks({ chatVariants: ['pending-fail'] })
+    renderApp('/?scope=yours')
+    const rows = await screen.findAllByTestId('home-phone-row')
+    await waitFor(() => expect(rows[0]).toHaveTextContent(copy.phone.needsUnknown), {
+      timeout: 15_000,
+    })
+  })
+})
+
+describe('phone list cap (decision #50)', () => {
+  it('shows the first 25 rows, and "Show N more" draws the rest', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 639px)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    // A member can't name other owners, so the fleet's other agents share one long group.
+    configureMocks({ superuser: false })
+    renderApp('/?scope=fleet')
+    await waitFor(() => expect(screen.getAllByTestId('home-phone-row').length).toBeGreaterThan(0))
+    const more = screen.getAllByRole('button', { name: /^Show \d+ more$/ })
+    expect(more.length).toBeGreaterThan(0)
+    const before = screen.getAllByTestId('home-phone-row').length
+    await userEvent.click(more[0]!)
+    expect(screen.getAllByTestId('home-phone-row').length).toBeGreaterThan(before)
   })
 })

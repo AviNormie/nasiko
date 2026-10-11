@@ -54,3 +54,29 @@ describe('crossingDate', () => {
     expect(crossingDate(100, [], new Date('2026-03-11T00:00:00Z'))).toBeNull()
   })
 })
+
+describe('crossingDate edges (review)', () => {
+  it('a day missing inside the pace window counts as $0', () => {
+    // Mar 1–10 at $20 except Mar 8–10 missing: $140 by Mar 11; pace = (20*4 + 0*3)/7 ≈ 11.43 → $60 more ≈ 5.25 days.
+    const days = steady(7, 20)
+    expect(crossingDate(200, days, new Date('2026-03-11T00:00:00Z'))).toEqual({
+      kind: 'crosses',
+      date: '2026-03-16',
+    })
+  })
+
+  it('compares whole cents: 0.1 + 0.7 meets a $0.80 limit', () => {
+    const days = [day('2026-03-01', 0.1), day('2026-03-02', 0.7)]
+    expect(crossingDate(0.8, days, new Date('2026-03-02T12:00:00Z'))).toEqual({ kind: 'reached' })
+  })
+
+  it('a crossing on the month’s last day is shown; one at next month’s midnight is not', () => {
+    // 30 days at $10 = $300 by Mar 31 00:00; $5 more at $10/day = Mar 31 12:00.
+    expect(crossingDate(305, steady(30), new Date('2026-03-31T00:00:00Z'))).toEqual({
+      kind: 'crosses',
+      date: '2026-03-31',
+    })
+    // $10 more lands exactly at Apr 1 00:00: after month end.
+    expect(crossingDate(310, steady(30), new Date('2026-03-31T00:00:00Z'))).toBeNull()
+  })
+})

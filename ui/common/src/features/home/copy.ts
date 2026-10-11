@@ -39,13 +39,18 @@ export const copy = {
     lastChange: 'Last change',
   },
   budget: {
-    use: (used: string, limit: string, month: string) => `${used} of ${limit} · ${month}`,
+    use: (used: string, limit: string, month: string) =>
+      month ? `${used} of ${limit} · ${month}` : `${used} of ${limit}`,
+    pct: (pct: number, floor: boolean) => `${floor ? '≥ ' : ''}${pct}%`,
     none: 'No budget set',
     onlyYours: 'Only your own budgets show here',
     reached: 'Limit reached',
     crosses: (date: string) => `At this pace, reaches its limit on ${date}`,
     updated: (rel: string) => `updated ${rel}`,
     preview: 'Preview: needs server support',
+    note: (updated: string | null) =>
+      `Budget use is a preview: needs server support${updated ? ` · ${updated}` : ''}`,
+    stale: "Couldn't refresh budgets: the figures are from the last successful read",
     off: "Budgets aren't set up on this server",
     failed: "Budgets couldn't load",
     own: 'Your budget',
@@ -57,9 +62,13 @@ export const copy = {
     hidden: "Build records aren't visible to you",
     failed: "Build records couldn't load",
     harness: 'Coding harnesses record no builds',
+    notYet: 'Checked when the row is on screen',
   },
   phone: {
     needs: (n: number) => `${n} need${n === 1 ? 's' : ''} you`,
+    needsUnknown: 'Needs you: —',
+    more: (n: number) => `Show ${n} more`,
+    needsUnknownHint: 'Still checking, or a source failed',
   },
   groups: {
     you: 'You',

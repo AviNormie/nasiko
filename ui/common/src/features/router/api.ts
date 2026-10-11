@@ -428,18 +428,32 @@ const json = { 'Content-Type': 'application/json' }
 // ─── R2 budgets (proposed R-L10, mocked) ────────────────────────────────────
 
 /** The caller's budgets; `['router','budgets']` prefixes status and alerts too, so one invalidation re-reads all three. */
-export function useBudgets(enabled = true) {
+export function useBudgets(enabled = true, pollMs?: number) {
   return useQuery({
     queryKey: [...routerKeys.budgets, 'list'],
     queryFn: ({ signal }) => apiData<Budget[]>('/api/budgets', { signal }),
     enabled,
     ...list,
+    ...budgetPoll(pollMs),
   })
 }
 
-/** A poll ends on a bare 404 (a server without budgets) or a 401: asking again every minute can't change either. */
+/**
+ * A poll ends on a bare 404 (a server without budgets), a 401 or a 403: asking again every minute can't change any of
+ * them.
+ */
 export const budgetPollEnds = (err: unknown) =>
-  err instanceof ApiError && (err.status === 404 || err.status === 401)
+  err instanceof ApiError && (err.status === 404 || err.status === 401 || err.status === 403)
+
+/** Poll options for a budgets read: no retry, since the next poll is the retry. */
+const budgetPoll = (pollMs: number | undefined) =>
+  pollMs
+    ? {
+        retry: false,
+        refetchInterval: (q: { state: { error: unknown } }) =>
+          budgetPollEnds(q.state.error) ? false : pollMs,
+      }
+    : {}
 
 /**
  * The status of every budget the caller can read. `pollMs` re-reads it while the tab is visible (the home's budget
@@ -457,13 +471,7 @@ export function useBudgetStatus(enabled: boolean, pollMs?: number) {
     },
     enabled,
     ...list,
-    ...(pollMs
-      ? {
-          retry: false,
-          refetchInterval: (q: { state: { error: unknown } }) =>
-            budgetPollEnds(q.state.error) ? false : pollMs,
-        }
-      : {}),
+    ...budgetPoll(pollMs),
   })
 }
 

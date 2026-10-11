@@ -2,8 +2,7 @@
  * A row's spend over the window as one line (design "Home": entity colour, never a health colour). Decorative: the
  * figure beside it is the value, so the line is hidden from assistive tech.
  */
-const W = 64
-const H = 20
+import { SPARK_H as H, SPARK_W as W } from '../tuning'
 
 export function Sparkline({ values }: { values: readonly number[] }) {
   if (values.length < 2) return null
