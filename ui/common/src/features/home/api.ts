@@ -18,7 +18,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
 import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
-import { useBudgets, useBudgetStatus } from '@/features/router/api'
+import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/router/api'
 import type { Budget, BudgetStatus } from '@/features/router/types'
 import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
@@ -170,8 +170,8 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
 
 /**
  * Where budgets stand: `off` when this server has none (a bare 404) or they aren't a preview here (every budget is
- * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep (a 401
- * or 403 included: it ends the poll but isn't "not set up"); `stale` when a refresh failed and the last figures stay.
+ * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep, or
+ * any 401 or 403 (it ends the poll but isn't "not set up"); `stale` when a refresh failed and the last figures stay.
  */
 export type BudgetsState = 'off' | 'loading' | 'failed' | 'stale' | 'ok'
 
@@ -213,7 +213,9 @@ function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
   const status = useBudgetStatus(preview && !!list.data?.length, BUDGET_POLL_MS)
   const absent = (e: unknown) => e instanceof ApiError && e.status === 404
   const off = !preview || absent(list.error) || absent(status.error)
-  const failed = (list.isError && !list.data) || (status.isError && !status.data)
+  // A 401 or 403 ends the poll: the figures will never refresh, so they read as failed even when some are kept.
+  const denied = [list.error, status.error].some((e) => budgetPollEnds(e) && !absent(e))
+  const failed = denied || (list.isError && !list.data) || (status.isError && !status.data)
   const stale = list.isError || status.isError
   const state: BudgetsState = off
     ? 'off'
@@ -251,8 +253,8 @@ const FINOPS = '/api/observability/finops'
  * read, or drops it from the limiter's queue.
  *
  * The bounds are the page's frozen window, sent explicitly: a relative `range` read when a row scrolls in later would
- * describe a later window than the totals beside it. Every read is a Tempo search plus a fetch per trace on the
- * server, so a failure isn't retried (the row keeps its total) and a batched per-agent series is a server ask.
+ * describe a later window than the totals beside it. Each row is its own query on the server (one `trace_usage`
+ * aggregate), so a failure isn't retried (the row keeps its total) and a batched per-agent series is a server ask.
  */
 export function useRowSeries(id: string, win: Pick<ResolvedWindow, 'start' | 'end'>) {
   const bounds = { start_time: win.start.toISOString(), end_time: win.end.toISOString() }
