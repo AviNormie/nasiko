@@ -335,7 +335,8 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
         />
       )}
 
-      <RailLine markers={markers} harness={agent.isHarness} empty={!flags.length} />
+      {/* Empty means none recorded in the window, not none drawn: a truncated window draws fewer (QA ISSUE-003). */}
+      <RailLine markers={markers} harness={agent.isHarness} empty={!set?.markers.length} />
       {figures ? (
         <SavingsLine
           savings={savings}
