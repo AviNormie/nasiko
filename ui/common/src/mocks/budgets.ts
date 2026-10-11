@@ -333,3 +333,53 @@ export function budgetAlerts(
     .filter((a) => ids.has(a.budget_id) && a.at >= since && a.at <= new Date(now).toISOString())
     .sort((x, y) => y.at.localeCompare(x.at) || y.threshold - x.threshold)
 }
+
+/**
+ * The ledger's proposed per-session read (AH-8, plans/feat-agent-centric.md PR1b): every budget that applies to one of
+ * the caller's sessions, with what it recorded before the session started (this budget's own period, from the seed's
+ * spend) and per turn. `sessionLimit` adds a session budget (none exists in R-L10; the demo session has one).
+ */
+export function sessionBudgets(
+  s: BudgetMockStore,
+  seed: Seed,
+  agents: readonly MockAgent[],
+  user: string,
+  session: {
+    agentId: string | null
+    start: number
+    turns: { turn_id: string; used_usd: number }[]
+  },
+  sessionLimit?: number,
+) {
+  const sessionUsed = cents(session.turns.reduce((t, x) => t + x.used_usd, 0))
+  const from = monthStart(session.start)
+  const period = new Date(from).toISOString().slice(0, 7)
+  const applies = own(s, user).filter(
+    (b) => b.scope === 'owner' || (b.scope === 'agent' && b.agent_id === session.agentId),
+  )
+  const out = applies.map((b) => ({
+    budget_id: b.id,
+    scope: b.scope,
+    limit_usd: b.limit_usd,
+    period,
+    used_before_usd: cents(
+      counted(b, seed, agents, from, session.start - 1).reduce((t, [, c]) => t + c, 0),
+    ),
+    session_used_usd: sessionUsed,
+    turns: session.turns,
+  }))
+  return sessionLimit
+    ? [
+        {
+          budget_id: 'session-budget',
+          scope: 'session' as const,
+          limit_usd: sessionLimit,
+          period: null,
+          used_before_usd: 0,
+          session_used_usd: sessionUsed,
+          turns: session.turns,
+        },
+        ...out,
+      ]
+    : out
+}

@@ -31,3 +31,27 @@ export const agentEventsSchema = z.looseObject({
   truncated: z.boolean(),
 })
 export type AgentEvents = z.infer<typeof agentEventsSchema>
+
+/**
+ * The ledger's proposed per-session budget read (AH-8): `GET /api/budgets/session/{session_id}`, in the `{data}`
+ * envelope, one entry per budget that applies to the session (its own, its agent's, its owner's). Every budget figure
+ * is a preview (plans/feat-agent-centric.md decision 35: budgets are the proposed R-L10 contract), read only while the
+ * `router` group is a preview. `used_before_usd` is null when no consumption record covers the period before the
+ * session started ("not recorded", never 0).
+ */
+const sessionBudgetSchema = z.looseObject({
+  budget_id: z.string(),
+  scope: z.enum(['session', 'agent', 'owner']),
+  limit_usd: z.number().positive(),
+  /** The budget's period as `YYYY-MM` (UTC), or null for a session budget, which has none. */
+  period: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/)
+    .nullable(),
+  used_before_usd: z.number().nonnegative().nullable(),
+  session_used_usd: z.number().nonnegative(),
+  /** What this budget recorded per turn, keyed by the turn id the messages carry (`external_turn_id`). */
+  turns: z.array(z.looseObject({ turn_id: z.string(), used_usd: z.number().nonnegative() })),
+})
+export type SessionBudget = z.infer<typeof sessionBudgetSchema>
+export const sessionBudgetsSchema = z.array(sessionBudgetSchema)

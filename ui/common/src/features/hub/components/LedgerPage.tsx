@@ -1,0 +1,503 @@
+/**
+ * A harness session's ledger (plans/feat-agent-centric.md PR1b; design "Ledger"; eng "Ledger"): the session route's
+ * `?view=ledger`. One row per turn: tools, tokens, cost and the running total, then the controls that acted. Mounted by
+ * the route, outside the trace page's success branch, so recorded messages render even when the observability session
+ * read or Tempo fails (the "live floor"). Rules in `ledger.ts`; reads in `api.ts`.
+ *
+ * - Messages are owner-only (the server's rule, no superuser bypass): anyone else gets metadata from the trace.
+ * - Context, memory, applied controls and budget use are previews (UC2): drawn from mocks only, labelled, and absent in
+ *   live mode. Live, Context and Memory read "not reported".
+ * - The ledger never edits a control: "Controls set now" links to where each is set.
+ */
+import { Link } from '@tanstack/react-router'
+import { Download, ListTree } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
+import { PageHeader } from '@/components/shared/page-header'
+import { PageLoader } from '@/components/shared/page-loader'
+import { Panel } from '@/components/shared/panel'
+import { EmptyState } from '@/components/shared/state-card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { pickShared } from '@/app/shell/context'
+import { useAgentsDirectory } from '@/features/agents/api'
+import { isHarness } from '@/features/agents/status'
+import { sessionRows, useChatSessions } from '@/features/chat/api'
+import { isMetadataOnly, type RecordedStep } from '@/features/chat/recorded'
+import { ErrorState } from '@/features/observability/StateCard'
+import { useSessionDetail } from '@/features/sessions/api'
+import type { TraceSearch } from '@/features/sessions/search'
+import { downloadCsv } from '@/features/tokenops/csv'
+import { Crumbs } from '@/features/trace/Crumbs'
+import { isEndpointAbsent } from '@/lib/api/detect'
+import { isPreview } from '@/lib/env'
+import { fmtMoney, fmtTokens, fmtUtcDayTime, fmtUtcTime } from '@/lib/format'
+import { useLedgerHistory, useSessionBudgets } from '../api'
+import { copy } from '../copy'
+import {
+  budgetLines,
+  ledgerCsv,
+  runningShare,
+  tightest,
+  type BudgetLine,
+  type Ledger,
+  type LedgerTurn,
+} from '../ledger'
+
+const c = copy.ledger
+const LINK =
+  'inline-flex items-center text-sm text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11'
+const pct = (v: number) => `${v < 1 && v > 0 ? v.toFixed(1) : Math.round(v)}%`
+const monthOf = (period: string) =>
+  new Date(`${period}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
+
+export function LedgerPage({ sessionId, search }: { sessionId: string; search: TraceSearch }) {
+  const { query, ledger, complete, notOwner } = useLedgerHistory(sessionId)
+  const session = useSessionDetail(sessionId)
+  const chats = useChatSessions()
+  const dir = useAgentsDirectory()
+  const row = sessionRows(chats.data).find((r) => r.session_id === sessionId)
+  const agentName = session.data?.agent_name || row?.agent_name || ''
+  const agent =
+    (row?.agent_id ? dir.byId.get(row.agent_id) : undefined) ?? dir.byName.get(agentName)
+  const harness =
+    !!row?.is_coding_agent ||
+    (agent ? isHarness(agent) : false) ||
+    !!ledger?.turns.some((t) => t.tools.length)
+  const costHeader = harness ? c.estCost : c.cost
+  const budgets = useSessionBudgets(sessionId, !!ledger && !notOwner)
+
+  const back = {
+    ...pickShared(search),
+    day: search.day,
+    sort: search.sort,
+    lane: search.lane,
+    status: search.status,
+    live: search.live,
+  }
+  const title = row?.title || session.data?.title || sessionId
+  const firstAt = ledger?.turns[0]?.at ?? session.data?.traces[0]?.root_span.start_time
+
+  const exportCsv = () => {
+    if (ledger) downloadCsv(c.csvName(sessionId), ledgerCsv(ledger, costHeader, copy.notReported))
+  }
+
+  return (
+    // The turns table is wider than the page at most widths: containment keeps it scrolling inside its own box instead
+    // of widening the shell's content column (which has no min-width of 0).
+    <div className="flex flex-col gap-4 contain-inline-size">
+      <PageHeader
+        breadcrumb={<Crumbs back={back} day={search.day} title={title} />}
+        title={
+          <span className="inline-block">
+            {c.title}
+            {agentName ? ` · ${agent?.display_name || agentName}` : ''}
+            {firstAt ? ` · ${fmtUtcDayTime(firstAt)}` : ''}
+          </span>
+        }
+        actions={
+          <>
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to="/sessions/$sessionId"
+                params={{ sessionId }}
+                search={{ ...search, view: undefined }}
+              >
+                <ListTree className="size-3.5" aria-hidden /> {c.trace}
+              </Link>
+            </Button>
+            {ledger?.turns.length ? (
+              <Button variant="outline" size="sm" onClick={exportCsv}>
+                <Download className="size-3.5" aria-hidden /> {c.exportCsv}
+              </Button>
+            ) : null}
+          </>
+        }
+      />
+
+      {notOwner ? (
+        <NotOwner session={session} />
+      ) : query.isPending ? (
+        <PageLoader label={c.loading} />
+      ) : query.isError && !ledger ? (
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+      ) : ledger && !ledger.turns.length && !ledger.unplaced.length ? (
+        <EmptyState icon={ListTree} title={c.empty}>
+          {isMetadataOnly(row) ? c.metadataOnly : null}
+        </EmptyState>
+      ) : ledger ? (
+        <LedgerBody
+          ledger={ledger}
+          costHeader={costHeader}
+          complete={complete}
+          budgets={budgets}
+          olderPending={query.isFetchingNextPage}
+          olderError={query.isFetchNextPageError}
+          onOlder={() => void query.fetchNextPage()}
+          agentId={agent?.id ?? row?.agent_id ?? null}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function LedgerBody({
+  ledger,
+  costHeader,
+  complete,
+  budgets,
+  olderPending,
+  olderError,
+  onOlder,
+  agentId,
+}: {
+  ledger: Ledger
+  costHeader: string
+  complete: boolean
+  budgets: ReturnType<typeof useSessionBudgets>
+  olderPending: boolean
+  olderError: boolean
+  onOlder: () => void
+  agentId: string | null
+}) {
+  const preview = isPreview('chat')
+  const lines = budgets.data ? budgetLines(budgets.data) : []
+  const top = tightest(lines)
+  // A budget's running share needs its use before the session; otherwise the column would understate it.
+  const shares = top && top.beforePct !== null ? runningShare(top) : null
+  const t = ledger.totals
+  return (
+    <>
+      {/* Sticky running total: what the loaded turns add up to, and whether that's the whole session. */}
+      <section
+        aria-label={c.totals.label}
+        className="sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+      >
+        <span className="font-medium tabular-nums">{c.totals.turns(t.turns)}</span>
+        <span className="tabular-nums">{c.totals.calls(t.toolCalls, t.failedCalls)}</span>
+        <span className="tabular-nums">
+          {c.totals.tokens(
+            t.tokensIn === null ? copy.notReported : fmtTokens(t.tokensIn),
+            t.tokensOut === null ? copy.notReported : fmtTokens(t.tokensOut),
+          )}
+        </span>
+        <span className="tabular-nums">
+          {costHeader}: {t.cost === null ? copy.notReported : fmtMoney(t.cost)}
+        </span>
+        {top ? (
+          <span className="tabular-nums">
+            {c.budgetUse}: {pct((top.beforePct ?? 0) + top.sessionPct)}{' '}
+            <Badge variant="outline">{copy.rail.preview}</Badge>
+          </span>
+        ) : null}
+        <span className="text-xs text-muted-foreground">
+          {complete ? c.totals.complete : c.totals.subtotal}
+        </span>
+      </section>
+
+      {preview && ledger.hasPreview ? (
+        <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="outline">{copy.rail.preview}</Badge>
+          {c.previewColumns}
+        </p>
+      ) : null}
+
+      {/* The turns are wider than most screens: this box scrolls them, and takes focus so the keyboard can too. */}
+      <div
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region must be focusable (axe scrollable-region-focusable)
+        tabIndex={0}
+        role="region"
+        aria-label={c.label}
+        className="overflow-x-auto rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <DataTable
+          label={c.label}
+          columns={columns(costHeader, preview, shares)}
+          data={ledger.turns}
+          getRowId={(r) => r.key}
+          className="w-max min-w-full"
+        />
+      </div>
+
+      {!complete ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" size="sm" onClick={onOlder} disabled={olderPending}>
+            {olderPending ? c.loadingOlder : c.loadOlder}
+          </Button>
+          {olderError ? (
+            <span role="status" className="text-sm text-destructive">
+              {c.olderError}
+            </span>
+          ) : null}
+          <span className="text-xs text-muted-foreground">{c.csvSubtotal}</span>
+        </div>
+      ) : null}
+
+      {ledger.unplaced.length ? <Unplaced steps={ledger.unplaced} /> : null}
+
+      {isPreview('router') && !budgets.isPending ? (
+        <Budgets budgets={budgets} lines={lines} />
+      ) : null}
+
+      <ControlsNow agentId={agentId} />
+    </>
+  )
+}
+
+function columns(
+  costHeader: string,
+  preview: boolean,
+  shares: Map<string, number> | null,
+): DataTableColumn<LedgerTurn>[] {
+  const cols: DataTableColumn<LedgerTurn>[] = [
+    {
+      id: 'turn',
+      header: c.turn,
+      meta: { rowHeader: true },
+      cell: ({ row }) => (
+        <span className="tabular-nums">
+          {row.original.n}
+          {row.original.partial ? (
+            <span className="block text-xs text-muted-foreground">{c.turnCut}</span>
+          ) : null}
+        </span>
+      ),
+    },
+    {
+      id: 'time',
+      header: c.time,
+      cell: ({ row }) => <span className="tabular-nums">{fmtUtcTime(row.original.at)}</span>,
+    },
+    {
+      id: 'prompt',
+      header: c.prompt,
+      meta: { cellClassName: 'min-w-48 max-w-72' },
+      cell: ({ row }) =>
+        row.original.prompt ? (
+          <span className="line-clamp-2 whitespace-normal" title={row.original.prompt}>
+            {row.original.prompt}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: 'tools',
+      header: c.tools,
+      cell: ({ row }) => <Tools steps={row.original.tools} />,
+    },
+    {
+      id: 'tokens',
+      header: c.tokens,
+      meta: { numeric: true },
+      cell: ({ row }) =>
+        row.original.tokensIn === null && row.original.tokensOut === null
+          ? copy.notReported
+          : `${fmtTokens(row.original.tokensIn)} / ${fmtTokens(row.original.tokensOut)}`,
+    },
+    {
+      id: 'cost',
+      header: costHeader,
+      meta: { numeric: true },
+      cell: ({ row }) =>
+        row.original.cost === null ? copy.notReported : fmtMoney(row.original.cost),
+    },
+    {
+      id: 'running',
+      header: c.running,
+      meta: { numeric: true },
+      cell: ({ row }) =>
+        row.original.runningCost === null ? '—' : fmtMoney(row.original.runningCost),
+    },
+    {
+      id: 'context',
+      header: c.context,
+      cell: ({ row }) =>
+        row.original.context
+          ? c.contextLine(
+              fmtTokens(row.original.context.kept.tokens),
+              fmtTokens(row.original.context.pool.tokens),
+            )
+          : notReported(),
+    },
+    {
+      id: 'memory',
+      header: c.memory,
+      cell: ({ row }) =>
+        row.original.memory
+          ? c.memoryLine(fmtTokens(row.original.memory.tokens), row.original.memory.items)
+          : notReported(),
+    },
+  ]
+  if (preview)
+    cols.push({
+      id: 'controls',
+      header: c.controls,
+      cell: ({ row }) => <Controls turn={row.original} />,
+    })
+  if (shares)
+    cols.push({
+      id: 'budget',
+      header: c.budgetUse,
+      meta: { numeric: true },
+      cell: ({ row }) => {
+        const v = shares.get(row.original.key)
+        return v === undefined ? '—' : pct(v)
+      },
+    })
+  return cols
+}
+
+const notReported = () => <span className="text-muted-foreground">{copy.notReported}</span>
+
+function Tools({ steps }: { steps: RecordedStep[] }) {
+  if (!steps.length) return <span className="text-muted-foreground">{c.noTools}</span>
+  return (
+    <ul className="m-0 flex list-none flex-wrap gap-1 p-0">
+      {steps.map((s) => (
+        <li key={s.key}>
+          <Badge variant={s.status === 'error' ? 'destructive' : 'outline'}>
+            {s.name}
+            {s.statusWord ? ` · ${s.statusWord}` : ''}
+          </Badge>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function Controls({ turn }: { turn: LedgerTurn }) {
+  // Only recorded decisions show (eng "Ledger"): no record, no control, never the current setting.
+  if (!turn.controls.length) return <span className="text-muted-foreground">—</span>
+  return (
+    <ul className="m-0 flex list-none flex-col gap-0.5 p-0 text-xs">
+      {turn.controls.map((x) => (
+        <li key={`${x.rule.id}-${x.at}-${x.outcome}`}>
+          {c.controlLine(x.rule.name, c.outcome[x.outcome] ?? x.outcome, x.tool)}
+          {x.tokensSaved ? ` (${c.trimmedSaved(fmtTokens(x.tokensSaved))})` : ''}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function Unplaced({ steps }: { steps: RecordedStep[] }) {
+  return (
+    <Panel title={c.turnNotRecorded} subtitle={c.unplacedNote(steps.length)}>
+      <Tools steps={steps} />
+    </Panel>
+  )
+}
+
+function Budgets({
+  budgets,
+  lines,
+}: {
+  budgets: ReturnType<typeof useSessionBudgets>
+  lines: BudgetLine[]
+}) {
+  // A server without the read (bare 404) shows nothing; any other failure says so.
+  if (budgets.isError)
+    return isEndpointAbsent(budgets.error) ? null : (
+      <Panel title={c.budgets.title} actions={<Badge variant="outline">{copy.rail.preview}</Badge>}>
+        <p className="m-0 text-sm text-destructive">{c.budgets.error}</p>
+      </Panel>
+    )
+  const top = tightest(lines)
+  return (
+    <Panel title={c.budgets.title} actions={<Badge variant="outline">{copy.rail.preview}</Badge>}>
+      {lines.length ? (
+        <ul className="m-0 flex list-none flex-col gap-1 p-0 text-sm">
+          {lines.map((l) => (
+            <li key={l.budget.budget_id} className="flex flex-wrap items-center gap-2">
+              <span>
+                {c.budgets.used(pct(l.sessionPct), budgetName(l))}
+                {l.budget.scope === 'session'
+                  ? c.budgets.period
+                  : l.beforePct === null
+                    ? c.budgets.beforeNotRecorded
+                    : c.budgets.before(pct(l.beforePct))}
+              </span>
+              {l === top && lines.length > 1 ? (
+                <Badge variant="secondary">{c.budgets.tightest}</Badge>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 text-sm text-muted-foreground">{c.budgets.none}</p>
+      )}
+    </Panel>
+  )
+}
+
+const budgetName = (l: BudgetLine): string => {
+  const month = l.budget.period ? monthOf(l.budget.period) : ''
+  const limit = fmtMoney(l.budget.limit_usd)
+  const name =
+    l.budget.scope === 'session'
+      ? c.budgets.session
+      : l.budget.scope === 'agent'
+        ? c.budgets.agent(month)
+        : c.budgets.owner(month)
+  return `${name} (${limit})`
+}
+
+function ControlsNow({ agentId }: { agentId: string | null }) {
+  const links: { key: string; node: ReactNode }[] = []
+  if (agentId)
+    links.push({
+      key: 'tools',
+      node: (
+        <Link to="/agents/$agentId" params={{ agentId }} search={{ tab: 'mcp' }} className={LINK}>
+          {c.controlsNow.tools}
+        </Link>
+      ),
+    })
+  if (agentId)
+    links.push({
+      key: 'optimization',
+      node: (
+        <Link to="/agents/$agentId" params={{ agentId }} search={{}} className={LINK}>
+          {c.controlsNow.optimization}
+        </Link>
+      ),
+    })
+  links.push({
+    key: 'budgets',
+    node: (
+      <Link to="/router" hash="router-budgets" className={LINK}>
+        {c.controlsNow.budgets}
+      </Link>
+    ),
+  })
+  return (
+    <Panel title={c.controlsNow.title} subtitle={c.controlsNow.hint}>
+      <ul className="m-0 flex list-none flex-wrap gap-x-6 gap-y-1 p-0">
+        {links.map((l) => (
+          <li key={l.key}>{l.node}</li>
+        ))}
+      </ul>
+    </Panel>
+  )
+}
+
+function NotOwner({ session }: { session: ReturnType<typeof useSessionDetail> }) {
+  return (
+    <Panel title={c.title}>
+      <div className="flex flex-col gap-1 text-sm">
+        <p className="m-0">{c.notOwner}</p>
+        {session.data ? (
+          <p className="m-0 text-muted-foreground tabular-nums">
+            {c.notOwnerTraces(
+              session.data.num_traces ?? session.data.traces.length,
+              fmtMoney(session.data.cost_summary.total.cost),
+            )}
+          </p>
+        ) : session.isError ? (
+          <p className="m-0 text-muted-foreground">{c.notOwnerNoTrace}</p>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}

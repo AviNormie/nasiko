@@ -34,6 +34,7 @@ import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import { useSetSearch } from '@/lib/search'
 import {
+  useHarnessChats,
   useHubFlows,
   useHubGate,
   useHubNeeds,
@@ -132,6 +133,8 @@ function Timeline({
   const needsNow = useFrozenNow(tick)
   const needs = useHubNeeds(agent, me, gate.state.kind, needsNow)
   const flows = useHubFlows(agent.id, win)
+  // PR1b: a harness owner's own recorded sessions, each opening its ledger.
+  const harnessChats = useHarnessChats(agent.id, agent.isHarness && mine)
   const ok = gate.state.kind === 'ok'
   const ts = useHubTimeseries(agent.id, win, 'current', gate.canFetch)
   const prev = useHubTimeseries(
@@ -384,6 +387,7 @@ function Timeline({
       ) : null}
 
       <RecentRuns
+        harnessChats={agent.isHarness && mine ? harnessChats : undefined}
         agentName={agent.name}
         sessions={needs.sessions}
         statuses={needs.statuses}

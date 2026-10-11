@@ -32,6 +32,8 @@ const PUBLIC = {
     'rememberTarget',
     'types',
     'waiting',
+    // The harness session ledger maps recorded tool calls (plans/feat-agent-centric.md eng PUBLIC adds for PR1b).
+    'recorded',
   ],
   deploy: [
     'AgentBuildsTab',
@@ -89,7 +91,8 @@ const PUBLIC = {
     'attribution',
     'series',
   ],
-  trace: ['api', 'Waterfall'],
+  // The session ledger (PR1b) shares the session pages' breadcrumb.
+  trace: ['api', 'Waterfall', 'Crumbs'],
   workflows: [],
 }
 

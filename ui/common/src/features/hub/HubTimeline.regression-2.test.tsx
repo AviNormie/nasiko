@@ -5,6 +5,7 @@
 import { screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { setupPinnedSeed } from '@/test/pinnedSeed'
+import { agentNamed } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests } from '@/test/setup'
 import { copy } from './copy'
@@ -13,12 +14,8 @@ setupPinnedSeed()
 
 describe('a coding harness hub', () => {
   it('reads no savings series', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      name: string
-    }[]
     // The seed admin's own harness: its finops are visible, so the hub gets past the gate.
-    const harness = rows.find((a) => a.name === 'admin-claude-code')!
+    const harness = await agentNamed('admin-claude-code')
     const rec = recordRequests()
     renderApp(`/agents/${harness.id}`)
     await screen.findByText(copy.lanes.peakP95)
