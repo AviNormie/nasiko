@@ -113,9 +113,11 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const now = useFrozenNow(returnTick)
   useEffect(() => {
     if (!returnTick) return
-    // Window-keyed reads move with `now`; the directory and the rows' build records don't, so refresh them.
+    // Window-keyed reads move with `now`; the directory, the rows' build records and the org levels don't.
     void qc.invalidateQueries({ queryKey: ['agents'], exact: true })
     void qc.invalidateQueries({ queryKey: ['builds', 'agent'] })
+    // An edition's org levels too (units and members change elsewhere: Access control, the IdP sync).
+    void qc.invalidateQueries({ queryKey: ['home', 'org'] })
   }, [returnTick, qc])
 
   // Scope: the URL, else the stored choice, else the persona's default once it settles (scope.ts).
@@ -179,7 +181,9 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   }
 
   // First run: nothing deployed or registered yet. Its Setup guide (or deploy) card is on the page already.
-  const firstRun = !!home.dir.data && !home.dir.data.length
+  // A unit link the viewer can't pick says so even on an empty fleet (an OSS build, or a first run).
+  const firstRun =
+    !!home.dir.data && !home.dir.data.length && !(unit && home.org.state === 'unknown')
   const actions = (
     <>
       <ToggleGroup
@@ -207,18 +211,31 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       </ToggleGroup>
       {/* The org levels an edition adds (EE: units, PR2c). A member, or OSS, has none and sees no picker. */}
       {home.org.levels.length ? (
-        <Select value={unit ? scope : ''} onValueChange={(v) => v && change({ scope: v as Scope })}>
+        // A unit the viewer can't pick shows the placeholder, never a blank trigger.
+        <Select
+          value={home.org.level ? (scope ?? '') : ''}
+          onValueChange={(v) => v && change({ scope: v as Scope })}
+        >
           <SelectTrigger
             size="sm"
-            className={`h-8 w-fit text-xs ${TOUCH}`}
+            className={`h-8 w-fit max-w-[min(16rem,100%)] text-xs ${TOUCH}`}
             aria-label={copy.scope.unitLabel}
           >
             <SelectValue placeholder={copy.scope.unitPlaceholder} />
           </SelectTrigger>
           <SelectContent>
             {home.org.levels.map((l) => (
-              <SelectItem key={l.id} value={`unit:${l.id}`}>
-                <span style={{ paddingInlineStart: `${l.depth}rem` }}>{l.label}</span>
+              // The indent sits on the item, outside its text (which the trigger repeats); the path names it, so
+              // same-named units under different parents differ for a screen reader.
+              <SelectItem
+                key={l.id}
+                value={`unit:${l.id}`}
+                aria-label={l.path}
+                textValue={l.label}
+                className={TOUCH}
+                style={{ paddingInlineStart: `${0.5 + l.depth}rem` }}
+              >
+                {l.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -280,6 +297,19 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       ) : null}
       {scope === 'fleet' && !me.is_superuser ? (
         <p className="m-0 text-xs text-muted-foreground">{copy.scope.sharedWithYou}</p>
+      ) : null}
+      {unit && home.org.level ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          {copy.scope.unitCaption(home.org.level.path, !me.is_superuser)}
+        </p>
+      ) : null}
+      {unit && home.org.state === 'stale' ? (
+        <p role="status" className="m-0 flex items-center gap-2 text-sm text-destructive">
+          {copy.unitStale}
+          <Button size="sm" variant="ghost" className={TOUCH} onClick={home.org.retry}>
+            {copy.retry}
+          </Button>
+        </p>
       ) : null}
       {home.spendStatus === 'failed' ||
       home.spendStatus === 'stale' ||

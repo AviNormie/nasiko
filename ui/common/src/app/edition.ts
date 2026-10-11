@@ -33,6 +33,8 @@ export interface HomeLevel {
   /** The level's id, written to `?scope=unit:<id>`. */
   id: string
   label: string
+  /** Its ancestors' names and its own ("Engineering › Platform"): the accessible name, so same-named units differ. */
+  path: string
   /** Nesting under its visible parent, for the picker's indent (0 = a root). */
   depth: number
 }
@@ -47,7 +49,13 @@ export interface HomeLevel {
  */
 export interface HomeOrgScope<L = unknown, M = unknown> {
   levels: { query: SlotQuery<L>; list: (data: L) => readonly HomeLevel[] }
-  owners: { query: (id: string) => SlotQuery<M>; ids: (data: M) => ReadonlySet<string> }
+  owners: {
+    query: (id: string) => SlotQuery<M>
+    /** The owners, or null when the server wouldn't say (`{"available": false}`): the level reads as not visible. */
+    ids: (data: M) => ReadonlySet<string> | null
+    /** Owners' names, so a manager's unit groups rows by person even without the user list. */
+    names: (data: M) => ReadonlyMap<string, string>
+  }
 }
 
 export const homeOrgScope = <L, M>(s: HomeOrgScope<L, M>) => s as unknown as HomeOrgScope

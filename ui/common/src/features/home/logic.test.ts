@@ -20,6 +20,7 @@ import {
 } from './rows'
 import { copy } from './copy'
 import { rememberScope, resolveScope, storedScope } from './scope'
+import { homeSearchSchema } from './search'
 
 describe('scope', () => {
   it('maps all nine personas, and no persona by role', () => {
@@ -257,8 +258,7 @@ describe('owner groups, sparklines, budget month (PR2b)', () => {
 })
 
 describe('org levels in the core (PR2c)', () => {
-  it('the scope schema takes yours, fleet and unit:<id>, and drops junk', async () => {
-    const { homeSearchSchema } = await import('./search')
+  it('the scope schema takes yours, fleet and unit:<uuid>, and drops junk', () => {
     const scope = (v: unknown) => homeSearchSchema.parse({ scope: v }).scope
     expect(scope('yours')).toBe('yours')
     expect(scope('unit:5eed0014-0000-4000-8000-000000000001')).toBe(
@@ -267,6 +267,7 @@ describe('org levels in the core (PR2c)', () => {
     expect(scope('unit:')).toBeUndefined()
     expect(scope('unit:<script>')).toBeUndefined()
     expect(scope('team')).toBeUndefined()
+    expect(scope('unit:not-a-uuid')).toBeUndefined()
   })
 
   it('a unit is never remembered as the default scope', () => {
@@ -303,6 +304,6 @@ describe('org levels in the core (PR2c)', () => {
         days: 30,
         needing: 0,
       }),
-    ).toBe("Platform's 3 agents and 1 harness spent $12.00 in the last 30 days.")
+    ).toBe('3 agents and 1 harness owned by Platform members spent $12.00 in the last 30 days.')
   })
 })
