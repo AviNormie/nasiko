@@ -296,3 +296,13 @@ describe('money states (review)', () => {
     expect(money).toEqual([...money].sort((a, b) => b - a))
   })
 })
+
+describe('org levels without an edition layer (OSS)', () => {
+  it('a unit link says it isn’t a unit the viewer can see, and offers the fleet', async () => {
+    renderApp('/?scope=unit:5eed0014-0000-4000-8000-000000000001')
+    expect(await screen.findByText(copy.empty.unknownUnit)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: copy.empty.showFleet }))
+    expect(await table()).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: copy.scope.unitLabel })).toBeNull()
+  })
+})

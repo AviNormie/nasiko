@@ -22,6 +22,13 @@ import { PanelSkeleton } from '@/components/shared/panel'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
 import { usePausedFlows } from '@/features/flows/paused'
@@ -43,7 +50,7 @@ import { RowsTable } from './components/RowsTable'
 import { copy } from './copy'
 import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
-import type { HomeSearch, Scope } from './search'
+import { isUnitScope, type HomeSearch, type Scope } from './search'
 import { PHONE_QUERY, RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
 import { useBudgetStamp } from './useBudgetStamp'
 
@@ -144,13 +151,21 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const phone = useMediaQuery(PHONE_QUERY, false)
   const rows = home.rows ? sortRows(home.rows, sort) : null
   const t = rows ? totals(rows) : null
+  const unit = isUnitScope(scope)
   const sentence = t
-    ? homeNarrative({ scope: scope ?? 'fleet', ...t, floor: home.unpriced, days })
+    ? homeNarrative({
+        scope: unit ? 'unit' : (scope ?? 'fleet'),
+        unitName: home.org.level?.label,
+        ...t,
+        floor: home.unpriced,
+        days,
+      })
     : null
 
   const rowsProps = {
     rows: rows ?? [],
-    grouped: scope === 'fleet',
+    // Fleet and an org level group by owner; Yours is one owner.
+    grouped: scope !== 'yours',
     days,
     range,
     now,
@@ -171,7 +186,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         type="single"
         variant="outline"
         size="sm"
-        value={scope ?? ''}
+        value={scope === 'yours' || scope === 'fleet' ? scope : ''}
         onValueChange={(v) => v && change({ scope: v as Scope })}
         aria-label={copy.scope.label}
       >
@@ -190,6 +205,25 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           {copy.scope.fleet}
         </ToggleGroupItem>
       </ToggleGroup>
+      {/* The org levels an edition adds (EE: units, PR2c). A member, or OSS, has none and sees no picker. */}
+      {home.org.levels.length ? (
+        <Select value={unit ? scope : ''} onValueChange={(v) => v && change({ scope: v as Scope })}>
+          <SelectTrigger
+            size="sm"
+            className={`h-8 w-fit text-xs ${TOUCH}`}
+            aria-label={copy.scope.unitLabel}
+          >
+            <SelectValue placeholder={copy.scope.unitPlaceholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {home.org.levels.map((l) => (
+              <SelectItem key={l.id} value={`unit:${l.id}`}>
+                <span style={{ paddingInlineStart: `${l.depth}rem` }}>{l.label}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
       <ToggleGroup
         type="single"
         variant="outline"
@@ -276,8 +310,34 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
             </Button>
           }
         />
+      ) : unit && home.org.state === 'unknown' ? (
+        // A unit link the viewer can't pick (deleted, outside a manager's subtrees, or a build without org levels).
+        <EmptyState title={copy.empty.unknownUnit}>
+          <Button
+            size="sm"
+            variant="outline"
+            className={`mt-3 ${TOUCH}`}
+            onClick={() => change({ scope: 'fleet' })}
+          >
+            {copy.empty.showFleet}
+          </Button>
+        </EmptyState>
+      ) : unit && home.org.state === 'failed' ? (
+        <StateCard
+          tone="error"
+          title={copy.unitFailed}
+          action={
+            <Button size="sm" variant="outline" className={TOUCH} onClick={home.org.retry}>
+              <RotateCw className="size-3.5" aria-hidden /> {copy.retry}
+            </Button>
+          }
+        />
       ) : !rows ? (
         <PanelSkeleton height={SKELETON_ROWS * SKELETON_ROW_PX} />
+      ) : !rows.length && unit ? (
+        <EmptyState title={copy.empty.noUnitRows}>
+          <p className="m-0">{copy.empty.noUnitRowsBody}</p>
+        </EmptyState>
       ) : !rows.length ? (
         <EmptyState title={copy.empty.noOwned}>
           <p className="m-0">{copy.empty.noOwnedBody}</p>
@@ -338,7 +398,7 @@ function Strip({
         <KpiTile
           label={copy.strip.spend}
           aside={
-            member && scope === 'fleet' ? (
+            member && scope !== 'yours' ? (
               <span className="text-xs text-muted-foreground">{copy.strip.spendVisible}</span>
             ) : null
           }

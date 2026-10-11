@@ -6,7 +6,9 @@
 import { fmtMoney } from '@/lib/format'
 
 export interface HomeNarrativeInput {
-  scope: 'yours' | 'fleet'
+  /** `unit`: an org level (EE), named by `unitName`. */
+  scope: 'yours' | 'fleet' | 'unit'
+  unitName?: string
   agents: number
   harnesses: number
   /** Sum of the rows' spend; null while it loads or failed. */
@@ -27,7 +29,11 @@ export function homeNarrative(i: HomeNarrativeInput): string | null {
     i.harnesses ? count(i.harnesses, 'harness', 'harnesses') : null,
   ].filter(Boolean)
   const who =
-    i.scope === 'yours' ? `Your ${parts.join(' and ')}` : `${parts.join(' and ')} you can see`
+    i.scope === 'yours'
+      ? `Your ${parts.join(' and ')}`
+      : i.scope === 'unit' && i.unitName
+        ? `${i.unitName}'s ${parts.join(' and ')}`
+        : `${parts.join(' and ')} you can see`
   const money =
     i.spend === null
       ? ''
