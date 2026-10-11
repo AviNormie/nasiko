@@ -73,6 +73,8 @@ function RowSpark({ id, win }: { id: string; win: Win }) {
 export function BudgetUse({ row, state }: { row: HomeRow; state: BudgetsState }) {
   const b = row.budget
   if (!budgetsShown(state)) return '—'
+  // A budget counts routed calls; a coding harness's calls never go through the router (the hub hides its card too).
+  if (row.harness) return <Quiet title={copy.budget.harness}>—</Quiet>
   if (!b)
     return row.mine ? (
       <Quiet>{copy.budget.none}</Quiet>

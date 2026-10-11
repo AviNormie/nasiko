@@ -43,6 +43,7 @@ export const copy = {
       month ? `${used} of ${limit} · ${month}` : `${used} of ${limit}`,
     pct: (pct: number, floor: boolean) => `${floor ? '≥ ' : ''}${pct}%`,
     none: 'No budget set',
+    harness: "Coding harnesses have no budget: their calls don't go through the router",
     onlyYours: 'Only your own budgets show here',
     reached: 'Limit reached',
     crosses: (date: string) => `At this pace, reaches its limit on ${date}`,
