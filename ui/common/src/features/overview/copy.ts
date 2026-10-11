@@ -15,19 +15,6 @@ export const copy = {
   retry: 'Retry',
   couldntLoad: (what: string) => `Couldn't load ${what}.`,
   couldntCheck: (what: string) => `Couldn't check ${what}`,
-  summary: 'Summary',
-  month: {
-    // Fleet, never "your": the calendar is fleet-wide (eng review R2).
-    label: 'Fleet spend this month',
-    ofLast: (mtd: string, last: string) => `${mtd} of last month's ${last}`,
-    noLast: (mtd: string) => `${mtd} · no spend last month`,
-    over: 'over forecast',
-  },
-  headline: {
-    checking: 'Checking your fleet…',
-  },
-  greeting: (hour: number, name: string, days: number) =>
-    `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, ${name}. Here is your workspace for the last ${days} days.`,
   range: {
     label: 'Range',
     item: (days: number) => `Last ${days} days`,
@@ -37,49 +24,6 @@ export const copy = {
     title: 'Set up OpenRuntime',
     intro:
       'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on the Overview once it runs.',
-  },
-  // Overview's token-optimisation band. One figure, one next step, then hand off to TokenOps.
-  savings: {
-    eyebrow: 'Token optimisation',
-    eyebrowOff: 'Token optimisation — not switched on',
-    savedSuffix: 'saved',
-    neverSent: (tokens: string) => `${tokens} tokens never sent.`,
-    couldSave: (agent: string, spend: string) =>
-      `${agent} has it switched off and spent ${spend} this period — turning it on is the biggest win left.`,
-    mostly: (what: string) => `Mostly from ${what}.`,
-    allOn: 'Every agent that can use it already has it on.',
-    detail: 'See the breakdown',
-    // Money on the table, not "$0 saved": one is a reason to act, the other reads as a broken feature.
-    idleSuffix: 'spent that could be trimmed',
-    idleLine:
-      'Your agents re-send tool output and chat history the model does not need. Turning optimisation on for one agent shows what it would save.',
-    idleCta: 'Choose an agent',
-  },
-  kpi: {
-    spend: 'Spend',
-    runs: 'Agent runs',
-    perDay: (n: string) => `${n} per day`,
-    agents: 'Agents running',
-    of: (total: number) => `/ ${total}`,
-    agentParts: {
-      deploying: (n: number) => `${n} deploying`,
-      attention: (n: number) => `${n} crashed or failed`,
-      stopped: (n: number) => `${n} stopped`,
-      'not-deployed': (n: number) => `${n} not deployed`,
-    },
-    allRunning: 'All running',
-    noAgents: 'No agents yet',
-    harnesses: 'Harnesses used',
-    connected: 'connected',
-    devs: (n: number) => `${n} developer${n === 1 ? '' : 's'}`,
-    yourUsage: 'your usage',
-  },
-  chats: {
-    title: 'Recent chats',
-    link: 'Chat',
-    what: 'recent chats',
-    none: 'No chats yet.',
-    start: 'Start one',
   },
   needs: {
     title: 'Needs you',
@@ -133,45 +77,6 @@ export const copy = {
       `${failed} of the ${checked} latest sessions checked failed`,
     seeSessions: 'See sessions',
     unknownAgent: 'Unknown agent',
-  },
-  harnesses: {
-    title: 'Coding harnesses',
-    link: 'Harnesses',
-    what: 'harness usage',
-    ownOnly: 'Your own usage (this server has no org view).',
-    notVisible: 'No harness usage is visible to you.',
-    none: 'No coding harnesses connected.',
-    noneYet: 'No coding harnesses yet',
-    connect: 'Connect one',
-    connected: (n: number) => `${n} coding harness${n === 1 ? '' : 'es'} connected`,
-    lineCost: (cost: string, days: number) =>
-      `${cost} est. cost (API list price), last ${days} days`,
-    open: 'Open Harnesses',
-    unpriced: 'unpriced',
-    costNote: (days: number) => `Est. cost (API list price), last ${days} days`,
-  },
-  sessions: {
-    title: 'Recent sessions',
-    colStatus: 'Status',
-    colSession: 'Session',
-    colAgent: 'Agent',
-    colCost: 'Cost',
-    colWhen: 'When',
-    link: 'Sessions',
-    what: 'recent sessions',
-    failed: 'Failed',
-    ok: 'Succeeded',
-    unchecked: 'Not checked',
-    none: 'No sessions in the last 7 days.',
-    traceStore: 'Sessions need the trace store.',
-    open: 'Open Sessions',
-  },
-  actions: {
-    title: 'Quick actions',
-    newChat: 'New chat',
-    orchestrator: 'Ask the Orchestrator',
-    copyDeploy: 'Copy the deploy command',
-    adjustBudget: 'Adjust budget',
   },
   firstRun: {
     title: 'Deploy your first agent',
@@ -227,28 +132,6 @@ export const copy = {
     // Eng review R2: TokenOps' scope wording (TokenopsPage.tsx), shortened.
     scopeNote: 'The month total is fleet-wide; drivers only include agents you can access.',
   },
-  budget: {
-    title: 'Budgets',
-    link: 'Budgets',
-    what: 'budgets',
-    of: (limit: string) => `of ${limit}`,
-    used: (pct: string) => `${pct} used`,
-    daysLeft: (n: number) => (n === 0 ? 'resets today' : `${n} day${n === 1 ? '' : 's'} left`),
-    forecast: 'Forecast at month end',
-    tooEarly: 'Too early to say',
-    noSpend: 'No spend yet',
-    overLimit: 'over the limit',
-    alerts: 'Alerts at',
-    atLimit: 'At 100%',
-    alertOnly: 'Alert only',
-    stopCalls: 'Stop calls',
-    agents: 'Agent budgets',
-    state: (s: 'ok' | 'warning' | 'exceeded', stopped: boolean) =>
-      stopped ? 'Stopped' : s === 'exceeded' ? 'Over' : s === 'warning' ? 'Warning' : 'On track',
-    none: 'No budgets set.',
-    set: 'Set a budget',
-    underBudget: (amount: string) => `Forecast stays ${amount} under budget`,
-  },
   health: {
     title: 'Fleet health',
     link: 'Agents',
@@ -272,13 +155,6 @@ export const copy = {
     action: 'Needs action',
     unknown: 'Unknown',
   } satisfies Record<Rating, string>,
-  /** Plural count labels for the Fleet health header. */
-  ratingCount: {
-    healthy: (n: number) => `${n} healthy`,
-    watch: (n: number) => `${n} watch`,
-    action: (n: number) => `${n} need${n === 1 ? 's' : ''} action`,
-    unknown: (n: number) => `${n} unknown`,
-  } satisfies Record<Rating, (n: number) => string>,
   reason: {
     status: (raw: string) => (raw === 'failed' ? 'deployment failed' : 'crashed'),
     stuckDeploying: 'stuck deploying',

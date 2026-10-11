@@ -60,7 +60,7 @@ const PUBLIC = {
   hub: ['components/HubTimeline', 'events'],
   // The agent hub's Tools card counts connectors and blocked tools (plans/feat-agent-centric.md PR1c).
   mcp: ['components/AgentMcpTab', 'api'],
-  narrative: ['tokenops', 'trace', 'harness', 'overview', 'flows', 'agentHub'],
+  narrative: ['tokenops', 'trace', 'harness', 'flows', 'agentHub', 'home'],
   onboarding: ['api', 'GuideCard', 'GuideHost', 'index', 'logic', 'types'],
   // Context optimization (plans/feat-context-optimization.md eng D1): its rules, copy, the trace's Optimization block
   // (M2) and the /optimization Workspace row (T7). TokenOps' own savings panel is main's (PR #28, /finops/savings).
@@ -76,7 +76,17 @@ const PUBLIC = {
     'components/WorkspaceRow',
   ],
   // The agent hub rates one agent with the Overview's own rules (plans/feat-agent-centric.md eng PUBLIC adds).
-  overview: ['api', 'copy', 'health'],
+  // The scoped home (PR2) keeps the Overview's Needs you, first run and Setup guide, its window and its tuning.
+  overview: [
+    'api',
+    'copy',
+    'health',
+    'search',
+    'tuning',
+    'components/NeedsYou',
+    'components/FirstRun',
+    'components/SetupGuide',
+  ],
   observability: ['StateCard', 'tuning', 'types', 'spans', 'copy', 'sessions', 'limiter'],
   router: ['components/RoutingCard', 'api', 'types', 'budgets', 'routing'],
   // The hairline rows every Settings page is built from (EE uses them too).
