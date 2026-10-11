@@ -27,6 +27,7 @@ import type { DisplayStatus } from '../status'
 import { CRASH_LINES_SHOWN } from '../tuning'
 import { TokenOptimization } from './TokenOptimization'
 import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
+import { HubTimeline } from '@/features/hub/components/HubTimeline'
 import { copy as deployCopy } from '@/features/deploy/copy'
 
 export function OverviewTab({
@@ -96,6 +97,9 @@ export function OverviewTab({
           </Button>
         </section>
       ) : null}
+
+      {/* The agent hub's timeline (plans/feat-agent-centric.md PR1a); PR1c moves the facts below to a Details tab. */}
+      <HubTimeline agent={agent} ownerLabel={ownerLabel} />
 
       {agent.isHarness ? null : (
         <Section title={copy.activeVersion} action={<LearnMore href="versions" />}>
