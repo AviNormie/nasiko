@@ -8,14 +8,15 @@
 import { Link } from '@tanstack/react-router'
 import { Panel, PanelSkeleton } from '@/components/shared/panel'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { useAgentsDirectory } from '@/features/agents/api'
 import { relTime } from '@/features/agents/format'
 import type { useHubFlows, useHubSessions } from '../api'
 import { copy } from '../copy'
+import { RetryLine } from './RetryLine'
 import { RUNS_SHOWN } from '../tuning'
 
-const LINK = 'text-sm text-primary-text underline-offset-4 hover:underline'
+const LINK =
+  'inline-flex items-center text-sm text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11'
 
 export function RecentRuns({
   agentName,
@@ -33,22 +34,6 @@ export function RecentRuns({
       <SessionsList agentName={agentName} sessions={sessions} statuses={statuses} />
       <FlowsList flows={flows} />
     </div>
-  )
-}
-
-function Retry({ label, onRetry }: { label: string; onRetry: () => void }) {
-  return (
-    <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-      {label}
-      <Button
-        variant="link"
-        size="sm"
-        className="h-auto p-0 text-xs pointer-coarse:min-h-11"
-        onClick={onRetry}
-      >
-        {copy.states.retry}
-      </Button>
-    </p>
   )
 }
 
@@ -74,7 +59,7 @@ function SessionsList({
       {sessions.isPending ? (
         <PanelSkeleton height={96} />
       ) : sessions.isError ? (
-        <Retry label={copy.runs.sessionsError} onRetry={() => void sessions.refetch()} />
+        <RetryLine label={copy.runs.sessionsError} onRetry={() => void sessions.refetch()} />
       ) : (
         <div className="space-y-2">
           {shared ? (
@@ -91,7 +76,7 @@ function SessionsList({
                     to="/sessions/$sessionId"
                     params={{ sessionId: s.session_id }}
                     search={{}}
-                    className="font-mono text-xs underline-offset-4 hover:underline"
+                    className="inline-flex items-center font-mono text-xs underline-offset-4 hover:underline pointer-coarse:min-h-11"
                   >
                     {s.session_id.slice(0, 8)}
                   </Link>
@@ -122,7 +107,7 @@ function FlowsList({ flows }: { flows: ReturnType<typeof useHubFlows> }) {
       {flows.isPending ? (
         <PanelSkeleton height={96} />
       ) : flows.isError ? (
-        <Retry label={copy.runs.flowsError} onRetry={() => void flows.refetch()} />
+        <RetryLine label={copy.runs.flowsError} onRetry={() => void flows.refetch()} />
       ) : (
         <div className="space-y-2">
           {flows.mine.length ? (
@@ -135,7 +120,7 @@ function FlowsList({ flows }: { flows: ReturnType<typeof useHubFlows> }) {
                   <Link
                     to="/flows/$flowId"
                     params={{ flowId: f.flow_id }}
-                    className="min-w-0 truncate underline-offset-4 hover:underline"
+                    className="min-w-0 truncate underline-offset-4 hover:underline pointer-coarse:py-3"
                   >
                     {f.title || f.flow_id.slice(0, 8)}
                   </Link>
@@ -148,11 +133,14 @@ function FlowsList({ flows }: { flows: ReturnType<typeof useHubFlows> }) {
                 </li>
               ))}
             </ul>
-          ) : (
+          ) : flows.partial ? null : (
             <p className="m-0 text-sm text-muted-foreground">
               {flows.complete ? copy.runs.flowsNone : copy.runs.flowsNoneCapped(flows.read)}
             </p>
           )}
+          {flows.partial ? (
+            <RetryLine label={copy.runs.flowsPartial} onRetry={() => void flows.refetch()} />
+          ) : null}
           <p className="m-0">
             <Link to="/flows" className={LINK}>
               {copy.runs.flowsAll}

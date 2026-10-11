@@ -13,12 +13,21 @@
  * The server-side gap is a written ask (AH-P0 in docs/designs/openruntime-agent-hub-recommendations.md).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { isUnavailable, useDeployment, useVersions } from '@/features/agents/api'
-import { usePendingRequests } from '@/features/chat/api'
+import {
+  isUnavailable,
+  useAgentsDirectory,
+  useDeployment,
+  useVersions,
+} from '@/features/agents/api'
+import { displayStatus } from '@/features/agents/status'
+import { useChatSessions, usePendingRequests } from '@/features/chat/api'
 import { useWaiting } from '@/features/chat/waiting'
 import { useFlowsList } from '@/features/flows/api'
 import type { SessionListResponse } from '@/features/observability/types'
+import type { Status } from '@/features/observability/sessions'
 import { useFleetHealth } from '@/features/overview/api'
+import { rateAgent } from '@/features/overview/health'
+import { useDashboard } from '@/features/tokenops/api'
 import { useSessionStatuses } from '@/features/sessions/api'
 import { useAgentBuilds } from '@/features/deploy/api'
 import { contextSavingsSchema } from '@/features/optimization/types'
@@ -29,11 +38,11 @@ import type {
   SavingsBasis,
   SavingsData,
 } from '@/features/tokenops/types'
-import type { ResolvedWindow } from '@/features/tokenops/window'
+import { resolveWindow, type ResolvedWindow } from '@/features/tokenops/window'
 import { ApiError, apiData, apiFetch, withQuery } from '@/lib/api/client'
 import { isPreview } from '@/lib/env'
 import { markersFor, type MarkerSet } from './events'
-import { CHECKED, hubNeeds, type HubNeeds, type HubNeedsInput, type HubSource } from './needs'
+import { hubNeeds, sessionSource, type HubNeeds, type HubNeedsInput, type HubSource } from './needs'
 import { agentRows, sampleStart } from './sessions'
 import { EVENTS_READ, SESSION_CHECKS, SESSION_SAMPLE } from './tuning'
 import { agentEventsSchema, type AgentEvents } from './types'
@@ -336,11 +345,15 @@ export function useHubSessions(
 export function useHubFlows(id: string, win: Win) {
   const list = useFlowsList({ sinceMs: win.start.getTime() })
   const rows = list.data?.rows ?? []
+  const end = win.end.getTime()
   return {
     ...list,
-    mine: rows.filter((f) => f.root_agent_id === id),
+    // The list reads back from the newest flow: a past window drops flows created after its end (review: Codex).
+    mine: rows.filter((f) => f.root_agent_id === id && Date.parse(f.created_at) < end),
     read: rows.length,
     complete: !!list.data?.complete,
+    /** A later page failed: what was read shows, with the failure and Retry (`readFlowsBack` keeps partial rows). */
+    partial: !!list.data?.error,
   }
 }
 
@@ -351,15 +364,134 @@ export interface HubNeedsResult {
   statuses: ReadonlyMap<string, string>
 }
 
-/** Needs you for one agent (`needs.ts`): requests, the agent's rating and its sessions' failures. */
+type Rated = HubNeedsInput['status']
+
+/**
+ * This agent's rating (eng "Health input contract", per viewer). A superuser keeps the Overview's own inputs
+ * (`useFleetHealth`: fleet dashboards and the fleet spend series for spikes). Anyone else is rated from this agent's
+ * ACL-scoped dashboards only, with no spike dimension: the fleet spend series isn't ACL-scoped on the server (AH-P0), so
+ * a member's visit must never read it (review: Codex P1). The hub's gate decides first: an agent whose spend the viewer
+ * can't see, or that the server doesn't know, isn't rated here.
+ */
+function useAgentRating(
+  agent: {
+    id: string
+    name: string
+    status: string
+    createdAt: string
+    updatedAt: string
+    isHarness: boolean
+  },
+  superuser: boolean,
+  gate: GateState['kind'],
+  now: Date,
+): { state: Rated; retry: () => void } {
+  const on = !agent.isHarness && gate === 'ok'
+  const fleet = useFleetHealth(now, on && superuser)
+  const win7 = resolveWindow({ preset: '7d' }, now)
+  const win30 = resolveWindow({ preset: '30d' }, now)
+  const f = { agent: agent.id }
+  const member = on && !superuser
+  const cur = useDashboard(win7, f, 'agent', 'current', member)
+  const prev = useDashboard(win7, f, 'agent', 'previous', member)
+  const d30 = useDashboard(win30, f, 'agent', 'current', member)
+  if (agent.isHarness || gate === 'not-visible' || gate === 'deleted' || gate === 'error')
+    return { state: { state: 'absent' }, retry: () => {} }
+  if (gate === 'pending') return { state: { state: 'loading' }, retry: () => {} }
+  if (superuser) {
+    const rated = fleet.summary?.byId.get(agent.id)
+    const state: Rated =
+      fleet.error && !fleet.summary
+        ? { state: 'failed' }
+        : !fleet.summary || fleet.ratingsPending
+          ? { state: 'loading' }
+          : rated
+            ? {
+                state: 'ok',
+                value: {
+                  rating: rated.rating,
+                  reason: rated.reasons[0]?.text ?? null,
+                  incomplete: fleet.costFailed,
+                },
+              }
+            : { state: 'absent' }
+    return {
+      state,
+      retry: () => {
+        fleet.retry()
+        if (fleet.costFailed) fleet.retryCost()
+      },
+    }
+  }
+  const retry = () => {
+    for (const q of [cur, prev, d30]) if (q.isError) void q.refetch()
+  }
+  // A dashboard 404 is the viewer not seeing this agent's spend: nothing to rate (the gate says so too).
+  if ([cur, prev, d30].some((q) => q.error instanceof ApiError && q.error.status === 404))
+    return { state: { state: 'absent' }, retry }
+  if (cur.isError) return { state: { state: 'failed' }, retry }
+  if (cur.isPending || prev.isPending || d30.isPending)
+    return { state: { state: 'loading' }, retry }
+  const usage = (d: FinopsDashboardData | undefined) => {
+    const r = d?.agents.find((a) => a.agent_id === agent.id)
+    return r
+      ? { cost: r.total_cost, operations: r.operations, p95: r.avg_latency_p95_ms ?? null }
+      : ZERO_USAGE
+  }
+  const rated = rateAgent(
+    {
+      id: agent.id,
+      name: agent.name,
+      display: displayStatus(agent.status, false),
+      raw: agent.status,
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+      current: usage(cur.data),
+      previous: prev.isError ? null : usage(prev.data),
+      costPerOp30d:
+        d30.data?.agents.find((a) => a.agent_id === agent.id)?.avg_cost_per_operation ?? null,
+    },
+    now.getTime(),
+  )
+  return {
+    state: {
+      state: 'ok',
+      value: {
+        rating: rated.rating,
+        reason: rated.reasons[0]?.text ?? null,
+        incomplete: prev.isError || d30.isError,
+      },
+    },
+    retry,
+  }
+}
+
+const ZERO_USAGE = { cost: 0, operations: 0, p95: null }
+
+/**
+ * Needs you for one agent (`needs.ts`): requests, the agent's rating and its sessions' failures. `now` is Needs you's
+ * own frozen clock, never the timeline's window, so a window change refetches nothing here (review: performance).
+ */
 export function useHubNeeds(
-  agent: { id: string; name: string; createdAt: string; isHarness: boolean },
-  me: { sub: string; is_superuser: boolean },
+  agent: {
+    id: string
+    name: string
+    status: string
+    createdAt: string
+    updatedAt: string
+    isHarness: boolean
+  },
+  me: { sub: string; is_superuser: boolean } | undefined,
+  gate: GateState['kind'],
   now: Date,
 ): HubNeedsResult {
-  const waiting = useWaiting(me.sub, me.is_superuser)
-  const pending = usePendingRequests(me.sub)
-  const fleet = useFleetHealth(now, !agent.isHarness)
+  const qc = useQueryClient()
+  const superuser = !!me?.is_superuser
+  const waiting = useWaiting(me?.sub ?? '', superuser)
+  const pending = usePendingRequests(me?.sub ?? '', !!me && !superuser)
+  const chats = useChatSessions()
+  const rating = useAgentRating(agent, superuser, gate, now)
+  const dir = useAgentsDirectory()
   const sessions = useHubSessions(agent, now)
   const checkedRows = (sessions.data?.rows ?? []).slice(0, SESSION_CHECKS)
   const statuses = useSessionStatuses(checkedRows, now.getTime(), false)
@@ -371,73 +503,53 @@ export function useHubNeeds(
       .filter((r) => mineReq(r.execution.agent_id))
       .map((r) => ({ chat: c.sessionId, id: r.id })),
   )
-  const all = me.is_superuser
+  const all = superuser
     ? provable
     : (pending.data?.items ?? [])
         .filter((r) => r.status === 'pending' && mineReq(r.execution.agent_id))
         .map((r) => ({ chat: provable.find((p) => p.id === r.id)?.chat ?? null, id: r.id }))
-  const requests: HubNeedsInput['requests'] = waiting.failedCold
-    ? { state: 'failed' }
-    : waiting.isPending
-      ? { state: 'loading' }
-      : {
-          state: 'ok',
-          value: {
-            count: all.length,
-            firstChat: all.find((r) => r.chat)?.chat ?? null,
-            firstRequest: all.find((r) => r.chat)?.id ?? null,
-          },
-        }
-
-  const rated = fleet.summary?.byId.get(agent.id)
-  const status: HubNeedsInput['status'] = agent.isHarness
-    ? { state: 'absent' }
-    : fleet.error && !fleet.summary
+  // Matching needs the chat list (it proves a superuser's requests): pending or failed, the source can't answer yet.
+  const requests: HubNeedsInput['requests'] =
+    waiting.failedCold || waiting.stale || (superuser && chats.isError)
       ? { state: 'failed' }
-      : !fleet.summary || fleet.ratingsPending
-        ? { state: 'loading' }
-        : rated
-          ? {
-              state: 'ok',
-              value: {
-                rating: rated.rating,
-                reason: rated.reasons[0]?.text ?? null,
-                incomplete: fleet.costFailed,
-              },
-            }
-          : { state: 'absent' }
-
-  const verdicts = checkedRows.map((r) => statuses.get(r.session_id))
-  const checked = verdicts.filter((v) => !!v && CHECKED.includes(v)).length
-  const failedCount = verdicts.filter((v) => v === 'failed').length
-  const checking = verdicts.some((v) => v === 'checking')
-  // Most of the checked rows must answer before "no failures" counts (the Overview's rule), never a silent pass.
-  const noneChecked =
-    !checking && !failedCount && checkedRows.length > 0 && checked * 2 < checkedRows.length
-  const sessionState: HubNeedsInput['sessions'] =
-    sessions.isError || noneChecked
-      ? { state: 'failed' }
-      : sessions.isPending || checking
+      : !me || waiting.isPending || chats.isPending || (!superuser && pending.isPending)
         ? { state: 'loading' }
         : {
             state: 'ok',
             value: {
-              found: sessions.data.rows.length,
-              checked,
-              failed: failedCount,
-              scanned: sessions.data.scanned,
+              count: all.length,
+              firstChat: all.find((r) => r.chat)?.chat ?? null,
+              firstRequest: all.find((r) => r.chat)?.id ?? null,
+              unproven: superuser ? waiting.match.dropped : 0,
             },
           }
 
+  const sessionState = sessionSource({
+    listError: sessions.isError,
+    listPending: sessions.isPending,
+    found: sessions.data?.rows.length ?? 0,
+    scanned: sessions.data?.scanned ?? 0,
+    verdicts: checkedRows.map((r) => statuses.get(r.session_id) as Status | undefined),
+    ambiguous: (dir.byNameAll.get(agent.name)?.length ?? 0) > 1,
+  })
+
   return {
-    needs: hubNeeds({ requests, status, sessions: sessionState }),
+    needs: hubNeeds({ requests, status: rating.state, sessions: sessionState }),
     retry: {
-      requests: waiting.retry,
-      status: () => {
-        fleet.retry()
-        if (fleet.costFailed) fleet.retryCost()
+      requests: () => {
+        waiting.retry()
+        if (chats.isError) void chats.refetch()
       },
-      sessions: () => void sessions.refetch(),
+      status: rating.retry,
+      // The list and the checks that failed: detail and trace reads never retry on their own (review).
+      sessions: () => {
+        void sessions.refetch()
+        for (const r of checkedRows)
+          void qc.invalidateQueries({ queryKey: ['sessions', 'detail', r.session_id] })
+        void qc.invalidateQueries({
+          predicate: (q) => q.queryKey[0] === 'trace' && q.state.status === 'error',
+        })
+      },
     },
     sessions,
     statuses,

@@ -71,7 +71,8 @@ const PUBLIC = {
     // The Workspace footer's row, so a layer's slot rows (EE Organization policy) line up with the core's.
     'components/WorkspaceRow',
   ],
-  overview: ['api', 'copy'],
+  // The agent hub rates one agent with the Overview's own rules (plans/feat-agent-centric.md eng PUBLIC adds).
+  overview: ['api', 'copy', 'health'],
   observability: ['StateCard', 'tuning', 'types', 'spans', 'copy', 'sessions', 'limiter'],
   router: ['components/RoutingCard', 'api', 'types', 'budgets', 'routing'],
   // The hairline rows every Settings page is built from (EE uses them too).

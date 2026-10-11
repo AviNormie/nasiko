@@ -111,8 +111,11 @@ export const copy = {
     partStatus: 'its health (rated on the last 7 days)',
     partSessions: (checked: number, found: number, scanned: number) =>
       found === 0
-        ? `the latest ${scanned} sessions (none of them this agent's)`
-        : `${checked} of this agent's ${found} sessions found in the latest ${scanned}`,
+        ? `the latest ${scanned} sessions you can see (none of them this agent's)`
+        : `${checked} of this agent's ${found} sessions in the latest ${scanned} you can see`,
+    unproven: (n: number) =>
+      `${n} pending ${n === 1 ? 'request' : 'requests'} can't be tied to your chats yet, so requests aren't fully checked.`,
+    shared: '(another visible agent has the same name: some may be its sessions)',
     requests: (n: number) => `${n} ${n === 1 ? 'request is' : 'requests are'} waiting for you`,
     answer: 'Answer',
     statusAction: 'Needs action',
@@ -123,7 +126,8 @@ export const copy = {
     openFailed: 'Open failed sessions',
     failed: {
       requests: "Pending requests couldn't load",
-      status: "Its health couldn't be rated (a cost input is missing)",
+      status: "Its health couldn't be rated",
+      statusIncomplete: "Its health couldn't be fully rated (a cost input is missing)",
       sessions: "Its sessions couldn't be checked",
     },
   },
@@ -140,6 +144,7 @@ export const copy = {
     flowsNoneCapped: (n: number) => `None in the latest ${n} flows across the fleet.`,
     flowsAll: 'Open Flows',
     flowsError: "Flows couldn't load",
+    flowsPartial: "Some flows couldn't load: this list may be missing older ones.",
     failed: 'failed',
   },
 
@@ -153,8 +158,9 @@ export const copy = {
     tools: 'Tools',
     toolsConnected: (n: number) => `${n} connected`,
     toolsBlocked: (n: number, capped: boolean) =>
-      `${n} ${n === 1 ? 'tool' : 'tools'} blocked by rule${capped ? ' (first connectors checked)' : ''}`,
+      `${n} ${n === 1 ? 'tool' : 'tools'} set to Block${capped ? ' (first connectors checked)' : ''}`,
     toolsNone: 'No tools connected',
+    toolsSetUp: 'Connect tools',
     toolsOpen: 'MCP tab',
     optimization: 'Optimization',
     compressOn: 'Token optimization on',

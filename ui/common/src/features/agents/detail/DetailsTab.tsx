@@ -13,12 +13,11 @@ import { RoutingCard } from '@/features/router/components/RoutingCard'
 import { agentDetailQuery, isUnavailable, useDeployment, useLiveCard, useVersions } from '../api'
 import { CliCommand, LearnMore, Section, TryItLink } from '../components/bits'
 import { CopyButton } from '@/components/shared/copy-button'
-import { DEPLOY_CMD, relTime } from '../format'
+import { relTime } from '../format'
 import { copy } from '../copy'
 import { exampleTexts, safeHttpUrl, type AgentView } from '../normalize'
 import type { DisplayStatus } from '../status'
-import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
-import { copy as deployCopy } from '@/features/deploy/copy'
+import { NotDeployedPrompt } from './NotDeployedPrompt'
 
 export function DetailsTab({
   agent,
@@ -45,12 +44,7 @@ export function DetailsTab({
           ) : isUnavailable(dep) ? (
             <p className="text-sm text-muted-foreground">{copy.deploymentUnavailable}</p>
           ) : display === 'not-deployed' ? (
-            <div className="flex flex-col items-start gap-2 text-sm">
-              <p className="text-muted-foreground">{copy.notDeployed}.</p>
-              <DeployAgentButton name={agent.name} />
-              <p className="text-xs text-muted-foreground">{deployCopy.entry.orCli}</p>
-              <CliCommand command={DEPLOY_CMD} />
-            </div>
+            <NotDeployedPrompt name={agent.name} />
           ) : (
             <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
               <Field label={copy.version} value={active?.version ?? agent.version} mono />

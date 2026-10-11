@@ -5,16 +5,15 @@
  */
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
-import { copy as deployCopy } from '@/features/deploy/copy'
 import { HubTimeline } from '@/features/hub/components/HubTimeline'
 import { isUnavailable, useDeployment, useErrorLogs } from '../api'
-import { CliCommand, Section } from '../components/bits'
+import { Section } from '../components/bits'
 import { copy } from '../copy'
-import { DEPLOY_CMD, relTime } from '../format'
+import { relTime } from '../format'
 import type { AgentView } from '../normalize'
 import type { DisplayStatus } from '../status'
 import { CRASH_LINES_SHOWN } from '../tuning'
+import { NotDeployedPrompt } from './NotDeployedPrompt'
 import { TokenOptimization } from './TokenOptimization'
 
 export function OverviewTab({
@@ -84,12 +83,7 @@ export function OverviewTab({
 
       {display === 'not-deployed' && !agent.isHarness ? (
         <Section title={copy.activeVersion}>
-          <div className="flex flex-col items-start gap-2 text-sm">
-            <p className="text-muted-foreground">{copy.notDeployed}.</p>
-            <DeployAgentButton name={agent.name} />
-            <p className="text-xs text-muted-foreground">{deployCopy.entry.orCli}</p>
-            <CliCommand command={DEPLOY_CMD} />
-          </div>
+          <NotDeployedPrompt name={agent.name} />
         </Section>
       ) : null}
 

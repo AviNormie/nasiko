@@ -20,6 +20,7 @@ import { useAgentBlockedTools, useAgentConnectors } from '@/features/mcp/api'
 import { strategyQuery } from '@/features/optimization/api'
 import { copy as optCopy } from '@/features/optimization/copy'
 import { useAgentRouting, useBudgets, useBudgetStatus } from '@/features/router/api'
+import { configPin, routingSentence } from '@/features/router/routing'
 import { meQuery } from '@/lib/api/auth'
 import { isPreview } from '@/lib/env'
 import { fmtMoney, fmtTokens } from '@/lib/format'
@@ -28,7 +29,8 @@ import type { SavedTotal } from '../api'
 import { copy } from '../copy'
 import { TOOL_CARD_CONNECTORS } from '../tuning'
 
-const LINK = 'text-xs text-primary-text underline-offset-4 hover:underline'
+const LINK =
+  'inline-flex items-center text-xs text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11'
 
 export function LayerCards({
   agent,
@@ -45,7 +47,11 @@ export function LayerCards({
   const owner = !!me?.sub && me.sub === agent.ownerId
   const reader = owner || !!me?.is_superuser
   return (
-    <section aria-label={copy.cards.title} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    // Auto-fit: hidden slots leave no empty columns; the visible cards share the row (design "Layer cards").
+    <section
+      aria-label={copy.cards.title}
+      className="grid grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-3"
+    >
       {reader && !agent.isHarness ? <RoutingSlot id={agent.id} /> : null}
       {agent.canManage ? <ToolsSlot id={agent.id} /> : null}
       <OptimizationSlot agent={agent} owner={owner} saved={saved} extra={optimizationExtra} />
@@ -90,17 +96,20 @@ function RoutingSlot({ id }: { id: string }) {
   if (routing.isError) return null
   const r = routing.data
   const config = r?.llm_config ?? null
-  const model = r?.pinned_model ?? config?.model ?? null
+  // The router's own rules (routing.ts): an agent pin, else the config's pin, else its model; tiered configs have no
+  // one model, so the figure is the routing sentence's short form (review: Codex).
+  const pin = r?.pinned_model ?? (config ? configPin(config) : null)
+  const figure = pin ?? config?.model ?? (config ? routingSentence(config, null).short : null)
   return (
     <Slot title={copy.cards.routing}>
       {routing.isPending ? (
         <Line>…</Line>
       ) : config ? (
         <>
-          <Figure>{model ?? '—'}</Figure>
+          <Figure>{figure ?? '—'}</Figure>
           <Line>
             {config.name}
-            {r?.pinned_model ? ` · ${copy.cards.routingPinned}` : ''}
+            {pin ? ` · ${copy.cards.routingPinned}` : ''}
           </Line>
           <Link to="/router" className={LINK}>
             {copy.cards.routingOpen}
@@ -139,7 +148,7 @@ function ToolsSlot({ id }: { id: string }) {
         <Line>{copy.cards.toolsNone}</Line>
       )}
       <Link to="/agents/$agentId" params={{ agentId: id }} search={{ tab: 'mcp' }} className={LINK}>
-        {copy.cards.toolsOpen}
+        {enabled.length ? copy.cards.toolsOpen : copy.cards.toolsSetUp}
       </Link>
     </Slot>
   )
@@ -198,7 +207,9 @@ function BudgetSlot({ id }: { id: string }) {
         <Line>…</Line>
       ) : budget && st ? (
         <>
-          <Figure>{Math.round((st.used_usd / budget.limit_usd) * 100)}%</Figure>
+          <Figure>
+            {budget.limit_usd > 0 ? `${Math.round((st.used_usd / budget.limit_usd) * 100)}%` : '—'}
+          </Figure>
           <Line>{copy.cards.budgetUse(fmtMoney(st.used_usd), fmtMoney(budget.limit_usd))}</Line>
           <Line>
             {copy.cards.budgetUpdated(relTime(new Date(status.dataUpdatedAt).toISOString()))}
