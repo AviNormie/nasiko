@@ -193,16 +193,19 @@ export function useBuild(id: string, live: boolean) {
   })
 }
 
+/** `GET /api/builds/agent/{id}`: the agent's newest 20 build records, or `{available:false}` without deploy rights. */
+export const fetchAgentBuilds = async (agentId: string, signal: AbortSignal) =>
+  gated(
+    await apiFetch<unknown>(`/api/builds/agent/${encodeURIComponent(agentId)}`, { signal }),
+    (b) => buildRecordSchema.array().parse(b),
+  )
+
 /** `GET /api/builds/agent/{id}` (last 20) for an agent's Builds tab and the agent hub's deploy markers. */
 export function useAgentBuilds(agentId: string, enabled = true) {
   return useQuery({
     queryKey: buildKeys.forAgent(agentId),
     enabled,
-    queryFn: async ({ signal }) =>
-      gated(
-        await apiFetch<unknown>(`/api/builds/agent/${encodeURIComponent(agentId)}`, { signal }),
-        (b) => buildRecordSchema.array().parse(b),
-      ),
+    queryFn: ({ signal }) => fetchAgentBuilds(agentId, signal),
     retry: false,
     // Like the Builds list (§6): refresh while one of them is queued or building and the tab is visible.
     refetchInterval: (q) =>

@@ -107,7 +107,10 @@ describe('scope', () => {
     renderApp('/?scope=yours')
     expect(await screen.findByText(copy.empty.noOwned)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: copy.empty.showFleet }))
-    expect(within(await table()).getAllByRole('row')).toHaveLength(4)
+    // The header row, one owner group's header row, and its three agents.
+    const rows = within(await table()).getAllByRole('row')
+    expect(rows.filter((r) => !r.hasAttribute('data-group'))).toHaveLength(4)
+    expect(rows.filter((r) => r.hasAttribute('data-group'))).toHaveLength(1)
   })
 })
 
@@ -138,7 +141,8 @@ describe('rows and totals', () => {
       .slice(1)
       .map((r) => usd(within(r).getAllByRole('cell').at(2)?.textContent))
       .reduce((a, b) => a + b, 0)
-    const shown = usd(within(strip).getByText(/^(≥ )?\$/).textContent)
+    const spendTile = within(strip).getByText(copy.strip.spend).closest('[data-slot="card"]')!
+    const shown = usd(within(spendTile as HTMLElement).getByText(/^(≥ )?\$/).textContent)
     expect(Math.abs(shown - sum)).toBeLessThan(
       0.02 * Math.max(1, within(t).getAllByRole('row').length),
     )

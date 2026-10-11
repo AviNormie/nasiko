@@ -8,3 +8,11 @@ export const SKELETON_ROW_PX = 40
 export const SAVINGS_ROWS = 200
 /** A touch-sized target on coarse pointers (DESIGN.md: 44 px). */
 export const TOUCH = 'pointer-coarse:min-h-11'
+/** Budget use is re-read this often while the tab is visible (PR2 "Live budgets"; TanStack pauses it when hidden). */
+export const BUDGET_POLL_MS = 60_000
+/** Per-row reads (sparkline series, build records) in flight at once (eng "Home execution table"). */
+export const ROW_READS = 4
+/** A row's series and builds stay fresh this long, so scrolling back doesn't read them again. */
+export const ROW_READ_STALE_MS = 5 * 60_000
+/** The budget column's "updated …" stamp moves this often. */
+export const STAMP_TICK_MS = 30_000
