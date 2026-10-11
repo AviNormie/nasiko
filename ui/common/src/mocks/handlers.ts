@@ -1686,14 +1686,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     // R2 budgets: the proposed R-L10 contract (docs/designs/openruntime-llm-router-recommendations.md). No server yet.
     http.get('/api/budgets', () =>
       routed(() => {
-        if (variant() === 'home-budgets-absent') return new HttpResponse(null, { status: 404 })
+        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return envelope(listBudgets(getBudgets(), ADMIN_ID))
       }),
     ),
     http.get('/api/budgets/status', () =>
       routed(() => {
-        if (variant() === 'home-budgets-absent') return new HttpResponse(null, { status: 404 })
+        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return HttpResponse.json(
           budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
