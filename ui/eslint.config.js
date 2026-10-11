@@ -49,11 +49,13 @@ const PUBLIC = {
     'types',
   ],
   // Flows (plans/feat-flows.md): the call model and its duration format (the flow narrative), and "Open flow" (F19).
-  flows: ['calls', 'precision', 'components/OpenFlowLink', 'paused'],
+  // The agent hub's Flows list reads the list query (plans/feat-agent-centric.md eng PUBLIC adds).
+  flows: ['calls', 'precision', 'components/OpenFlowLink', 'paused', 'api'],
   harnesses: ['types', 'rollup', 'copy', 'api', 'constants', 'liveIndividual'],
   // The agent hub (plans/feat-agent-centric.md PR1a): the agent detail's Overview hosts its timeline.
   hub: ['components/HubTimeline', 'events'],
-  mcp: ['components/AgentMcpTab'],
+  // The agent hub's Tools card counts connectors and blocked tools (plans/feat-agent-centric.md PR1c).
+  mcp: ['components/AgentMcpTab', 'api'],
   narrative: ['tokenops', 'trace', 'harness', 'overview', 'flows', 'agentHub'],
   onboarding: ['api', 'GuideCard', 'GuideHost', 'index', 'logic', 'types'],
   // Context optimization (plans/feat-context-optimization.md eng D1): its rules, copy, the trace's Optimization block

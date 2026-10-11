@@ -33,7 +33,9 @@ import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import { useSetSearch } from '@/lib/search'
 import {
+  useHubFlows,
   useHubGate,
+  useHubNeeds,
   useHubMarkers,
   useHubSavedSeries,
   useHubSavings,
@@ -61,6 +63,9 @@ import {
 } from '../timeline'
 import { BUILDS_READ, LANE_HEIGHT } from '../tuning'
 import { BucketPanel } from './BucketPanel'
+import { LayerCards } from './LayerCards'
+import { NeedsPanel } from './NeedsPanel'
+import { RecentRuns } from './RecentRuns'
 import { HubTable } from './HubTable'
 import { MarkerRail } from './MarkerRail'
 
@@ -69,16 +74,33 @@ const REQUESTS = seriesAt(1)
 const P95 = seriesAt(2)
 const SAVED = seriesAt(3)
 
-export function HubTimeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string }) {
+export function HubTimeline({
+  agent,
+  ownerLabel,
+  optimizationExtra,
+}: {
+  agent: AgentView
+  ownerLabel: string
+  /** The Optimization card's extra control (a harness owner's Token optimization switch). */
+  optimizationExtra?: ReactNode
+}) {
   return (
     // The hub's one polite live region: bucket selection is announced here (design "Table view").
     <Announcer>
-      <Timeline agent={agent} ownerLabel={ownerLabel} />
+      <Timeline agent={agent} ownerLabel={ownerLabel} optimizationExtra={optimizationExtra} />
     </Announcer>
   )
 }
 
-function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string }) {
+function Timeline({
+  agent,
+  ownerLabel,
+  optimizationExtra,
+}: {
+  agent: AgentView
+  ownerLabel: string
+  optimizationExtra?: ReactNode
+}) {
   const search: HubSearch = useSearch({ from: '/_app/agents/$agentId' })
   const setSearch = useSetSearch<HubSearch>('/agents/$agentId')
   const announce = useAnnounce()
@@ -100,7 +122,11 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
     setOpenFlag(null)
   }
 
-  const mine = useQuery(meQuery).data?.sub === agent.ownerId
+  const me = useQuery(meQuery).data
+  const mine = me?.sub === agent.ownerId
+  // PR1c: Needs you, this agent's sessions (the bounded sample) and the flows it started.
+  const needs = useHubNeeds(agent, me ?? { sub: '', is_superuser: false }, now)
+  const flows = useHubFlows(agent.id, win)
   const gate = useHubGate(agent.id, win)
   const ok = gate.state.kind === 'ok'
   const ts = useHubTimeseries(agent.id, win, 'current', gate.canFetch)
@@ -207,6 +233,8 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
       <h2 id="hub-title" className="sr-only">
         {copy.section}
       </h2>
+      {/* Design section order: Needs you, the sentence, the window bar, rail and lanes, recent runs, layer cards. */}
+      <NeedsPanel result={needs} agentName={agent.name} />
       {sentences.length ? <p className="m-0 text-sm">{sentences.join(' ')}</p> : null}
       {/* TokenOps' window bar, sticky (design), with Compare and the Table view. */}
       <div className="sticky top-0 z-20 -mx-4 flex flex-wrap items-center gap-2 border-b border-border bg-background/95 px-4 py-2 backdrop-blur">
@@ -360,6 +388,14 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
           onClose={clear}
         />
       ) : null}
+
+      <RecentRuns
+        agentName={agent.name}
+        sessions={needs.sessions}
+        statuses={needs.statuses}
+        flows={flows}
+      />
+      <LayerCards agent={agent} saved={savedTotal} optimizationExtra={optimizationExtra} />
     </section>
   )
 }

@@ -3,7 +3,13 @@
  * invalidates it all: a connect changes the catalog, the server's page and each agent's MCP tab at once.
  * Key-bearing writes (credentials, register with secrets) have `gcTime: 0` so the key isn't kept in the cache.
  */
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query'
 import { createLimiter } from '@/features/observability/limiter'
 import { apiData, apiFetch, withQuery } from '@/lib/api/client'
 import { isBuilding, rulesWith } from './logic'
@@ -218,6 +224,38 @@ export const useAgentTools = (agentId: string, connectorId: string, enabled: boo
     enabled,
     select: (r) => r.tools,
   })
+
+/**
+ * Tools set to Block across some of an agent's connectors (the agent hub's Tools card, plans/feat-agent-centric.md
+ * PR1c): configured rules, not observed blocks. The same reads, keys and limiter as the MCP tab's, so they share cache.
+ */
+export function useAgentBlockedTools(
+  agentId: string,
+  connectorIds: readonly string[],
+  enabled: boolean,
+) {
+  return useQueries({
+    queries: connectorIds.map((cid) => ({
+      queryKey: mcpKeys.agentTools(agentId, cid),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        toolsLimiter(signal, () =>
+          apiData<AgentTools>(`${A(agentId)}/connectors/${enc(cid)}/tools`, {
+            signal,
+            schema: agentToolsSchema,
+          }),
+        ),
+      enabled,
+    })),
+    combine: (rs) => ({
+      blocked: rs.reduce(
+        (n, r) => n + (r.data?.tools.filter((t) => t.stance === 'block').length ?? 0),
+        0,
+      ),
+      pending: rs.some((r) => r.isPending && enabled),
+      failed: rs.some((r) => r.isError),
+    }),
+  })
+}
 
 const refreshAll = (qc: QueryClient) => qc.invalidateQueries({ queryKey: mcpKeys.all })
 

@@ -9,3 +9,11 @@ export const RAIL_HEIGHT = 20
 export const SESSIONS_DAYS = 7
 /** The proposed event log is read for the window, at most this many events (the server's own cap is a written ask). */
 export const EVENTS_READ = 200
+/** The hub's session sample: the newest rows of `session/list` from max(created, 7 days back) (eng "Hub sessions"). */
+export const SESSION_SAMPLE = 25
+/** At most this many of the agent's sessions are status-checked (detail + trace reads, limiter of 4; eng). */
+export const SESSION_CHECKS = 20
+/** Rows each Recent runs list shows. */
+export const RUNS_SHOWN = 6
+/** The Tools card reads tool rules for at most this many enabled connectors (one read each, M-5). */
+export const TOOL_CARD_CONNECTORS = 5

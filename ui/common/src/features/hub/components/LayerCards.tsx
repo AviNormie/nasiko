@@ -1,0 +1,219 @@
+/**
+ * The layers on this agent (plans/feat-agent-centric.md PR1c; design "Layer cards"): Routing, Tools, Optimization and
+ * Budget, one figure each and a link to the page that owns it. A fixed four-slot row that hides the slots this viewer
+ * can't read and reflows; a not-configured card says so and links to set it up.
+ *
+ * | Card | Owner / superuser | Others |
+ * | Routing | model and config (`RoutingCard`'s rule: routing reads are owner/superuser only) | hidden |
+ * | Tools | connectors and tools blocked by rule (configured, never observed blocks) | hidden (managers only) |
+ * | Optimization | Token optimization, the owner's history strategy, window tokens saved | Token optimization only |
+ * | Budget | % of this agent's monthly budget: a preview (R-L10 is proposed), mock mode only | hidden |
+ */
+import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
+import { Badge } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { relTime } from '@/features/agents/format'
+import type { AgentView } from '@/features/agents/normalize'
+import { useAgentBlockedTools, useAgentConnectors } from '@/features/mcp/api'
+import { strategyQuery } from '@/features/optimization/api'
+import { copy as optCopy } from '@/features/optimization/copy'
+import { useAgentRouting, useBudgets, useBudgetStatus } from '@/features/router/api'
+import { meQuery } from '@/lib/api/auth'
+import { isPreview } from '@/lib/env'
+import { fmtMoney, fmtTokens } from '@/lib/format'
+import { cn } from '@/lib/utils'
+import type { SavedTotal } from '../api'
+import { copy } from '../copy'
+import { TOOL_CARD_CONNECTORS } from '../tuning'
+
+const LINK = 'text-xs text-primary-text underline-offset-4 hover:underline'
+
+export function LayerCards({
+  agent,
+  saved,
+  optimizationExtra,
+}: {
+  agent: AgentView
+  /** This agent's tokens saved in the window (the hub's savings read); null when not reported. */
+  saved: SavedTotal | null | undefined
+  /** Rendered in the Optimization card: a harness owner's Token optimization switch (no Settings tab, eng D10). */
+  optimizationExtra?: ReactNode
+}) {
+  const me = useQuery(meQuery).data
+  const owner = !!me?.sub && me.sub === agent.ownerId
+  const reader = owner || !!me?.is_superuser
+  return (
+    <section aria-label={copy.cards.title} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {reader && !agent.isHarness ? <RoutingSlot id={agent.id} /> : null}
+      {agent.canManage ? <ToolsSlot id={agent.id} /> : null}
+      <OptimizationSlot agent={agent} owner={owner} saved={saved} extra={optimizationExtra} />
+      {reader && !agent.isHarness && isPreview('router') ? <BudgetSlot id={agent.id} /> : null}
+    </section>
+  )
+}
+
+function Slot({
+  title,
+  children,
+  badge,
+  wide,
+}: {
+  title: string
+  children: ReactNode
+  badge?: ReactNode
+  /** Two columns from `sm`: a card that carries a full control (a harness owner's switch). */
+  wide?: boolean
+}) {
+  return (
+    <Card className={cn('min-w-0 gap-1.5 p-3', wide && 'sm:col-span-2')}>
+      <h3 className="m-0 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        {title}
+        {badge}
+      </h3>
+      {children}
+    </Card>
+  )
+}
+
+const Figure = ({ children }: { children: ReactNode }) => (
+  <p className="m-0 truncate text-base font-semibold tabular-nums">{children}</p>
+)
+const Line = ({ children }: { children: ReactNode }) => (
+  <p className="m-0 text-xs text-muted-foreground">{children}</p>
+)
+
+function RoutingSlot({ id }: { id: string }) {
+  const routing = useAgentRouting(id, true)
+  // A failed or forbidden read hides the card, as RoutingCard does.
+  if (routing.isError) return null
+  const r = routing.data
+  const config = r?.llm_config ?? null
+  const model = r?.pinned_model ?? config?.model ?? null
+  return (
+    <Slot title={copy.cards.routing}>
+      {routing.isPending ? (
+        <Line>…</Line>
+      ) : config ? (
+        <>
+          <Figure>{model ?? '—'}</Figure>
+          <Line>
+            {config.name}
+            {r?.pinned_model ? ` · ${copy.cards.routingPinned}` : ''}
+          </Line>
+          <Link to="/router" className={LINK}>
+            {copy.cards.routingOpen}
+          </Link>
+        </>
+      ) : (
+        <>
+          <Line>{copy.cards.routingNone}</Line>
+          <Link to="/router" className={LINK}>
+            {copy.cards.routingSetUp}
+          </Link>
+        </>
+      )}
+    </Slot>
+  )
+}
+
+function ToolsSlot({ id }: { id: string }) {
+  const connectors = useAgentConnectors(id, true)
+  const enabled = (connectors.data ?? []).filter((c) => c.enabled)
+  const checked = enabled.slice(0, TOOL_CARD_CONNECTORS).map((c) => c.connector_id)
+  const blocked = useAgentBlockedTools(id, checked, checked.length > 0)
+  if (connectors.isError) return null
+  return (
+    <Slot title={copy.cards.tools}>
+      {connectors.isPending ? (
+        <Line>…</Line>
+      ) : enabled.length ? (
+        <>
+          <Figure>{copy.cards.toolsConnected(enabled.length)}</Figure>
+          {!blocked.pending && !blocked.failed ? (
+            <Line>{copy.cards.toolsBlocked(blocked.blocked, enabled.length > checked.length)}</Line>
+          ) : null}
+        </>
+      ) : (
+        <Line>{copy.cards.toolsNone}</Line>
+      )}
+      <Link to="/agents/$agentId" params={{ agentId: id }} search={{ tab: 'mcp' }} className={LINK}>
+        {copy.cards.toolsOpen}
+      </Link>
+    </Slot>
+  )
+}
+
+function OptimizationSlot({
+  agent,
+  owner,
+  saved,
+  extra,
+}: {
+  agent: AgentView
+  owner: boolean
+  saved: SavedTotal | null | undefined
+  extra?: ReactNode
+}) {
+  // The history strategy is the owner's own preference (it applies to their chats), so only the owner reads it.
+  const strategy = useQuery({ ...strategyQuery, enabled: owner })
+  return (
+    <Slot title={copy.cards.optimization} wide={!!extra}>
+      <Figure>{agent.compressEnabled ? copy.cards.compressOn : copy.cards.compressOff}</Figure>
+      {owner && strategy.data ? (
+        <Line>{copy.cards.historyBy(optCopy.strategies[strategy.data.strategy].name)}</Line>
+      ) : null}
+      {owner && saved ? (
+        <Line>
+          <span title={copy.lanes.savedTooltip}>
+            {copy.cards.savedIn(fmtTokens(saved.saved), saved.basis)}
+          </span>
+        </Line>
+      ) : null}
+      {extra}
+      <Link to="/optimization" className={LINK}>
+        {copy.cards.optimizationOpen}
+      </Link>
+    </Slot>
+  )
+}
+
+function BudgetSlot({ id }: { id: string }) {
+  const budgets = useBudgets(true)
+  const budget = budgets.data?.find((b) => b.agent_id === id)
+  const status = useBudgetStatus(!!budget)
+  const st = budget ? status.data?.data.find((s) => s.budget_id === budget.id) : undefined
+  if (budgets.isError || status.isError) return null
+  return (
+    <Slot
+      title={copy.cards.budget}
+      badge={
+        <Badge variant="outline" className="text-3xs">
+          {copy.rail.preview}
+        </Badge>
+      }
+    >
+      {budgets.isPending ? (
+        <Line>…</Line>
+      ) : budget && st ? (
+        <>
+          <Figure>{Math.round((st.used_usd / budget.limit_usd) * 100)}%</Figure>
+          <Line>{copy.cards.budgetUse(fmtMoney(st.used_usd), fmtMoney(budget.limit_usd))}</Line>
+          <Line>
+            {copy.cards.budgetUpdated(relTime(new Date(status.dataUpdatedAt).toISOString()))}
+          </Line>
+        </>
+      ) : budget ? (
+        <Line>…</Line>
+      ) : (
+        <>
+          <Line>{copy.cards.budgetNone}</Line>
+          <Link to="/router" hash="router-budgets" className={LINK}>
+            {copy.cards.budgetSetUp}
+          </Link>
+        </>
+      )}
+    </Slot>
+  )
+}
