@@ -13,7 +13,7 @@ import { RATED_STATUSES, type Rating } from '@/features/overview/health'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import type { Range } from '@/features/overview/search'
 import type { ResolvedWindow } from '@/features/tokenops/window'
-import { fmtMoney, fmtTokens } from '@/lib/format'
+import { fmtMoneyFloor, fmtTokens } from '@/lib/format'
 import { useBudgetStamp } from '../useBudgetStamp'
 import type { HomeBudgets, SourceStatus } from '../api'
 import { copy } from '../copy'
@@ -51,15 +51,17 @@ export interface RowsProps {
   budgets: HomeBudgets
   /** The owner's name, or null when the viewer can't name them. */
   ownerName: (id: string) => string | null
+  /** Calls in the window had no price: every spend sum is a floor (≥), as the strip says. */
+  unpriced: boolean
 }
 
-export function GroupLabel({ group }: { group: RowGroup }) {
+export function GroupLabel({ group, floor }: { group: RowGroup; floor: boolean }) {
   return (
     <span className="flex flex-wrap items-baseline gap-x-2">
       <span className="text-foreground">{group.label}</span>
       <span className="font-normal text-muted-foreground">
         {copy.groups.count(group.rows.length)}
-        {group.spend !== null ? ` · ${fmtMoney(group.spend)}` : ''}
+        {group.spend !== null ? ` · ${fmtMoneyFloor(group.spend, floor)}` : ''}
       </span>
     </span>
   )
@@ -179,7 +181,7 @@ export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void
                 of: (r) => groupOf.get(r.id)?.key ?? '',
                 header: (key) => {
                   const g = byKey.get(key)
-                  return g ? <GroupLabel group={g} /> : null
+                  return g ? <GroupLabel group={g} floor={p.unpriced} /> : null
                 },
                 collapsed,
                 onToggle: (key) =>
