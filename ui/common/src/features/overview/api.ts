@@ -8,6 +8,7 @@ import { useLiveIndividual } from '@/features/harnesses/liveIndividual'
 import { mostlyUnpriced } from '@/features/harnesses/rollup'
 import { sessionRows, useChatSessions } from '@/features/chat/api'
 import { useWaiting } from '@/features/chat/waiting'
+import { checkSessions } from '@/features/observability/sessions'
 import { STATUS_CHECK_ROWS } from '@/features/observability/tuning'
 import { tempoSafeStart, useFleetSessions, useSessionStatuses } from '@/features/sessions/api'
 import type { Me } from '@/lib/api/auth'
@@ -524,40 +525,31 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
                 ]
               }),
             }
-    const checking = sessions.newest.some((r) => sessions.status.get(r.session_id) === 'checking')
     const failedRows = sessions.newest.filter((r) => sessions.status.get(r.session_id) === 'failed')
-    // Every check came back unknown (e.g. no trace store: session details answer 503): nothing was actually checked,
-    // so the source failed; it must never count as "no failures" (design 5A, QA ISSUE-005).
-    const settled = sessions.newest.filter((r) =>
-      ['ok', 'failed'].includes(sessions.status.get(r.session_id) ?? ''),
-    ).length
-    // Most of the sample must be checked for "no failures" to count (user decision, /ship adversarial finding 7);
-    // failures actually found always show.
-    const noneChecked =
-      !checking &&
-      !failedRows.length &&
-      sessions.newest.length > 0 &&
-      settled * 2 < sessions.newest.length
+    // The rule the hub shares (observability/sessions.ts `checkSessions`): most of the sample must answer before "no
+    // failures" counts, and "N of M checked sessions failed" counts the sessions actually checked (user decisions).
+    const verdict = checkSessions({
+      listError: sessions.list.isError,
+      listPending: sessions.list.isPending,
+      verdicts: sessions.newest.map((r) => sessions.status.get(r.session_id)),
+    })
     const sessionState: NeedsInput['sessions'] =
-      sessions.list.isError || noneChecked
-        ? { state: 'failed' }
-        : sessions.list.isPending || checking
-          ? { state: 'loading' }
-          : {
-              state: 'ok',
-              value: {
-                failed: failedRows.length,
-                // "N of M checked sessions failed": the sessions actually checked (user decision, /ship adversarial).
-                checked: settled,
-                agents: [
-                  ...new Set(
-                    failedRows.map((r) =>
-                      r.agent_id ? fleet.displayName(r.agent_id) : copy.needs.unknownAgent,
-                    ),
+      verdict.state !== 'ok'
+        ? verdict
+        : {
+            state: 'ok',
+            value: {
+              failed: verdict.failed,
+              checked: verdict.checked,
+              agents: [
+                ...new Set(
+                  failedRows.map((r) =>
+                    r.agent_id ? fleet.displayName(r.agent_id) : copy.needs.unknownAgent,
                   ),
-                ],
-              },
-            }
+                ),
+              ],
+            },
+          }
     return { requests, agents, budgets: budgetRows, sessions: sessionState }
     // statusKey stands in for sessions.status (a new Map every render).
     // eslint-disable-next-line react-hooks/exhaustive-deps

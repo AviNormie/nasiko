@@ -6,12 +6,13 @@
 import { Link } from '@tanstack/react-router'
 import { Panel, PanelSkeleton } from '@/components/shared/panel'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { copy } from '../copy'
 import type { HubNeedsResult } from '../api'
 import type { NeedRow } from '../needs'
+import { RetryLine } from './RetryLine'
 
-const LINK = 'text-sm text-primary-text underline-offset-4 hover:underline'
+const LINK =
+  'inline-flex items-center text-sm text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11'
 
 export function NeedsPanel({ result, agentName }: { result: HubNeedsResult; agentName: string }) {
   const { needs, retry } = result
@@ -36,18 +37,21 @@ export function NeedsPanel({ result, agentName }: { result: HubNeedsResult; agen
             <p className="m-0 font-medium">{copy.needs.clear}</p>
           ) : null}
           {needs.failed.map((f) => (
-            <p key={f} className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-              {copy.needs.failed[f]}
-              <Button
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-xs pointer-coarse:min-h-11"
-                onClick={retry[f]}
-              >
-                {copy.states.retry}
-              </Button>
-            </p>
+            <RetryLine
+              key={f}
+              label={
+                f === 'status' && needs.statusIncomplete
+                  ? copy.needs.failed.statusIncomplete
+                  : copy.needs.failed[f]
+              }
+              onRetry={retry[f]}
+            />
           ))}
+          {needs.unproven ? (
+            <p className="m-0 text-xs text-muted-foreground">
+              {copy.needs.unproven(needs.unproven)}
+            </p>
+          ) : null}
           {parts.length ? (
             <p className="m-0 text-xs text-muted-foreground">{copy.needs.checked(parts)}</p>
           ) : null}
@@ -87,6 +91,9 @@ function Row({ row, agentName }: { row: NeedRow; agentName: string }) {
   return (
     <li className="flex flex-wrap items-center gap-2 py-2">
       <span>{copy.needs.sessions(row.failed, row.checked)}</span>
+      {row.ambiguous ? (
+        <span className="text-xs text-muted-foreground">{copy.needs.shared}</span>
+      ) : null}
       <Link
         to="/sessions"
         search={{ agent: agentName, status: 'failed', preset: '7d' }}

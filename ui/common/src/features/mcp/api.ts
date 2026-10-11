@@ -211,16 +211,21 @@ export const useAgentConnectors = (agentId: string, enabled: boolean) =>
 // One read per connector until a batch read exists (M-5); this tab's own limiter.
 const toolsLimiter = createLimiter(TOOL_READ_CONCURRENCY)
 
+/** One connector's tools for an agent: the MCP tab's and the hub's Tools card's read (same key, limiter and parse). */
+const agentToolsQuery = (agentId: string, connectorId: string) => ({
+  queryKey: mcpKeys.agentTools(agentId, connectorId),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    toolsLimiter(signal, () =>
+      apiData<AgentTools>(`${A(agentId)}/connectors/${enc(connectorId)}/tools`, {
+        signal,
+        schema: agentToolsSchema,
+      }),
+    ),
+})
+
 export const useAgentTools = (agentId: string, connectorId: string, enabled: boolean) =>
   useQuery({
-    queryKey: mcpKeys.agentTools(agentId, connectorId),
-    queryFn: ({ signal }) =>
-      toolsLimiter(signal, () =>
-        apiData<AgentTools>(`${A(agentId)}/connectors/${enc(connectorId)}/tools`, {
-          signal,
-          schema: agentToolsSchema,
-        }),
-      ),
+    ...agentToolsQuery(agentId, connectorId),
     enabled,
     select: (r) => r.tools,
   })
@@ -236,14 +241,7 @@ export function useAgentBlockedTools(
 ) {
   return useQueries({
     queries: connectorIds.map((cid) => ({
-      queryKey: mcpKeys.agentTools(agentId, cid),
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        toolsLimiter(signal, () =>
-          apiData<AgentTools>(`${A(agentId)}/connectors/${enc(cid)}/tools`, {
-            signal,
-            schema: agentToolsSchema,
-          }),
-        ),
+      ...agentToolsQuery(agentId, cid),
       enabled,
     })),
     combine: (rs) => ({

@@ -1,8 +1,9 @@
 /**
- * The agent hub's timeline (plans/feat-agent-centric.md PR1a): the sentence, TokenOps' window bar with Compare and a
- * Table view, the marker rail over the lanes (spend, requests, p95, and tokens saved where a per-agent series exists),
- * and the selected bucket's panel. Section order and states follow the design amendments; data rules live in
- * `api.ts` (the gate), `events.ts` (markers) and `timeline.ts` (buckets), all pure except the gate.
+ * The agent hub (plans/feat-agent-centric.md PR1a, PR1c), in the design's section order: Needs you, the sentence,
+ * TokenOps' window bar with Compare and a Table view, the marker rail over the lanes (spend, requests, p95, and tokens
+ * saved where a per-agent series exists), the selected bucket's panel, recent sessions and flows, then the layer cards.
+ * Data rules live in `api.ts` (the gate, `useHubNeeds`, `useHubSessions`, `useHubFlows`), `events.ts` (markers),
+ * `timeline.ts` (buckets), `needs.ts` and `sessions.ts`, all pure except `api.ts`.
  *
  * URL (DX): `preset`/`from`/`to` (a window change clears `slice` in the same replace), `compare` (replace), `slice`
  * (pushed), `marker` (replaced away when it can't be shown).
@@ -66,6 +67,7 @@ import { BucketPanel } from './BucketPanel'
 import { LayerCards } from './LayerCards'
 import { NeedsPanel } from './NeedsPanel'
 import { RecentRuns } from './RecentRuns'
+import { RetryLine } from './RetryLine'
 import { HubTable } from './HubTable'
 import { MarkerRail } from './MarkerRail'
 
@@ -124,10 +126,12 @@ function Timeline({
 
   const me = useQuery(meQuery).data
   const mine = me?.sub === agent.ownerId
-  // PR1c: Needs you, this agent's sessions (the bounded sample) and the flows it started.
-  const needs = useHubNeeds(agent, me ?? { sub: '', is_superuser: false }, now)
-  const flows = useHubFlows(agent.id, win)
   const gate = useHubGate(agent.id, win)
+  // PR1c: Needs you, this agent's sessions (the bounded sample) and the flows it started.
+  // Needs you is always the last 7 days: its own clock, moved only on return, never by the timeline's window.
+  const needsNow = useFrozenNow(tick)
+  const needs = useHubNeeds(agent, me, gate.state.kind, needsNow)
+  const flows = useHubFlows(agent.id, win)
   const ok = gate.state.kind === 'ok'
   const ts = useHubTimeseries(agent.id, win, 'current', gate.canFetch)
   const prev = useHubTimeseries(
@@ -280,17 +284,7 @@ function Timeline({
         ) : null}
       </GateBody>
       {compare && prev.isError ? (
-        <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-          {copy.states.previousError}
-          <Button
-            variant="link"
-            size="sm"
-            className="h-auto p-0 text-xs pointer-coarse:min-h-11"
-            onClick={() => void prev.refetch()}
-          >
-            {copy.states.retry}
-          </Button>
-        </p>
+        <RetryLine label={copy.states.previousError} onRetry={() => void prev.refetch()} />
       ) : null}
       {truncated ? (
         <p className="m-0 text-xs text-muted-foreground">{copy.lanes.truncated(dayRows.length)}</p>
@@ -611,17 +605,10 @@ function RailLine({
   if (markers.kind === 'pending') return null
   if (markers.kind === 'failed')
     return (
-      <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-        {markers.which === 'deploys' ? copy.rail.deploysFailed : copy.rail.changesFailed}
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0 text-xs pointer-coarse:min-h-11"
-          onClick={markers.retry}
-        >
-          {copy.states.retry}
-        </Button>
-      </p>
+      <RetryLine
+        label={markers.which === 'deploys' ? copy.rail.deploysFailed : copy.rail.changesFailed}
+        onRetry={markers.retry}
+      />
     )
   const lines: string[] = []
   if (harness && empty && !markers.preview) lines.push(copy.rail.harness)
@@ -675,20 +662,7 @@ function SavingsLine({
   onRetry: () => void
 }) {
   if (savings.isPending) return null
-  if (savings.isError)
-    return (
-      <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground">
-        {copy.states.savingsError}
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0 text-xs pointer-coarse:min-h-11"
-          onClick={onRetry}
-        >
-          {copy.states.retry}
-        </Button>
-      </p>
-    )
+  if (savings.isError) return <RetryLine label={copy.states.savingsError} onRetry={onRetry} />
   // With a savings lane the total sits in its header; live mode states the window total and the missing series.
   if (series || total === undefined) return null
   const s = total
