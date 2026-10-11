@@ -161,7 +161,7 @@ export const copy = {
       beta: 'These are new and still being tuned, so try them on one agent first. You can turn any of them off at any time.',
     },
     overview: 'Open the Overview',
-    overviewLine: 'Spend, sessions and agent health',
+    overviewLine: 'Your agents, their spend and health, and what needs you',
     open: (page: string) => `Open ${page}`,
     openLine: 'Your suggested first screen',
   },

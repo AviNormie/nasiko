@@ -13,6 +13,7 @@ import {
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { readRailView } from '@/features/chat/rememberTarget'
 import type { NeedsYou as NeedsYouData } from './api'
 import { NeedsYou } from './components/NeedsYou'
 import { copy } from './copy'
@@ -32,6 +33,7 @@ const needsData = (input: NeedsInput, retry = retries()): NeedsYouData => ({
   lastChecked: 0,
   retry,
   sessions: {} as NeedsYouData['sessions'],
+  waiting: {} as NeedsYouData['waiting'],
 })
 
 describe('Needs you rows', () => {
@@ -150,5 +152,41 @@ describe('shadcn conversion review (2026-09-29)', () => {
     )
     expect(await screen.findByText(copy.couldntLoad(copy.needs.what))).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+// Moved from the retired Overview page tests (plans/feat-agent-centric.md PR2a; /review of PR2a: testing).
+describe('Needs you on its own', () => {
+  it('the outside-Chat row opens Chat on the Waiting view', async () => {
+    renderInRouter(
+      <NeedsYou
+        userId="u1"
+        now={0}
+        data={needsData({
+          requests: { state: 'ok', value: { chats: [], outside: 2 } },
+          agents: { state: 'ok', value: [] },
+          budgets: { state: 'absent' },
+          sessions: { state: 'ok', value: { failed: 0, checked: 25, agents: [] } },
+        })}
+      />,
+    )
+    await userEvent.click(await screen.findByRole('link', { name: copy.needs.openWaiting }))
+    expect(readRailView('u1')).toBe('waiting')
+  })
+
+  it('on OSS (budgets absent) shows one card error when every available source failed', async () => {
+    renderInRouter(
+      <NeedsYou
+        userId="u1"
+        now={0}
+        data={needsData({
+          requests: { state: 'failed' },
+          agents: { state: 'failed' },
+          budgets: { state: 'absent' },
+          sessions: { state: 'failed' },
+        })}
+      />,
+    )
+    expect(await screen.findByText(copy.couldntLoad(copy.needs.what))).toBeInTheDocument()
   })
 })

@@ -32,7 +32,7 @@ import {
   type UsageWindow,
 } from './health'
 
-/** Agents the ratings cover: every visible agent except coding harnesses (rated on the Harnesses card). */
+/** Agents the ratings cover: every visible agent except coding harnesses (never rated). */
 const RATED = new Set<string>(RATED_STATUSES)
 
 const usage = (rows: readonly AgentFinopsRow[] | undefined) => {
@@ -92,7 +92,8 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
   const prev = useDashboard(win7, {}, 'agent', 'previous', on)
   const d30 = useDashboard(win30, {}, 'agent', 'current', on)
   const ts = useTimeseries(win30, {}, on && fleetSeries)
-  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines when it lands.
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines (and the
+  // `isEndpointAbsent` import from @/lib/api/detect) when it lands.
   // const budgets = useBudgets(on)
   // const budgetsAbsent = isEndpointAbsent(budgets.error)
   const budgets = useBudgets(false)
@@ -130,7 +131,9 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
       (d30.data?.agents ?? []).map((r) => [r.agent_id, r.avg_cost_per_operation ?? null]),
     )
     const days =
-      ts.data?.bucket === 'day'
+      // Gate the data, not just the fetch: a disabled query still hands out a cached fleet series (TokenOps fills the same
+      // key), which a member must never be rated on (review: security, Codex P1).
+      fleetSeries && ts.data?.bucket === 'day'
         ? zeroFillTimeline(ts.data.points, 'day', win30.start, win30.end).map((p) => ({
             date: p.iso.slice(0, 10),
             spend: p.spend,
@@ -178,6 +181,7 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     prev.isError,
     d30.data,
     ts.data,
+    fleetSeries,
     win30,
     budgets.data,
     budgetStatus.data,
@@ -214,7 +218,9 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     p95,
     retry: () => void dir.refetch(),
     retryCost: () => {
-      for (const q of [cur, prev, d30, ts, budgets, budgetStatus]) if (q.isError) void q.refetch()
+      // Never the fleet series for a member: Retry must not send the request the gate withholds.
+      for (const q of [cur, prev, d30, ...(fleetSeries ? [ts] : []), budgets, budgetStatus])
+        if (q.isError) void q.refetch()
     },
   }
 }
@@ -232,8 +238,10 @@ export interface NeedsYou {
   /** The oldest answer among the sources that answered (design review 8A's "Checked …"), or 0. */
   lastChecked: number
   retry: Record<SourceId, () => void>
-  /** The newest sessions of the last 7 days and their checked status, shared with Recent sessions (eng review R7). */
+  /** The newest sessions of the last 7 days and their checked status (eng review R7); the home counts failures per agent. */
   sessions: ReturnType<typeof useRecentSessions>
+  /** The pending-requests match this card used, so the home counts requests per agent without a second matcher. */
+  waiting: ReturnType<typeof useWaiting>
 }
 
 /** The newest STATUS_CHECK_ROWS sessions of the last 7 days, status-checked with the Sessions page's keys (eng review R7). */
@@ -251,7 +259,8 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   const chats = useChatSessions()
   // The fleet's directory, not a second observer: one enabled late would refetch a failed list and flicker it pending.
   const dir = { byId: fleet.byId }
-  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines when it lands.
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines (and the
+  // `isEndpointAbsent` import from @/lib/api/detect) when it lands.
   // const budgets = useBudgets(enabled)
   // const budgetsAbsent = isEndpointAbsent(budgets.error)
   const budgets = useBudgets(false)
@@ -396,6 +405,7 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   ].filter((t) => t > 0)
   return {
     needs,
+    waiting,
     lastChecked: stamps.length ? Math.min(...stamps) : 0,
     retry: {
       requests: waiting.retry,

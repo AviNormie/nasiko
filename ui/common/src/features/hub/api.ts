@@ -26,7 +26,7 @@ import {
   useChatSessions,
   usePendingRequests,
 } from '@/features/chat/api'
-import { useWaiting } from '@/features/chat/waiting'
+import { pendingRequestRows, useWaiting } from '@/features/chat/waiting'
 import { useFlowsList } from '@/features/flows/api'
 import type { ChatSessionRow, CursorPage } from '@/features/chat/types'
 import type { SessionListResponse } from '@/features/observability/types'
@@ -509,23 +509,13 @@ export function useHubNeeds(
   const checkedRows = (sessions.data?.rows ?? []).slice(0, SESSION_CHECKS)
   const statuses = useSessionStatuses(checkedRows, now.getTime(), false)
 
-  const mineReq = (agentId: string | null | undefined) => agentId === agent.id
-  // A superuser sees every user's requests with no owner: only those a chat proves theirs count (chat's Waiting rule).
-  const provable = waiting.match.chats.flatMap((c) =>
-    c.requests
-      .filter((r) => mineReq(r.execution.agent_id))
-      .map((r) => ({ chat: c.sessionId, id: r.id })),
+  // This agent's pending requests; a superuser's count only once a chat proves them theirs (chat's Waiting rule), and
+  // only this agent's unprovable ones hold the verdict back: another agent's say nothing about this one (ISSUE-007).
+  const forAgent = pendingRequestRows(superuser, waiting.match, pending.data?.items).filter(
+    (r) => r.agentId === agent.id,
   )
-  const forAgent = (pending.data?.items ?? []).filter(
-    (r) => r.status === 'pending' && mineReq(r.execution.agent_id),
-  )
-  const all = superuser
-    ? provable
-    : forAgent.map((r) => ({ chat: provable.find((p) => p.id === r.id)?.chat ?? null, id: r.id }))
-  // Only this agent's unprovable requests hold the verdict back: another agent's say nothing about this one (QA).
-  const unproven = superuser
-    ? forAgent.filter((r) => !provable.some((p) => p.id === r.id)).length
-    : 0
+  const all = forAgent.filter((r) => r.proven)
+  const unproven = forAgent.filter((r) => !r.proven).length
   // Matching needs the chat list (it proves a superuser's requests): pending or failed, the source can't answer yet.
   const requests: HubNeedsInput['requests'] =
     waiting.failedCold || waiting.stale || (superuser && chats.isError)

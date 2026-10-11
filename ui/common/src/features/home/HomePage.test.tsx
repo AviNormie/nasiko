@@ -5,7 +5,7 @@
  */
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { configureMocks } from '@/mocks/handlers'
@@ -121,7 +121,7 @@ describe('rows and totals', () => {
       (within(row).getAllByRole('cell').at(2)?.textContent ?? '').match(/[\d,]+\.\d+/)?.[0] ?? '0'
     const rows = () => within(t).getAllByRole('row').slice(1)
     // The crashed agent needs action and leads.
-    await waitFor(() => expect(rows()[0]).toHaveTextContent(copy.rating.action))
+    await waitFor(() => expect(rows()[0]).toHaveTextContent(overviewCopy.rating.action))
     await userEvent.click(within(t).getByRole('button', { name: /Spend 30d/ }))
     const money = rows().map((r) => Number(spendCol(r).replace(/,/g, '')))
     const asc = [...money].sort((a, b) => a - b)
@@ -138,7 +138,7 @@ describe('rows and totals', () => {
       .slice(1)
       .map((r) => usd(within(r).getAllByRole('cell').at(2)?.textContent))
       .reduce((a, b) => a + b, 0)
-    const shown = usd(within(strip).getByText(/^\$/).textContent)
+    const shown = usd(within(strip).getByText(/^(≥ )?\$/).textContent)
     expect(Math.abs(shown - sum)).toBeLessThan(
       0.02 * Math.max(1, within(t).getAllByRole('row').length),
     )
@@ -204,5 +204,91 @@ describe('kept from the Overview', () => {
     const needs = await screen.findByTestId('overview-needs')
     const t = await table()
     expect(needs.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('money states (review)', () => {
+  const spendTile = async () =>
+    within(await screen.findByRole('region', { name: copy.strip.label }))
+      .getByText(copy.strip.spend)
+      .closest('[data-slot="card"]') as HTMLElement
+
+  it('a window change shows "—" until the new window answers, never the old figures under the new label', async () => {
+    renderApp('/?scope=yours')
+    await table()
+    await waitFor(async () => expect(await spendTile()).toHaveTextContent('$'))
+    server.use(
+      http.get('*/api/observability/finops/dashboard', async ({ request }) => {
+        // 90d is an explicit window nothing else reads (7d and 30d are warm from the ratings' own reads).
+        if (!new URL(request.url).searchParams.get('start_time')) return undefined
+        await delay('infinite')
+        return HttpResponse.json({})
+      }),
+    )
+    await userEvent.click(screen.getByRole('radio', { name: overviewCopy.range.item(90) }))
+    await waitFor(async () => expect(await spendTile()).toHaveTextContent('—'))
+    expect(screen.getByRole('columnheader', { name: /Spend 90d/ })).toBeInTheDocument()
+  })
+
+  it('a failed spend read says so, shows "—", and Retry brings the figures back', async () => {
+    let fail = true
+    server.use(
+      http.get('*/api/observability/finops/dashboard', ({ request }) =>
+        fail && new URL(request.url).searchParams.get('range') === '30d'
+          ? new HttpResponse('boom', { status: 500 })
+          : undefined,
+      ),
+    )
+    renderApp('/?scope=yours')
+    const line = await screen.findByText(copy.moneyFailed, {}, { timeout: 15_000 })
+    expect(await spendTile()).toHaveTextContent('—')
+    fail = false
+    await userEvent.click(within(line).getByRole('button', { name: copy.retry }))
+    await waitFor(async () => expect(await spendTile()).toHaveTextContent('$'))
+  })
+
+  it('unpriced calls make spend a floor, and harness rows carry "est."', async () => {
+    renderApp('/?scope=yours')
+    const t = await table()
+    await waitFor(async () => expect(await spendTile()).toHaveTextContent('$'))
+    const tile = await spendTile()
+    expect(within(tile).getByText(copy.strip.unpriced)).toBeInTheDocument()
+    expect(tile).toHaveTextContent('≥ $')
+    const harnessRow = within(t)
+      .getAllByRole('row')
+      .find((r) => within(r).queryByText(copy.table.harness))!
+    const agentRow = within(t)
+      .getAllByRole('row')
+      .slice(1)
+      .find((r) => !within(r).queryByText(copy.table.harness))!
+    const spendCell = (r: HTMLElement) => within(r).getAllByRole('cell')[2]!
+    expect(spendCell(harnessRow)).toHaveTextContent(copy.table.estimate)
+    expect(spendCell(agentRow)).not.toHaveTextContent(copy.table.estimate)
+  })
+
+  it('a superuser’s ratings do read the fleet series (the members test’s control)', async () => {
+    const rec = recordRequests()
+    renderApp('/?scope=yours')
+    await table()
+    await waitFor(() =>
+      expect(
+        rec.urls.some(
+          (u) => u.pathname.endsWith('/finops/spend-timeseries') && !u.searchParams.get('agent_id'),
+        ),
+      ).toBe(true),
+    )
+    rec.stop()
+  })
+
+  it('a header click sorts that column, most first', async () => {
+    renderApp('/?scope=yours')
+    const t = await table()
+    await waitFor(async () => expect(await spendTile()).toHaveTextContent('$'))
+    await userEvent.click(within(t).getByRole('button', { name: /Spend 30d/ }))
+    const money = within(t)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => usd(within(r).getAllByRole('cell')[2]?.textContent))
+    expect(money).toEqual([...money].sort((a, b) => b - a))
   })
 })

@@ -63,6 +63,7 @@ export type DataTableColumn<T extends RowData> = ColumnDef<Features, T, unknown>
 
 /** Rows past this render through the virtualizer. */
 const VIRTUAL_AFTER = 100
+/** The first estimate per row; each rendered row is then measured (`measureElement`). */
 const ROW_HEIGHT = 37
 
 export interface DataTableProps<T extends RowData> {
@@ -207,7 +208,15 @@ export function DataTable<T extends RowData>({
           {visible.map(([row, pos]) => {
             const extra = rowProps?.(row.original)
             return (
-              <TableRow key={row.id} aria-rowindex={virtual ? pos + 2 : undefined} {...extra}>
+              <TableRow
+                key={row.id}
+                aria-rowindex={virtual ? pos + 2 : undefined}
+                // Measured, not assumed: rows taller than ROW_HEIGHT (two-line cells) would drift the window. A caller's
+                // own row ref keeps the estimate.
+                data-index={virtual ? pos : undefined}
+                ref={virtual && !extra?.ref ? virtualizer.measureElement : undefined}
+                {...extra}
+              >
                 {row.getAllCells().map((cell) => {
                   const meta = cell.column.columnDef.meta
                   const className = cn(

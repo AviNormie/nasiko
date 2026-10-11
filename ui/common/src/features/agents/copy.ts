@@ -24,7 +24,7 @@ export const copy = {
   noResults: 'No agents match this search',
   noResultsHint: 'Try another name, tag or skill, or clear the search and filters.',
   clearSearch: 'Clear search',
-  /** The Overview's Fleet health filter (overview design 15A). */
+  /** The health filter: the home's rating badges link here (overview design 15A; plans/feat-agent-centric.md PR2a). */
   healthChip: (rating: string) => `Health: ${rating}`,
   clearHealth: (rating: string) => `Remove the Health: ${rating} filter`,
   healthReason: (reason: string) => `Why: ${reason}`,
