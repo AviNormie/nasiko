@@ -28,7 +28,7 @@ import { hubNarrative } from '@/features/narrative/agentHub'
 import { meQuery } from '@/lib/api/auth'
 import { resolveWindow } from '@/features/tokenops/window'
 import { seriesAt } from '@/lib/chart'
-import { fmtInt, fmtLatency, fmtMoneyFloor, fmtTokens } from '@/lib/format'
+import { fmtInt, fmtLatency, fmtMoneyFloor, fmtShortDay, fmtTokens } from '@/lib/format'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import { useSetSearch } from '@/lib/search'
@@ -300,7 +300,8 @@ function Timeline({ agent, ownerLabel }: { agent: AgentView; ownerLabel: string 
           }
           height={LANE_HEIGHT}
           hatched={(r) => r.before}
-          axisLabel={(r) => r.label}
+          // A week's "Sep 7 – Sep 13" can't fit a phone's column: the axis shows its first day (QA ISSUE-005).
+          axisLabel={(r) => (r.size === 'week' ? fmtShortDay(new Date(r.start)) : r.label)}
           bucketName={(r) =>
             figures
               ? copy.bucketButton(
