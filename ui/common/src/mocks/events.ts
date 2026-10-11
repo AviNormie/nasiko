@@ -84,6 +84,7 @@ const STOPPED_INDEX = 0
 
 function eventsFor(agent: MockAgent, index: number, now: number): AgentEvent[] {
   const harness = !!agent.harness
+  const created = Date.parse(agent.created_at)
   const out: AgentEvent[] = []
   TEMPLATES.forEach((t, k) => {
     if (harness && !t.harness) return
@@ -91,7 +92,8 @@ function eventsFor(agent: MockAgent, index: number, now: number): AgentEvent[] {
     const back = t.days + (index % 3)
     const dayStart = Math.floor((now - back * DAY) / DAY) * DAY
     const at = dayStart + ((t.hour + index) % 24) * HOUR
-    if (at > now) return
+    // Nothing is recorded before the agent existed or after now (QA ISSUE-002).
+    if (at > now || at < created) return
     out.push({
       id: eventId(index * 100 + k),
       kind: t.kind,
@@ -104,7 +106,7 @@ function eventsFor(agent: MockAgent, index: number, now: number): AgentEvent[] {
   })
   if (!harness && index === STOPPED_INDEX) {
     const at = Math.floor((now - DAY) / DAY) * DAY + 21 * HOUR
-    if (at <= now)
+    if (at <= now && at >= created)
       out.push({
         id: eventId(index * 100 + 99),
         kind: 'budget_stop',
