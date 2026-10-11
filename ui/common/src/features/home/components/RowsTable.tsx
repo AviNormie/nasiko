@@ -79,7 +79,8 @@ export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void
       header: copy.table.name,
       // A value makes the column sortable (TanStack); the order itself comes from `sortRows`.
       accessorFn: (r) => r.displayName,
-      meta: { rowHeader: true },
+      // Long names (a harness's "Codex (someone@example.com)") wrap, so Last change still fits a 1440 px page.
+      meta: { rowHeader: true, cellClassName: 'min-w-40 max-w-60 whitespace-normal' },
       cell: ({ row }) => (
         <span className="flex min-w-0 flex-col">
           <span className="flex flex-wrap items-center gap-2">
@@ -202,13 +203,11 @@ export function RowsTable(p: RowsProps & { sort: Sort; onSort: (s: Sort) => void
 function BudgetHeader({ budgets }: { budgets: HomeBudgets }) {
   const updated = useBudgetStamp(budgets.updatedAt)
   return (
-    <span className="flex flex-col gap-0.5 py-1">
-      <span className="flex items-center gap-1.5">
-        {copy.table.budget}
-        <Badge aria-hidden variant="outline" className="text-3xs">
-          {copy.budget.preview}
-        </Badge>
-      </span>
+    <span className="flex flex-col items-start gap-0.5 py-1">
+      {copy.table.budget}
+      <Badge aria-hidden variant="outline" className="text-3xs">
+        {copy.budget.preview}
+      </Badge>
       {updated ? (
         <span aria-hidden className="font-normal">
           {updated}
