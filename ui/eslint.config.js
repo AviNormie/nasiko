@@ -44,12 +44,17 @@ const PUBLIC = {
     'GithubTab',
     'RegistryTab',
     'search',
+    // The agent hub's deploy markers (plans/feat-agent-centric.md eng): the agent's builds read and its record type.
+    'api',
+    'types',
   ],
   // Flows (plans/feat-flows.md): the call model and its duration format (the flow narrative), and "Open flow" (F19).
   flows: ['calls', 'precision', 'components/OpenFlowLink', 'paused'],
   harnesses: ['types', 'rollup', 'copy', 'api', 'constants', 'liveIndividual'],
+  // The agent hub (plans/feat-agent-centric.md PR1a): the agent detail's Overview hosts its timeline.
+  hub: ['components/HubTimeline', 'events'],
   mcp: ['components/AgentMcpTab'],
-  narrative: ['tokenops', 'trace', 'harness', 'overview', 'flows'],
+  narrative: ['tokenops', 'trace', 'harness', 'overview', 'flows', 'agentHub'],
   onboarding: ['api', 'GuideCard', 'GuideHost', 'index', 'logic', 'types'],
   // Context optimization (plans/feat-context-optimization.md eng D1): its rules, copy, the trace's Optimization block
   // (M2) and the /optimization Workspace row (T7). TokenOps' own savings panel is main's (PR #28, /finops/savings).

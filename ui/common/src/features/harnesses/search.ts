@@ -47,6 +47,13 @@ export const HARNESS_MOCK_VARIANTS = [
   'optimization-down',
   'flows-empty',
   'flows-absent',
+  'hub-not-visible',
+  'hub-gate-error',
+  'hub-deleted',
+  'hub-markers-fail',
+  'hub-no-savings-row',
+  'hub-many-builds',
+  'events-absent',
   // Chat page variants (v1c DX1); harmless here, listed so the lists stay equal.
   'no-agents',
   'many-chats',

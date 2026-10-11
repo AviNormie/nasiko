@@ -119,6 +119,7 @@ import { buildMcpState, mcpHandlers, type McpState } from './mcp'
 import { optimizationHandlers, resetOptimizationMock } from './optimization'
 import { buildWorkflowsState, workflowHandlers, type WorkflowsState } from './workflows'
 import { buildFlowsState, flowHandlers, type FlowsState } from './flows'
+import { eventHandlers } from './events'
 import { checkZip, MAX_ZIP_BYTES } from '@/features/deploy/zipcheck'
 import { nameProblem } from '@/features/deploy/name'
 import { parseVersion } from '@/features/deploy/version'
@@ -251,6 +252,16 @@ export const MOCK_VARIANTS = [
   // Flows (plans/feat-flows.md §2a): no flows yet (first run), or a server without /api/flows (bare 404).
   'flows-empty',
   'flows-absent',
+  // Agent hub (plans/feat-agent-centric.md DX mocks): the gate's dashboard read for one agent answers 404 "agent not
+  // found" (not visible), 500, or 400 (unknown or deleted); every marker read fails; this agent has no savings row;
+  // an agent with more builds in the window than the read returns; a server without the proposed event log.
+  'hub-not-visible',
+  'hub-gate-error',
+  'hub-deleted',
+  'hub-markers-fail',
+  'hub-no-savings-row',
+  'hub-many-builds',
+  'events-absent',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
 ] as const
@@ -649,6 +660,15 @@ function sseStream(lines: string[], closeMessage: string): ReadableStream<Uint8A
 }
 
 export const handlerGroups: Record<Mockable, HttpHandler[]> = {
+  // The proposed agent event log (mocks/events.ts), before the agents routes it sits under.
+  events: eventHandlers({
+    loggedIn: () => loggedIn,
+    now: () => nowFn(),
+    agents: () => getAgents().agents,
+    hasVariant: (v) => hasVariant(v),
+    unauthorized: () => unauthorized(),
+    text: (body, status) => text(body, status),
+  }),
   // Flows (plans/feat-flows.md): before observability and chat, which answer the trace and flow ids it doesn't own.
   flows: flowHandlers({
     loggedIn: () => loggedIn,
@@ -1210,6 +1230,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       // `my_agent=true` (Harnesses live fallback, handler.rs:497) answers from the harness seed for
       // the viewer's own agents; TokenOps never sends it, so its numbers are untouched.
       if (p.my_agent === 'true') return respond(() => myAgentDashboard(p))
+      // The agent hub's gate (one agent's dashboard): handler.rs answers an inaccessible agent 404 "agent not found",
+      // an unknown or deleted one 400 (resolve_agent_filter).
+      if (p.agent_id && loggedIn) {
+        const v = variant()
+        if (v === 'hub-not-visible') return text('agent not found', 404)
+        if (v === 'hub-gate-error') return text('internal error', 500)
+        if (v === 'hub-deleted') return text(`unknown agent '${p.agent_id}'`, 400)
+      }
       return respond(() => dashboard(getFinopsSeed(), p, nowFn()))
     }),
   ],
@@ -1273,7 +1301,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     ),
   ],
   savings: [
-    http.get(`${FINOPS}/savings`, () =>
+    http.get(`${FINOPS}/savings`, ({ request }) =>
       respond(() => {
         // savings.rs `coverage`: counted over every live agent (no ACL), from the agents mock, so the Optimization
         // page's Mechanisms counts follow the same switches as its other blocks. The rest is the fixed sample.
@@ -1285,6 +1313,10 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
         const minimal = (a: (typeof live)[number]) => a.minimal_code_enabled === true
         return {
           ...s,
+          by_agent: savingsByAgent(
+            [...s.by_agent, ...seedSavingsRows(params(request))],
+            params(request),
+          ),
           coverage: {
             ...s.coverage,
             agents_total: live.length,
@@ -2274,7 +2306,10 @@ function deployHandlers(): HttpHandler[] {
     http.get('/api/builds/agent/:agentId', ({ params: p }) => {
       if (!loggedIn) return unauthorized()
       if (variant() === 'deploy-no-rights') return noRights()
+      if (variant() === 'hub-markers-fail') return text('internal error', 500)
       const now = nowFn()
+      if (variant() === 'hub-many-builds')
+        return HttpResponse.json(manyBuilds(String(p.agentId), now))
       // list_builds: the agent's owner or a superuser, whether or not it has builds.
       const agent = getAgents().agents.find((a) => a.id === String(p.agentId))
       if (!superuser() && agent && agent.owner_id !== ADMIN_ID) return noRights()
@@ -2421,4 +2456,80 @@ export const mockCtx = {
   envelope,
   unauthorized,
   usageResponse,
+}
+
+/**
+ * The agent hub's savings rows (plans/feat-agent-centric.md PR1 lanes): `/finops/savings` `by_agent` gains a row per seed
+ * agent that saved tokens in the window, from the same context-savings reports the Optimization page reads, so the hub's
+ * "Tokens saved" total has a row to find. `?mock=hub-no-savings-row` leaves them out ("not reported").
+ */
+function seedSavingsRows(p: Record<string, string | null>) {
+  if (p.scope !== 'agent' || variant() === 'hub-no-savings-row') return []
+  const agents = getAgents().agents
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  const rows = contextSavingsAgents(
+    getFinopsSeed(),
+    { ...p, agent_id: null },
+    {
+      now: nowFn(),
+      compressOf: (id) => byId.get(id)?.compress ?? false,
+      compressedOf: (id) => byId.get(id)?.compressSeeded ?? false,
+      nameOf: (id, raw) => byId.get(id)?.display_name ?? raw,
+    },
+  )
+  return rows
+    .filter((r) => r.pool_tokens > r.sent_tokens)
+    .map((r) => {
+      const saved = r.pool_tokens - r.sent_tokens
+      return {
+        saved_tokens: saved,
+        saved_input_tokens: saved,
+        saved_output_tokens: 0,
+        saved_cost_usd: 0,
+        actual_tokens: r.sent_tokens,
+        actual_cost_usd: 0,
+        baseline_tokens: r.pool_tokens,
+        baseline_cost_usd: 0,
+        token_reduction_pct: Math.round((saved / r.pool_tokens) * 1000) / 10,
+        cost_reduction_pct: null,
+        basis: 'measured' as const,
+        agent_id: r.agent_id,
+        agent_name: r.name,
+        calls: r.reports,
+        input_tokens_before: r.pool_tokens,
+        input_tokens_after: r.sent_tokens,
+      }
+    })
+}
+
+/**
+ * handler.rs `get_finops_savings` (b2a966332): `agent_id` narrows the rows to that agent, and `by_agent` is capped at
+ * `limit` (default `SAVINGS_DEFAULT_LIMIT` = 25), so an agent outside the top 25 is only found with the filter.
+ */
+function savingsByAgent<T extends { agent_id: string }>(
+  rows: T[],
+  p: Record<string, string | null>,
+): T[] {
+  const filtered = p.agent_id ? rows.filter((r) => r.agent_id === p.agent_id) : rows
+  return filtered.slice(0, Math.max(1, Number(p.limit) || 25))
+}
+
+/** `?mock=hub-many-builds`: the newest 20 of 25 successful builds over the last 10 days (the read's cap, D-6). */
+function manyBuilds(agentId: string, now: number) {
+  const DAY_MS = 86_400_000
+  return Array.from({ length: 20 }, (_, i) => {
+    const at = now - Math.round(((i + 1) * 10 * DAY_MS) / 25)
+    return {
+      id: `5eed000b-0000-4000-9000-${String(900 + i).padStart(12, '0')}`,
+      agent_id: agentId,
+      github_url: null,
+      commit_hash: null,
+      version_tag: `1.${30 - i}.0`,
+      image_reference: `registry.local/agent:1.${30 - i}.0`,
+      status: 'success',
+      logs_url: null,
+      created_at: new Date(at - 150_000).toISOString(),
+      updated_at: new Date(at).toISOString(),
+    }
+  })
 }

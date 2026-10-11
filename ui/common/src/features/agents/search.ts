@@ -42,10 +42,7 @@ export const DETAIL_TABS = [
   'settings',
 ] as const
 export type DetailTab = (typeof DETAIL_TABS)[number]
-/** Unknown tab values are kept as strings so the page can fall back to Overview with replace-history. */
-export const detailSearchSchema = z.object({
-  tab: opt(z.string().check(z.trim(), z.maxLength(40))),
-})
+// The detail route's schema is the hub's (`features/hub/search.ts`): `tab` plus the hub's window, slice and marker.
 
 /**
  * The delete result, carried to Your agents in router history state, not the URL: a crafted

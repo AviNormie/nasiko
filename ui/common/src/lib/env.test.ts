@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { MOCKABLE, readEnv } from './env'
+import { isPreview, MOCKABLE, readEnv } from './env'
 
 describe('env', () => {
   it('waitlist: an http(s) URL gets ref=oss-app (its own query and hash kept); the Nasiko waitlist page by default', () => {
@@ -81,6 +81,23 @@ describe('env', () => {
       readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: 'chat,agents', DEV: true })
         .partialMocks,
     ).not.toContain('chat')
+  })
+  it('the events mock needs the agents mock (its markers sit on seed agents)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mocks = (list: string) =>
+      readEnv({
+        VITE_NASIKO_API_MODE: 'live',
+        VITE_NASIKO_MOCK: list,
+        DEV: true,
+      }).partialMocks.sort()
+    expect(mocks('events')).toEqual([])
+    expect(mocks('events,agents')).toEqual(['agents', 'events'])
+  })
+  it('isPreview: full mock mode, or that group partially mocked; never pure live', () => {
+    expect(isPreview('events', { mode: 'mock', partialMocks: [] })).toBe(true)
+    expect(isPreview('events', { mode: 'live', partialMocks: ['events', 'agents'] })).toBe(true)
+    expect(isPreview('events', { mode: 'live', partialMocks: ['agents'] })).toBe(false)
+    expect(isPreview('optimization', { mode: 'live', partialMocks: [] })).toBe(false)
   })
   it('the flows mock needs the agents mock (its lanes and links name seed agents)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})

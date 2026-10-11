@@ -193,10 +193,11 @@ export function useBuild(id: string, live: boolean) {
   })
 }
 
-/** `GET /api/builds/agent/{id}` (last 20) for an agent's Builds tab. */
-export function useAgentBuilds(agentId: string) {
+/** `GET /api/builds/agent/{id}` (last 20) for an agent's Builds tab and the agent hub's deploy markers. */
+export function useAgentBuilds(agentId: string, enabled = true) {
   return useQuery({
     queryKey: buildKeys.forAgent(agentId),
+    enabled,
     queryFn: async ({ signal }) =>
       gated(
         await apiFetch<unknown>(`/api/builds/agent/${encodeURIComponent(agentId)}`, { signal }),

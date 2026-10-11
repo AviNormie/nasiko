@@ -35,6 +35,8 @@ export const MOCKABLE = [
   'workflows',
   'onboarding',
   'optimization',
+  // The proposed agent event log (plans/feat-agent-centric.md PR1a): change markers on the agent hub.
+  'events',
 ] as const
 export type Mockable = (typeof MOCKABLE)[number]
 
@@ -136,6 +138,15 @@ export function readEnv(
     partialMocks = partialMocks.filter((s) => s !== 'optimization')
   }
 
+  // The event log describes the seed agents' changes (plans/feat-agent-centric.md, DX mocks): without the agents mock
+  // its markers would sit on agents the real server doesn't have.
+  if (partialMocks.includes('events') && !partialMocks.includes('agents')) {
+    console.warn(
+      '[ui-lab] VITE_NASIKO_MOCK: "events" needs "agents" too; ignoring "events" (use VITE_NASIKO_MOCK=events,agents).',
+    )
+    partialMocks = partialMocks.filter((s) => s !== 'events')
+  }
+
   // Dev defaults to the local OSS server; a production build defaults to its own origin
   // (the nasiko server serves both the API and the legacy UI).
   const fallbackUi = env.DEV ? 'http://localhost:8080' : (origin ?? '')
@@ -176,3 +187,12 @@ export function validHttpUrl(value: string): string | null {
 }
 
 export const env = readEnv()
+
+/**
+ * A preview section may render (plans/feat-agent-centric.md eng, preview policy): true only in full mock mode or when
+ * the feature's MOCKABLE group is mocked. It gates the section's queries and rendering, whatever the server answers,
+ * so a preview never draws from an unexpected live response.
+ */
+export function isPreview(group: Mockable, config: Pick<EnvConfig, 'mode' | 'partialMocks'> = env) {
+  return config.mode === 'mock' || config.partialMocks.includes(group)
+}

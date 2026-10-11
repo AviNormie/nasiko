@@ -5,15 +5,14 @@ import { describe, expect, it } from 'vitest'
 import {
   coverageOf,
   leadState,
-  parseSlice,
   pctOf,
   sliceLabel,
-  sliceOf,
   tokensShort,
   trendOf,
   trendRows,
   weeklyPoints,
 } from './lead'
+import { parseSlice, sliceOf } from '@/lib/slice'
 import type { ContextSavings, SavingsPoint } from './types'
 
 const savings = (over: Partial<ContextSavings> = {}): ContextSavings => ({
