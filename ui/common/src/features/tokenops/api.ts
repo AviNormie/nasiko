@@ -159,10 +159,12 @@ export function useSavings(
   f: Filters,
   scope: 'total' | 'agent' | 'session',
   enabled: boolean,
+  /** Rows per breakdown (the server's default is 25, its maximum 200); part of the key, so reads never mix. */
+  limit?: number,
 ) {
-  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope })
+  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope, limit })
   return useQuery({
-    queryKey: tokenopsKeys.savings(win.key, f, scope),
+    queryKey: [...tokenopsKeys.savings(win.key, f, scope), limit ?? null],
     queryFn: ({ signal }) => apiData<SavingsData>(path, { signal }),
     placeholderData: keepPreviousData,
     enabled,

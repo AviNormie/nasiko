@@ -96,58 +96,9 @@ export const copy = {
   },
   spend: {
     title: 'Spend',
-    link: 'TokenOps',
-    what: "this month's spend",
-    rangeWhat: 'spend by agent',
-    noSpendYet: 'No spend yet this month',
-    forecast: (low: string, high: string) => `Forecast ${low}–${high}`,
-    forecastFrom: (day: number) => `Forecast from day ${day}`,
-    chartSummary: (days: number, total: string, peakDay: string | null, peak: string) =>
-      `Fleet spend per day, last ${days} days: ${total} in all${peakDay ? `, peaking on ${peakDay} at ${peak}` : ''}. The Table view lists every day.`,
-    byAgent: (days: number) => `by agent · last ${days} days`,
-    vsPrevious: (days: number) => `vs previous ${days} days`,
-    chartMode: 'Chart type',
-    bars: 'Stacked bars',
-    lines: 'Lines',
-    avg: (amount: string) => `avg ${amount}/day`,
-    other: 'Other',
-    otherNote: 'the rest of the fleet',
-    showTable: 'Table',
-    showChart: 'Chart',
-    colDay: 'Day',
-    colTotal: 'Total',
-    seeSessions: 'See sessions',
-    seeDay: 'See that day in TokenOps',
-    drivers: (days: number) => `Spend by agent, last ${days} days`,
-    driversWhat: 'the top drivers',
-    colAgent: 'Agent',
-    colShare: 'Share of spend',
-    colSpend: 'Spend',
-    colAvg: 'Avg / day',
-    colChange: 'Change',
-    colShow: 'In chart',
-    otherAgents: (n: number) => `Other (${n} agent${n === 1 ? '' : 's'})`,
-    show: (name: string) => `Show ${name} in the chart`,
-    noDrivers: (days: number) => `No spend on agents you can access in the last ${days} days.`,
-    // Eng review R2: TokenOps' scope wording (TokenopsPage.tsx), shortened.
-    scopeNote: 'The month total is fleet-wide; drivers only include agents you can access.',
   },
   health: {
     title: 'Fleet health',
-    link: 'Agents',
-    what: 'the agent list',
-    costWhat: 'cost data (cost ratings read Unknown)',
-    noneDeployed: 'No agent is deployed yet, so there is nothing to rate.',
-    noWatch: 'No agents to watch.',
-    colAgent: 'Agent',
-    colRating: 'Rating',
-    colP95: 'p95, 7 days',
-    /** Starts with the visible text, so voice control can say it (WCAG 2.5.3); names capped at 3 (/ship review). */
-    countLink: (visible: string, names: readonly string[]) => {
-      if (!names.length) return `${visible} agents`
-      const shown = names.slice(0, 3).join(', ')
-      return `${visible}: ${shown}${names.length > 3 ? ` and ${names.length - 3} more` : ''}`
-    },
   },
   rating: {
     healthy: 'Healthy',

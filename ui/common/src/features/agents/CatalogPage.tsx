@@ -41,7 +41,7 @@ export function CatalogPage({
   const pinnedTabs = useCatalogTabs().data
   const names = useUsers(!!me?.is_superuser).data
   const inputRef = useRef<HTMLInputElement>(null)
-  // Ratings are fetched only while the Overview's ?health= filter is on (eng review R1).
+  // Ratings are fetched only while the ?health= filter (the home's rating badges link here) is on (eng review R1).
   const [now] = useState(() => new Date())
   // Members never read the fleet-wide spend series (the home and the hub rate them the same way).
   const fleet = useFleetHealth(now, !!search.health, !!me?.is_superuser)
@@ -329,7 +329,7 @@ const AgentCard = memo(function AgentCard({
         >
           {agent.description || copy.noDescription}
         </p>
-        {/* The Overview's health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
+        {/* The health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
         {reason ? (
           <p className="line-clamp-1 text-xs font-medium" data-testid="health-reason">
             {copy.healthReason(reason)}

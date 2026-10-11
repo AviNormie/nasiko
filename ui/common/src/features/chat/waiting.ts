@@ -8,6 +8,7 @@ import { createStore } from 'zustand/vanilla'
 import { signInGeneration } from '@/lib/session'
 import { sessionRows, useChatSessions, usePendingRequests } from './api'
 import { hitlIndexStore, matchPending, selectHitlIndex, type PendingMatch } from './pending'
+import type { HitlDto } from './types'
 
 export interface Waiting {
   match: PendingMatch
@@ -81,4 +82,37 @@ export function useWaiting(userId: string, isSuperuser: boolean): Waiting {
     retry: () => void q.refetch(),
     countFor: (sessionId) => counts.get(sessionId) ?? 0,
   }
+}
+
+/** A pending request the viewer can count against an agent (the home's per-agent counts, the hub's Needs you). */
+export interface PendingRequestRow {
+  id: string
+  agentId: string | null
+  /** The chat it was matched to, when one was. */
+  chat: string | null
+  /** It counts as the viewer's: always for a member; for a superuser only once a chat proves it (ISSUE-007). */
+  proven: boolean
+}
+
+/**
+ * Every pending request with its agent and whether it counts as the viewer's. `GET /api/hitl/pending` answers a member
+ * with their own requests only; a superuser gets every user's with no owner field, so theirs are only those a loaded
+ * chat (or the request index) proves theirs (chat's Waiting rule, `matchPending`).
+ */
+export function pendingRequestRows(
+  superuser: boolean,
+  match: PendingMatch,
+  items: readonly HitlDto[] | undefined,
+): PendingRequestRow[] {
+  const claimed = match.chats.flatMap((c) => c.requests.map((r) => [r.id, c.sessionId] as const))
+  const chatOf = new Map(claimed)
+  // The match's order (oldest first), so a caller's first linked row is the oldest request, whatever the server's order.
+  const rank = new Map(claimed.map(([id], i) => [id, i]))
+  return (items ?? [])
+    .filter((r) => r.status === 'pending')
+    .map((r) => {
+      const chat = chatOf.get(r.id) ?? null
+      return { id: r.id, agentId: r.execution.agent_id, chat, proven: !superuser || chat !== null }
+    })
+    .sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity))
 }

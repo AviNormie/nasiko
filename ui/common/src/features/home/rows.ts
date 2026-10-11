@@ -24,14 +24,8 @@ export interface HomeAgent {
   status: string
 }
 
-export interface HomeRow {
-  id: string
-  name: string
-  displayName: string
-  harness: boolean
-  ownerId: string
+export interface HomeRow extends HomeAgent {
   mine: boolean
-  status: string
   health: AgentHealth | null
   /** Pending items for this agent; null while the needs reads load. */
   needs: number | null
@@ -60,13 +54,8 @@ export function buildRows(i: HomeInput): HomeRow[] {
       const money = i.spend ? (i.spend.get(a.id) ?? { cost: 0, operations: 0 }) : null
       const saved = i.saved?.get(a.id)
       return {
-        id: a.id,
-        name: a.name,
-        displayName: a.displayName || a.name,
-        harness: a.harness,
-        ownerId: a.ownerId,
+        ...a,
         mine: a.ownerId === i.meSub,
-        status: a.status,
         health: i.ratings?.get(a.id) ?? null,
         needs: i.needs ? (i.needs.get(a.id) ?? 0) : null,
         spend: money ? money.cost : null,
@@ -110,6 +99,8 @@ export interface Totals {
   /** Some of it is harness estimates (API list price): the strip says so. */
   spendHasEstimates: boolean
   saved: number | null
+  /** The basis of the saved figures summed: one basis, or `mixed` when they differ (never shown as all measured). */
+  savedBasis: string | null
   /** Rows with something that needs the viewer (null while the needs reads load). */
   needing: number | null
 }
@@ -123,6 +114,10 @@ export function totals(rows: readonly HomeRow[]): Totals {
     spend: rows.every((r) => r.spend !== null) && rows.length ? known('spend') : null,
     spendHasEstimates: rows.some((r) => r.harness && (r.spend ?? 0) > 0),
     saved: known('saved'),
+    savedBasis: (() => {
+      const bases = new Set(rows.flatMap((r) => (r.savedBasis ? [r.savedBasis] : [])))
+      return bases.size > 1 ? 'mixed' : ([...bases][0] ?? null)
+    })(),
     needing: rows.every((r) => r.needs !== null)
       ? rows.filter((r) => (r.needs ?? 0) > 0).length
       : null,

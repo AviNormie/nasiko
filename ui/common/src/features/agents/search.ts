@@ -11,7 +11,7 @@ export const catalogSearchSchema = z.object({
   tag: opt(text),
   harnesses: opt(flag),
   yours: opt(flag),
-  /** The Overview's Fleet health count links here (overview design 15A, 16B); computed by `useFleetHealth` (eng R1). */
+  /** The home's rating badges link here (plans/feat-agent-centric.md PR2a); computed by `useFleetHealth` (eng R1). */
   health: opt(z.enum(['healthy', 'watch', 'action', 'unknown'])),
 })
 export type CatalogSearch = z.infer<typeof catalogSearchSchema>

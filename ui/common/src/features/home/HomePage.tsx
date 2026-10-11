@@ -11,9 +11,9 @@
  * PR2b adds the spend sparklines, last change, budget use and owner grouping; PR2c the EE levels.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
@@ -31,19 +31,19 @@ import { usePersona } from '@/features/onboarding/api'
 import { homeScopeFor } from '@/features/onboarding/logic'
 import { FirstRun, FirstRunLead, FirstRunPreview } from '@/features/overview/components/FirstRun'
 import { NeedsYou } from '@/features/overview/components/NeedsYou'
-import { RATED_STATUSES } from '@/features/overview/health'
+import { RATED_STATUSES, type Rating } from '@/features/overview/health'
 import { SetupGuide } from '@/features/overview/components/SetupGuide'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES } from '@/features/overview/search'
 import { meQuery, type Me } from '@/lib/api/auth'
-import { fmtLocalTime, fmtMoney, fmtTokens } from '@/lib/format'
-import { useReturnTick } from '@/lib/useReturnTick'
-import { useHome } from './api'
+import { fmtLocalTime, fmtMoney, fmtMoneyFloor, fmtTokens } from '@/lib/format'
+import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
+import { useHome, type SourceStatus } from './api'
 import { copy } from './copy'
 import { DEFAULT_SORT, sortRows, totals, type HomeRow, type Sort, type SortKey } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import type { HomeSearch, Scope } from './search'
-import { RETURN_REFRESH_MS, SKELETON_ROWS } from './tuning'
+import { RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
 
 type SetSearch = (patch: Partial<HomeSearch>, opts?: { replace?: boolean }) => void
 
@@ -100,8 +100,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const days = RANGE_DAYS[range]
   const qc = useQueryClient()
   const returnTick = useReturnTick(RETURN_REFRESH_MS)
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `now` moves only on return (the Overview's rule)
-  const now = useMemo(() => new Date(), [returnTick])
+  // Frozen per visit, moved on return (the Overview's rule); no hook-rule suppression, so the Compiler keeps the page.
+  const now = useFrozenNow(returnTick)
   useEffect(() => {
     if (!returnTick) return
     // Window-keyed reads move with `now`; the directory doesn't, so refresh it.
@@ -118,12 +118,15 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     interacted,
   })
   const replaced = useRef(false)
+  const router = useRouter()
   useEffect(() => {
-    if (resolved.replace && !replaced.current) {
+    // Only while still on the home: the persona can answer during a navigation away (the old route stays mounted until
+    // the next one loads), and a write then would pull the user back to `/` (review: onboarding's Open Sessions).
+    if (resolved.replace && !replaced.current && router.state.location.pathname === '/') {
       replaced.current = true
       setSearch({ scope: resolved.replace }, { replace: true })
     }
-  }, [resolved.replace, setSearch])
+  }, [resolved.replace, setSearch, router])
   const scope = resolved.scope
   const change = (patch: Partial<HomeSearch>) => {
     setInteracted(true)
@@ -154,14 +157,14 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         <ToggleGroupItem
           value="yours"
           title={copy.scope.yoursHint}
-          className="px-3 text-xs pointer-coarse:min-h-11"
+          className={`px-3 text-xs ${TOUCH}`}
         >
           {copy.scope.yours}
         </ToggleGroupItem>
         <ToggleGroupItem
           value="fleet"
           title={copy.scope.fleetHint}
-          className="px-3 text-xs pointer-coarse:min-h-11"
+          className={`px-3 text-xs ${TOUCH}`}
         >
           {copy.scope.fleet}
         </ToggleGroupItem>
@@ -181,31 +184,18 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
             key={r}
             value={r}
             aria-label={overviewCopy.range.item(RANGE_DAYS[r])}
-            className="px-3 text-xs pointer-coarse:min-h-11"
+            className={`px-3 text-xs ${TOUCH}`}
           >
             {r}
           </ToggleGroupItem>
         ))}
       </ToggleGroup>
-      <DeployAgentButton variant="outline" />
+      {/* On first run the page's own card holds the one next action (design 7A). */}
+      {firstRun ? null : <DeployAgentButton variant="outline" />}
       {firstRun ? null : <SetupGuide />}
     </>
   )
 
-  if (home.dir.isError)
-    return (
-      <Frame actions={actions}>
-        <StateCard
-          tone="error"
-          title={copy.error}
-          action={
-            <Button size="sm" variant="outline" onClick={() => void home.dir.refetch()}>
-              <RotateCw className="size-3.5" aria-hidden /> {copy.retry}
-            </Button>
-          }
-        />
-      </Frame>
-    )
   // The Overview's first-run layout, unchanged.
   if (firstRun)
     return (
@@ -222,28 +212,57 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     <Frame description={sentence ?? undefined} actions={actions}>
       <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} pausedFlows={pausedFlows} />
       {rows && t ? (
-        <Strip totals={t} member={!me.is_superuser} scope={scope} asOf={home.asOf} />
+        <Strip
+          totals={t}
+          member={!me.is_superuser}
+          scope={scope}
+          asOf={home.asOf}
+          unpriced={home.unpriced}
+          savedStatus={home.savedStatus}
+          savedCapped={home.savedCapped}
+        />
       ) : null}
       {scope === 'fleet' && !me.is_superuser ? (
         <p className="m-0 text-xs text-muted-foreground">{copy.scope.sharedWithYou}</p>
       ) : null}
-      {home.dashError ? (
+      {home.spendStatus === 'failed' ||
+      home.spendStatus === 'stale' ||
+      home.savedStatus === 'failed' ||
+      home.savedStatus === 'stale' ? (
         <p role="status" className="m-0 flex items-center gap-2 text-sm text-destructive">
-          {copy.dashError}
-          <Button size="sm" variant="ghost" onClick={home.retry}>
+          {home.spendStatus === 'failed' || home.savedStatus === 'failed'
+            ? copy.moneyFailed
+            : copy.moneyStale}
+          <Button size="sm" variant="ghost" className={TOUCH} onClick={home.retryMoney}>
             {copy.retry}
           </Button>
         </p>
       ) : null}
-      {!rows ? (
-        <PanelSkeleton height={SKELETON_ROWS * 40} />
+      {home.dirFailed ? (
+        // A directory outage costs the table, never Needs you above it (the Overview kept its cards apart too).
+        <StateCard
+          tone="error"
+          title={copy.error}
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              className={TOUCH}
+              onClick={() => void home.dir.refetch()}
+            >
+              <RotateCw className="size-3.5" aria-hidden /> {copy.retry}
+            </Button>
+          }
+        />
+      ) : !rows ? (
+        <PanelSkeleton height={SKELETON_ROWS * SKELETON_ROW_PX} />
       ) : !rows.length ? (
         <EmptyState title={copy.empty.noOwned}>
           <p className="m-0">{copy.empty.noOwnedBody}</p>
           <Button
             size="sm"
             variant="outline"
-            className="mt-3"
+            className={`mt-3 ${TOUCH}`}
             onClick={() => change({ scope: 'fleet' })}
           >
             {copy.empty.showFleet}
@@ -251,7 +270,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         </EmptyState>
       ) : (
         <>
-          {t && t.spend === 0 && !rows.some((r) => (r.requests ?? 0) > 0) ? (
+          {t && t.spend === 0 && !home.unpriced && !rows.some((r) => (r.requests ?? 0) > 0) ? (
             <p className="m-0 text-sm text-muted-foreground">{copy.empty.noUsage(days)}</p>
           ) : null}
           <RowsTable
@@ -259,8 +278,10 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
             days={days}
             sort={sort}
             onSort={setSort}
+            ratingsPending={home.ratingsPending}
+            savedStatus={home.savedStatus}
             owner={(r) =>
-              r.mine ? copy.table.you : (home.owner(r.ownerId) ?? r.ownerId.slice(0, 8))
+              r.mine ? copy.table.you : (home.owner(r.ownerId) ?? copy.table.anotherUser)
             }
           />
         </>
@@ -274,12 +295,19 @@ function Strip({
   member,
   scope,
   asOf,
+  unpriced,
+  savedStatus,
+  savedCapped,
 }: {
   totals: ReturnType<typeof totals>
   member: boolean
   scope: Scope | null
   asOf: number
+  unpriced: boolean
+  savedStatus: SourceStatus
+  savedCapped: boolean
 }) {
+  const savedKnown = savedStatus === 'ok' || savedStatus === 'stale'
   return (
     <section aria-label={copy.strip.label} className="flex flex-col gap-1">
       <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-3">
@@ -290,18 +318,39 @@ function Strip({
               <span className="text-xs text-muted-foreground">{copy.strip.spendVisible}</span>
             ) : null
           }
-          value={t.spend === null ? '—' : fmtMoney(t.spend)}
+          value={t.spend === null ? '—' : fmtMoneyFloor(t.spend, unpriced)}
         >
+          {unpriced ? (
+            <span className="text-xs text-muted-foreground">{copy.strip.unpriced}</span>
+          ) : null}
           {t.spendHasEstimates ? (
             <span className="text-xs text-muted-foreground">{copy.strip.estimates}</span>
           ) : null}
         </KpiTile>
         <KpiTile
           label={copy.strip.saved}
+          title={copy.strip.savedTooltip}
           value={
-            t.saved === null ? copy.strip.notReported : copy.strip.savedTokens(fmtTokens(t.saved))
+            !savedKnown || t.saved === null ? (
+              '—'
+            ) : (
+              <>
+                {savedCapped ? '≥ ' : ''}
+                {fmtTokens(t.saved)}{' '}
+                <span className="text-sm font-normal text-muted-foreground">
+                  {copy.strip.tokens}
+                </span>
+              </>
+            )
           }
-        />
+        >
+          {savedKnown && t.saved === null ? (
+            <span className="text-xs text-muted-foreground">{copy.strip.notReported}</span>
+          ) : null}
+          {savedKnown && t.savedBasis ? (
+            <span className="text-xs text-muted-foreground">{copy.strip.basis(t.savedBasis)}</span>
+          ) : null}
+        </KpiTile>
         <KpiTile label={copy.strip.needs} value={t.needing === null ? '—' : String(t.needing)} />
       </div>
       {asOf ? (
@@ -325,12 +374,16 @@ function RowsTable({
   days,
   sort,
   onSort,
+  ratingsPending,
+  savedStatus,
   owner,
 }: {
   rows: HomeRow[]
   days: number
   sort: Sort
   onSort: (s: Sort) => void
+  ratingsPending: boolean
+  savedStatus: SourceStatus
   owner: (r: HomeRow) => string
 }) {
   const columns: DataTableColumn<HomeRow>[] = [
@@ -360,7 +413,7 @@ function RowsTable({
       id: 'health',
       header: copy.table.health,
       enableSorting: false,
-      cell: ({ row }) => <Health row={row.original} />,
+      cell: ({ row }) => <Health row={row.original} pending={ratingsPending} />,
     },
     {
       id: 'needs',
@@ -392,10 +445,12 @@ function RowsTable({
       accessorFn: (r) => r.saved,
       meta: { numeric: true },
       cell: ({ row }) =>
-        row.original.saved === null ? (
+        row.original.saved !== null ? (
+          fmtTokens(row.original.saved)
+        ) : savedStatus === 'ok' || savedStatus === 'stale' ? (
           <span className="text-muted-foreground">{copy.strip.notReported}</span>
         ) : (
-          fmtTokens(row.original.saved)
+          '—'
         ),
     },
   ]
@@ -426,21 +481,31 @@ function RowsTable({
   )
 }
 
-function Health({ row }: { row: HomeRow }) {
+const BADGE: Record<Exclude<Rating, 'unknown'>, 'success' | 'warning' | 'destructive'> = {
+  healthy: 'success',
+  watch: 'warning',
+  action: 'destructive',
+}
+
+function Health({ row, pending }: { row: HomeRow; pending: boolean }) {
   const h = row.health
   // Harnesses and agents that aren't deployed are never rated; a deployed agent whose inputs failed is Unknown.
   const rated = !row.harness && RATED_STATUSES.includes(displayStatus(row.status, false))
+  if (rated && pending) return <span className="text-muted-foreground">{copy.table.checking}</span>
   if (!h || h.rating === 'unknown')
     return (
       <span className="text-muted-foreground">
-        {rated && h ? copy.rating.unknown : copy.table.notRated}
+        {rated && h ? overviewCopy.rating.unknown : copy.table.notRated}
       </span>
     )
   const reason = h.reasons[0]?.text
   return (
     <span className="flex flex-col gap-0.5">
-      <Badge variant={h.rating === 'action' ? 'destructive' : 'outline'} className="w-fit">
-        {copy.rating[h.rating]}
+      {/* Each rating opens the Agents catalog filtered to it (the Overview's Fleet health counts did). */}
+      <Badge asChild variant={BADGE[h.rating]} className={`w-fit ${TOUCH}`}>
+        <Link to="/agents" search={{ health: h.rating }}>
+          {overviewCopy.rating[h.rating]}
+        </Link>
       </Badge>
       {reason && h.rating !== 'healthy' ? (
         <span className="text-xs text-muted-foreground">{reason}</span>
