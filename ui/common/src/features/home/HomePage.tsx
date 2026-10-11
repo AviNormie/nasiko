@@ -181,9 +181,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   }
 
   // First run: nothing deployed or registered yet. Its Setup guide (or deploy) card is on the page already.
-  // A unit link the viewer can't pick says so even on an empty fleet (an OSS build, or a first run).
-  const firstRun =
-    !!home.dir.data && !home.dir.data.length && !(unit && home.org.state === 'unknown')
+  // A unit link shows the unit's own states even on an empty fleet (an OSS build, or a first run): never the first run.
+  const firstRun = !!home.dir.data && !home.dir.data.length && !unit
   const actions = (
     <>
       <ToggleGroup
@@ -231,6 +230,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
                 key={l.id}
                 value={`unit:${l.id}`}
                 aria-label={l.path}
+                // Radix names an option by its text (`aria-labelledby`), which beats `aria-label`: drop it.
+                aria-labelledby={undefined}
                 textValue={l.label}
                 className={TOUCH}
                 style={{ paddingInlineStart: `${0.5 + l.depth}rem` }}
