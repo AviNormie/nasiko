@@ -14,7 +14,8 @@
  * is visible), and two reads per row on screen through a limiter of 4: the agent's spend series (superusers only: the
  * timeseries isn't ACL-scoped) and its build records (last change). A row read is dropped when its row scrolls away.
  */
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { useSlots } from '@/app/edition-context'
 import type { HomeLevel } from '@/app/edition'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
@@ -73,7 +74,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const pending = usePendingRequests(me.sub, true)
   const budgets = useHomeBudgets(any, me.sub)
-  const org = useOrgLevel(scope)
+  const org = useOrgLevel(scope, me.sub)
 
   const agents: HomeAgent[] = (dir.data ?? []).map((a) => ({
     id: a.id,
@@ -132,7 +133,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
 
   // An org level's rows wait for its owners: never the whole fleet under a unit's name.
   const rows =
-    scope && dir.data && (!isUnitScope(scope) || org.state === 'ok')
+    scope && dir.data && (!isUnitScope(scope) || org.owners !== null)
       ? buildRows({
           agents,
           meSub: me.sub,
@@ -157,7 +158,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
     budgets,
     org,
     win,
-    owner: (id: string) => users.data?.get(id) ?? null,
+    owner: (id: string) => users.data?.get(id) ?? org.names.get(id) ?? null,
     spendStatus,
     /** Calls in the window had no price: spend is a floor. */
     unpriced: (dash.data?.summary.unpriced_calls ?? 0) > 0 && spendStatus !== 'loading',
@@ -298,10 +299,12 @@ export function useRowBuilds(id: string) {
 // ─── PR2c: the org levels an edition layer adds (`homeOrgScope`) ─────────────────────────────────────────────
 
 /**
- * Where an org level stands: `none` without the slot or on Yours/Fleet; `unknown` when the URL names a unit the viewer
- * can't pick (deleted, or outside a manager's subtrees); `failed` when the units or the unit's members couldn't load.
+ * Where an org level stands: `none` without a unit in the URL; `unknown` when the viewer can't pick that unit (not
+ * listed, deleted, outside a manager's subtrees, a 404/403 or `{"available": false}` on its members, or a build without
+ * the slot); `failed` when the units or members couldn't load at all; `stale` when a members refresh failed and the last
+ * read stays (said so on the page).
  */
-export type OrgLevelState = 'none' | 'loading' | 'ok' | 'unknown' | 'failed'
+export type OrgLevelState = 'none' | 'loading' | 'ok' | 'stale' | 'unknown' | 'failed'
 
 export interface OrgLevel {
   /** Levels the scope control offers after Yours and Fleet (empty without the slot, or for a member). */
@@ -311,21 +314,42 @@ export interface OrgLevel {
   level: HomeLevel | null
   /** Its owners (members, subtree included), once read. */
   owners: ReadonlySet<string> | null
+  /** Its owners' names, for the owner groups (a manager reads no user list). */
+  names: ReadonlyMap<string, string>
   retry: () => void
 }
 
 const NO_QUERY = { queryKey: ['home', 'org', 'none'], queryFn: async () => null }
+const NO_NAMES: ReadonlyMap<string, string> = new Map()
+/** The members read says this viewer may not read the unit (gone, or out of their subtrees): never keep its rows. */
+const denied = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 403)
 
-function useOrgLevel(scope: Scope | null): OrgLevel {
+function useOrgLevel(scope: Scope | null, meSub: string): OrgLevel {
   const slot = useSlots().homeOrgScope
-  const levelsQ = useQuery({ ...(slot?.levels.query ?? NO_QUERY), enabled: !!slot })
+  const qc = useQueryClient()
+  // The viewer is in every key: a cached list never serves another account or persona.
+  const viewer = <Q extends { queryKey: readonly unknown[] }>(q: Q) => ({
+    ...q,
+    queryKey: [...q.queryKey, meSub],
+  })
+  const levelsQuery = viewer(slot?.levels.query ?? NO_QUERY)
+  const levelsQ = useQuery({ ...levelsQuery, enabled: !!slot })
   const levels = slot && levelsQ.data !== undefined ? slot.levels.list(levelsQ.data) : []
   const unitId = isUnitScope(scope) ? unitOf(scope) : null
   const level = unitId ? (levels.find((l) => l.id === unitId) ?? null) : null
   const ownersQ = useQuery({
-    ...(slot && unitId ? slot.owners.query(unitId) : NO_QUERY),
+    ...viewer(slot && unitId ? slot.owners.query(unitId) : NO_QUERY),
     enabled: !!slot && !!level,
   })
+  const ids = slot && ownersQ.data != null ? slot.owners.ids(ownersQ.data) : null
+  const lost = denied(ownersQ.error) || (ownersQ.data != null && ids === null)
+  // A unit the server no longer lets this viewer read: re-read the list, so the picker drops it too.
+  // Keyed by its text: the key array is rebuilt every render, and the effect must run once per loss.
+  const levelsKey = JSON.stringify(levelsQuery.queryKey)
+  useEffect(() => {
+    if (lost)
+      void qc.invalidateQueries({ queryKey: JSON.parse(levelsKey) as unknown[], exact: true })
+  }, [lost, qc, levelsKey])
   const state: OrgLevelState = !unitId
     ? 'none'
     : !slot
@@ -334,18 +358,22 @@ function useOrgLevel(scope: Scope | null): OrgLevel {
         ? 'failed'
         : levelsQ.data === undefined
           ? 'loading'
-          : !level
+          : !level || lost
             ? 'unknown'
-            : ownersQ.isError && ownersQ.data === undefined
-              ? 'failed'
-              : ownersQ.data === undefined || ownersQ.data === null
-                ? 'loading'
-                : 'ok'
+            : ownersQ.isError
+              ? ids
+                ? 'stale'
+                : 'failed'
+              : ids
+                ? 'ok'
+                : 'loading'
+  const shown = state === 'ok' || state === 'stale'
   return {
     levels,
     state,
     level,
-    owners: state === 'ok' && slot && ownersQ.data ? slot.owners.ids(ownersQ.data) : null,
+    owners: shown ? ids : null,
+    names: shown && slot && ownersQ.data != null ? slot.owners.names(ownersQ.data) : NO_NAMES,
     retry: () => {
       if (levelsQ.isError) void levelsQ.refetch()
       if (ownersQ.isError) void ownersQ.refetch()

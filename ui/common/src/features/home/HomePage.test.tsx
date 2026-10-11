@@ -306,3 +306,14 @@ describe('org levels without an edition layer (OSS)', () => {
     expect(screen.queryByRole('combobox', { name: copy.scope.unitLabel })).toBeNull()
   })
 })
+
+describe('a unit link on an empty fleet (review)', () => {
+  it('says the unit isn’t visible rather than showing the first run', async () => {
+    server.use(http.get('*/api/agents', () => HttpResponse.json([])))
+    renderApp('/?scope=unit:5eed0014-0000-4000-8000-000000000001')
+    expect(await screen.findByText(copy.empty.unknownUnit)).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { level: 2, name: overviewCopy.firstRun.title }),
+    ).toBeNull()
+  })
+})

@@ -9,6 +9,8 @@ export const copy = {
     sharedWithYou: 'Shared with you: every agent and harness you can see',
     unitLabel: 'Organization unit',
     unitPlaceholder: 'Unit…',
+    unitCaption: (path: string, member: boolean) =>
+      `Owned by members of ${path}, sub-units included${member ? ': the ones you can see' : ''}`,
   },
   strip: {
     label: 'Totals',
@@ -90,6 +92,7 @@ export const copy = {
   },
   error: "The agents couldn't load",
   unitFailed: "This unit's members couldn't load",
+  unitStale: "Couldn't refresh this unit's members: the rows are from the last successful read",
   moneyFailed: "Spend or savings couldn't load: those columns show —",
   moneyStale: "Couldn't refresh spend or savings: the figures are from the last successful read",
   retry: 'Retry',

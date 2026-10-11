@@ -13,7 +13,8 @@ import { RANGES } from '@/features/overview/search'
 export type UnitScope = `unit:${string}`
 export type Scope = 'yours' | 'fleet' | UnitScope
 
-const UNIT = /^unit:[0-9A-Za-z-]{1,64}$/
+/** A unit id is a UUID (org_units.rs `Path<Uuid>`): nothing else reaches a read. */
+const UNIT = /^unit:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const isUnitScope = (s: Scope | null | undefined): s is UnitScope =>
   !!s && s.startsWith('unit:')

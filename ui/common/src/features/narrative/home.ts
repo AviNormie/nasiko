@@ -32,7 +32,7 @@ export function homeNarrative(i: HomeNarrativeInput): string | null {
     i.scope === 'yours'
       ? `Your ${parts.join(' and ')}`
       : i.scope === 'unit' && i.unitName
-        ? `${i.unitName}'s ${parts.join(' and ')}`
+        ? `${parts.join(' and ')} owned by ${i.unitName} members`
         : `${parts.join(' and ')} you can see`
   const money =
     i.spend === null
