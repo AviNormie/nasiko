@@ -4,8 +4,10 @@
  * (`useOnScreen`), through the page's limiter (`ROW_READS`); scrolling away before a read answers cancels it.
  */
 import { Link } from '@tanstack/react-router'
-import { useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { relTime } from '@/features/agents/format'
+import { agentBuildsKey } from '@/features/deploy/api'
 import { latestMarker, markersFor, markerText } from '@/features/hub/events'
 import { HUB_DEFAULT_PRESET } from '@/features/hub/search'
 import type { Range } from '@/features/overview/search'
@@ -105,49 +107,58 @@ export function BudgetUse({ row, state }: { row: HomeRow; state: BudgetsState })
 
 /**
  * The newest change the agent's build records show ("Build completed · v1.4.2 · 3 days ago"), linking to it on the
- * hub (`?marker=`) when it falls inside the window the hub opens on. "—" with the reason otherwise. Once a row has been
- * on screen it keeps its value: scrolling away only cancels a read that hasn't answered yet.
+ * hub (`?marker=`) when it falls inside the window the hub opens on. "—" with the reason otherwise. The read is
+ * observed only while the row is on screen, so scrolling away cancels one that hasn't answered; a row that already
+ * has its records keeps showing them from the cache.
  */
 export function LastChangeCell({ row, now, range }: { row: HomeRow; now: Date; range: Range }) {
   const [ref, on] = useOnScreen<HTMLSpanElement>()
-  const [seen, setSeen] = useState(false)
-  if (on && !seen) setSeen(true)
   if (row.harness) return <Quiet title={copy.lastChange.harness}>—</Quiet>
   return (
     <span ref={ref}>
-      {on || seen ? (
-        <LastChange row={row} now={now} range={range} offScreen={!on} />
+      {on ? (
+        <LastChange row={row} now={now} range={range} />
       ) : (
-        <Quiet title={copy.lastChange.notYet}>…</Quiet>
+        <Kept row={row} now={now} range={range} />
       )}
     </span>
   )
 }
 
-function LastChange({
+function LastChange({ row, now, range }: { row: HomeRow; now: Date; range: Range }) {
+  const q = useRowBuilds(row.id)
+  if (q.isPending) return <Quiet>{copy.lastChange.loading}</Quiet>
+  if (q.isError) return <Quiet title={copy.lastChange.failed}>—</Quiet>
+  return <Change row={row} data={q.data} now={now} range={range} />
+}
+
+/** Off screen: what the cache already holds, read without an observer (nothing is fetched or held open). */
+function Kept({ row, now, range }: { row: HomeRow; now: Date; range: Range }) {
+  const data = useQueryClient().getQueryData<RowBuilds>(agentBuildsKey(row.id))
+  return data ? (
+    <Change row={row} data={data} now={now} range={range} />
+  ) : (
+    <Quiet title={copy.lastChange.notYet}>…</Quiet>
+  )
+}
+
+type RowBuilds = NonNullable<ReturnType<typeof useRowBuilds>['data']>
+
+function Change({
   row,
+  data,
   now,
   range,
-  offScreen,
 }: {
   row: HomeRow
+  data: RowBuilds
   now: Date
   range: Range
-  /** Scrolled away again: keep a value already read, and say a pending one waits for the row. */
-  offScreen: boolean
 }) {
-  const q = useRowBuilds(row.id)
-  if (q.isPending)
-    return offScreen ? (
-      <Quiet title={copy.lastChange.notYet}>…</Quiet>
-    ) : (
-      <Quiet>{copy.lastChange.loading}</Quiet>
-    )
-  if (q.isError) return <Quiet title={copy.lastChange.failed}>—</Quiet>
-  if (!q.data.available) return <Quiet title={copy.lastChange.hidden}>—</Quiet>
+  if (!data.available) return <Quiet title={copy.lastChange.hidden}>—</Quiet>
   const m = latestMarker(
     markersFor({
-      builds: q.data.value,
+      builds: data.value,
       versions: null,
       crashedAt: null,
       events: null,

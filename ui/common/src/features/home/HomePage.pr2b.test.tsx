@@ -337,3 +337,15 @@ describe('phone list cap (decision #50)', () => {
     expect(screen.getAllByTestId('home-phone-row').length).toBeGreaterThan(before)
   })
 })
+
+describe('budgets the viewer may not read (re-review)', () => {
+  it('a 403 on the status reads as failed, never "not set up"', async () => {
+    server.use(
+      http.get('/api/budgets/status', () => new HttpResponse('forbidden', { status: 403 })),
+    )
+    renderApp('/?scope=yours')
+    await table()
+    expect(await screen.findByText(copy.budget.failed)).toBeInTheDocument()
+    expect(screen.queryByText(copy.budget.off)).toBeNull()
+  })
+})

@@ -14,7 +14,8 @@ export function useOnScreen<E extends Element>(): [(el: E | null) => void, boole
     let timer: ReturnType<typeof setTimeout> | undefined
     const io = new IntersectionObserver(
       (entries) => {
-        const inside = entries.some((e) => e.isIntersecting)
+        // The newest entry wins: a busy frame can deliver an enter and a leave together.
+        const inside = entries.at(-1)?.isIntersecting ?? false
         clearTimeout(timer)
         if (inside) timer = setTimeout(() => setOn(true), ROW_DWELL_MS)
         else setOn(false)
