@@ -439,6 +439,17 @@ describe('the sentence', () => {
     ).toBe('No priced spend in the last 30 days.')
   })
 
+  // Regression: ISSUE-001 — an event summary ending in "on" read "Token optimization turned on on Sep 30"
+  // Found by /qa on 2026-10-11
+  it('an event change leads with its date, so a summary ending in "on" reads cleanly', () => {
+    const ev = markersFor(
+      input({ events: [event({ summary: 'Token optimization turned on', at: ago(3) })] }),
+    ).markers[0]!
+    const s = hubNarrative({ ...base, latest: ev })[1]
+    expect(s).toMatch(/^On [A-Z][a-z]{2} \d{1,2}: Token optimization turned on\.$/)
+    expect(s).not.toMatch(/\bon on\b/)
+  })
+
   it('a 24 h change names its day and UTC', () => {
     const s = hubNarrative({ ...base, preset: '24h', windowLabel: 'Last 24 hours', latest: marker })
     expect(s[1]).toMatch(/ on [A-Z][a-z]{2} \d{1,2} \d{2}:\d{2} UTC\.$/)
