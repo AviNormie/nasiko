@@ -315,5 +315,7 @@ describe('a unit link on an empty fleet (review)', () => {
     expect(
       screen.queryByRole('heading', { level: 2, name: overviewCopy.firstRun.title }),
     ).toBeNull()
+    // Needs you reads no sessions for an empty fleet: it isn't drawn, rather than loading forever.
+    await waitFor(() => expect(screen.queryByTestId('overview-needs')).toBeNull())
   })
 })
