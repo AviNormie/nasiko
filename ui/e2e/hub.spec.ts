@@ -52,3 +52,21 @@ test('hub fits a phone @phone', async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(0)
   await expectAccessible(page)
 })
+
+// The harness session ledger (PR1b): a recorded harness chat's turns, axe-clean, no sideways page scroll at either width.
+for (const width of [1440, 375])
+  test(`ledger: a recorded harness session's turns at ${width} px${width < 640 ? ' @phone' : ''}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/sessions/5eedc000-0000-4000-8000-00000000c004?view=ledger')
+    const table = page.getByRole('table', { name: 'Turns in this session' })
+    await expect(table).toBeVisible()
+    await expect(table.getByRole('row')).toHaveCount(4)
+    await expect(page.getByRole('button', { name: 'Export CSV' })).toBeVisible()
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    )
+    expect(overflow).toBeLessThanOrEqual(0)
+    await expectAccessible(page)
+  })

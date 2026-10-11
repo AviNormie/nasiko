@@ -54,6 +54,7 @@ export const HARNESS_MOCK_VARIANTS = [
   'hub-no-savings-row',
   'hub-many-builds',
   'events-absent',
+  'ledger-no-trace',
   // Chat page variants (v1c DX1); harmless here, listed so the lists stay equal.
   'no-agents',
   'many-chats',

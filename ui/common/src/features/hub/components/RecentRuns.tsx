@@ -3,14 +3,15 @@
  * never merged. Sessions come from the hub's bounded sample (last 7 days, the latest N across the fleet filtered to this
  * agent), so an empty list says what it checked and links to Sessions, never a bare "No sessions". Flows are the ones
  * this agent started (the list's `root_agent_id`); flows that only call it need an agent filter on `/api/flows` (FL-12).
- * Side by side from `lg`, stacked below. Each row opens the shipped zoom: a session's trace, a flow's page.
+ * Side by side from `lg`, stacked below. Each row opens the shipped zoom: a session's trace, a flow's page. A harness
+ * owner sees their own recorded sessions with it instead of the sample, each opening its ledger (PR1b).
  */
 import { Link } from '@tanstack/react-router'
 import { Panel, PanelSkeleton } from '@/components/shared/panel'
 import { Badge } from '@/components/ui/badge'
 import { useAgentsDirectory } from '@/features/agents/api'
 import { relTime } from '@/features/agents/format'
-import type { useHubFlows, useHubSessions } from '../api'
+import type { useHarnessChats, useHubFlows, useHubSessions } from '../api'
 import { copy } from '../copy'
 import { RetryLine } from './RetryLine'
 import { RUNS_SHOWN } from '../tuning'
@@ -20,18 +21,25 @@ const LINK =
 
 export function RecentRuns({
   agentName,
+  harnessChats,
   sessions,
   statuses,
   flows,
 }: {
   agentName: string
+  /** A harness owner's own recorded sessions (PR1b): listed instead of the sample, each opening its ledger. */
+  harnessChats?: ReturnType<typeof useHarnessChats>
   sessions: ReturnType<typeof useHubSessions>
   statuses: ReadonlyMap<string, string>
   flows: ReturnType<typeof useHubFlows>
 }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <SessionsList agentName={agentName} sessions={sessions} statuses={statuses} />
+      {harnessChats ? (
+        <HarnessSessions chats={harnessChats} />
+      ) : (
+        <SessionsList agentName={agentName} sessions={sessions} statuses={statuses} />
+      )}
       <FlowsList flows={flows} />
     </div>
   )
@@ -96,6 +104,41 @@ function SessionsList({
           )}
           <p className="m-0">{all}</p>
         </div>
+      )}
+    </Panel>
+  )
+}
+
+function HarnessSessions({ chats }: { chats: ReturnType<typeof useHarnessChats> }) {
+  return (
+    <Panel title={copy.runs.sessions} subtitle={copy.runs.harnessWindow}>
+      {chats.isPending ? (
+        <PanelSkeleton height={96} />
+      ) : chats.isError ? (
+        <RetryLine label={copy.runs.sessionsError} onRetry={() => void chats.refetch()} />
+      ) : chats.data.length ? (
+        <ul className="m-0 list-none divide-y divide-border p-0 text-sm">
+          {chats.data.slice(0, RUNS_SHOWN).map((s) => (
+            <li
+              key={s.session_id}
+              className="flex flex-wrap items-center justify-between gap-2 py-1.5"
+            >
+              <Link
+                to="/sessions/$sessionId"
+                params={{ sessionId: s.session_id }}
+                search={{ view: 'ledger' }}
+                className="min-w-0 truncate underline-offset-4 hover:underline pointer-coarse:py-3"
+              >
+                {s.title}
+              </Link>
+              <span className="text-xs text-muted-foreground">
+                {relTime(s.updated_at ?? s.created_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 text-sm text-muted-foreground">{copy.runs.harnessNone}</p>
       )}
     </Panel>
   )

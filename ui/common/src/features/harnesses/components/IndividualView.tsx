@@ -74,7 +74,8 @@ export function SessionsList({
                   <Link
                     to="/sessions/$sessionId"
                     params={{ sessionId: s.session_id }}
-                    search={{}}
+                    // A harness session opens its ledger (plans/feat-agent-centric.md PR1b).
+                    search={{ view: 'ledger' }}
                     className="inline-flex min-h-8 items-center gap-1 hover:underline"
                   >
                     {label}

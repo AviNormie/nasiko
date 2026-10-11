@@ -96,6 +96,8 @@ export const copy = {
   captureOff:
     'Content capture is off for this agent (OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT).',
   unknownSpan: "That span isn't in this trace; showing the default span instead.",
+  /** A harness session's ledger (plans/feat-agent-centric.md PR1b): one row per turn instead of the trace. */
+  openLedger: 'Ledger',
   linkCopied: 'Link copied',
   copyFailed: 'Copy failed: select the address bar and copy it instead.',
   logsEmpty: 'No log lines yet',

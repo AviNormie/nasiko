@@ -8,6 +8,7 @@ import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureMocks } from '@/mocks/handlers'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
+import { agentNamed } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
 import { copy } from './copy'
@@ -207,11 +208,7 @@ describe('layer cards', () => {
   })
 
   it('a coding harness’s owner sees Tools and Optimization, never Routing or Budget', async () => {
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      name: string
-    }[]
-    const harness = rows.find((a) => a.name === 'admin-claude-code')!
+    const harness = await agentNamed('admin-claude-code')
     const rec = recordRequests()
     renderApp(`/agents/${harness.id}`)
     const cards = await screen.findByRole('region', { name: copy.cards.title })

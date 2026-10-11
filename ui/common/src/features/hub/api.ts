@@ -20,9 +20,15 @@ import {
   useVersions,
 } from '@/features/agents/api'
 import { displayStatus } from '@/features/agents/status'
-import { useChatSessions, usePendingRequests } from '@/features/chat/api'
+import {
+  historyPages,
+  useChatHistory,
+  useChatSessions,
+  usePendingRequests,
+} from '@/features/chat/api'
 import { useWaiting } from '@/features/chat/waiting'
 import { useFlowsList } from '@/features/flows/api'
+import type { ChatSessionRow, CursorPage } from '@/features/chat/types'
 import type { SessionListResponse } from '@/features/observability/types'
 import type { Status } from '@/features/observability/sessions'
 import { useFleetHealth } from '@/features/overview/api'
@@ -45,7 +51,13 @@ import { markersFor, type MarkerSet } from './events'
 import { hubNeeds, sessionSource, type HubNeeds, type HubNeedsInput, type HubSource } from './needs'
 import { agentRows, sampleStart } from './sessions'
 import { EVENTS_READ, SESSION_CHECKS, SESSION_SAMPLE } from './tuning'
-import { agentEventsSchema, type AgentEvents } from './types'
+import { buildLedger } from './ledger'
+import {
+  agentEventsSchema,
+  sessionBudgetsSchema,
+  type AgentEvents,
+  type SessionBudget,
+} from './types'
 
 const FINOPS = '/api/observability/finops'
 
@@ -560,4 +572,56 @@ export function useHubNeeds(
     sessions,
     statuses,
   }
+}
+
+// ─── the harness session ledger (PR1b) ─────────────────────────────────────
+
+/**
+ * The session's recorded messages, newest 100 first (chat's own history query, so an open chat and its ledger share one
+ * cache). The messages route answers only the chat's owner (no superuser bypass, `chat/routes.rs` `list_messages`): a
+ * 404 means "not yours or not a chat", and the ledger shows metadata only. Older pages load on request.
+ */
+export function useLedgerHistory(sessionId: string, preview = isPreview('chat')) {
+  const q = useChatHistory(sessionId)
+  const pages = historyPages(q.data)
+  const complete = q.isSuccess && !q.hasNextPage
+  // The React Compiler memoises this on the query's data (the module is compiled).
+  const ledger = q.data ? buildLedger(pages, { complete, preview }) : null
+  const notOwner = q.error instanceof ApiError && q.error.status === 404
+  return { query: q, ledger, complete, notOwner }
+}
+
+/**
+ * The budgets that apply to a session (proposed AH-8, preview only: every budget is the proposed R-L10 contract,
+ * decision 35). Read only while the `router` group is a preview; a bare 404 hides the section.
+ */
+export function useSessionBudgets(sessionId: string, enabled: boolean) {
+  const path = `/api/budgets/session/${encodeURIComponent(sessionId)}`
+  return useQuery({
+    queryKey: ['router', 'budgets', 'session', sessionId],
+    queryFn: ({ signal }) =>
+      apiData<SessionBudget[]>(path, { signal, schema: sessionBudgetsSchema }),
+    enabled: enabled && isPreview('router'),
+    meta: { path: '/api/budgets/session/:id' },
+  })
+}
+
+/**
+ * A harness owner's own recorded sessions with this harness (`/api/chat/sessions?agent_id=`, own-only on the server):
+ * exact, where the fleet-wide session sample would miss any but the newest. Only the owner can open a session's
+ * ledger (messages are owner-only), so the hub lists these for the owner and keeps the sample for anyone else.
+ */
+export function useHarnessChats(agentId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['agents', 'hub', agentId, 'chats'],
+    queryFn: async ({ signal }) => {
+      const body = await apiFetch<Partial<CursorPage<ChatSessionRow>>>(
+        withQuery('/api/chat/sessions', { agent_id: agentId, limit: SESSION_SAMPLE }),
+        { signal },
+      )
+      return Array.isArray(body?.data) ? body.data : []
+    },
+    enabled,
+    meta: { path: '/api/chat/sessions' },
+  })
 }

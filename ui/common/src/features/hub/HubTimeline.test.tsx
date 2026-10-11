@@ -9,6 +9,7 @@ import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureMocks } from '@/mocks/handlers'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
+import { agentWhere } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
 import { copy } from './copy'
@@ -215,11 +216,7 @@ describe('markers', () => {
 
   it('a coding harness reads no builds, versions or deployment, and says so when it has no changes', async () => {
     configureMocks({ variant: 'events-absent' })
-    const rows = (await (await fetch('/api/agents?limit=100&offset=0')).json()) as {
-      id: string
-      tags?: string[]
-    }[]
-    const harness = rows.find((a) => a.tags?.includes('coding-agent'))!
+    const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
     const rec = recordRequests()
     renderApp(`/agents/${harness.id}`)
     expect(await screen.findByText(new RegExp(copy.rail.harness))).toBeInTheDocument()

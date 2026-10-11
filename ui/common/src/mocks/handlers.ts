@@ -17,6 +17,7 @@ import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
 import {
   budgetAlerts,
   budgetStatus,
+  sessionBudgets,
   buildBudgetState,
   createBudget,
   deleteBudget,
@@ -58,6 +59,7 @@ import {
   ADMIN_ID,
   DEFAULT_PERSONA,
   generateHarnessSeed,
+  harnessTurns,
   type HarnessSeed,
   type HUser,
 } from './seed-harness'
@@ -125,6 +127,8 @@ import { nameProblem } from '@/features/deploy/name'
 import { parseVersion } from '@/features/deploy/version'
 import { DEFAULT_REGISTRY, parseReference } from '@/features/deploy/registry'
 import type { BuildStatus, UploadPipelineStatus } from '@/features/deploy/types'
+import type { ChatMessage, ChatSessionRow } from '@/features/chat/types'
+import type { SessionSummary } from '@/features/observability/types'
 import { PERSONAS, type Persona } from '@/features/onboarding/types'
 
 // Built on first use, so mock mode doesn't block first paint on seed generation.
@@ -262,6 +266,9 @@ export const MOCK_VARIANTS = [
   'hub-no-savings-row',
   'hub-many-builds',
   'events-absent',
+  // The harness session ledger (plans/feat-agent-centric.md PR1b): a recorded chat's observability session read fails,
+  // so the ledger renders from its messages alone.
+  'ledger-no-trace',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
 ] as const
@@ -639,6 +646,27 @@ const text = (body: string, status: number) =>
 const unauthorized = () => authRejection('missing or invalid token')
 
 /** Session/trace/span answers are `{data: …}` (no status_code/message) and plain-text errors. */
+/** A recorded chat as a `session/list` row: the DB-only fallback (no harness traces in the mock), raw agent name. */
+function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummary {
+  return {
+    id: r.session_id,
+    session_id: r.session_id,
+    agent_id: agentName,
+    session_annotations: [],
+    session_annotation_summaries: [],
+    num_traces: null,
+    start_time: r.created_at,
+    end_time: r.updated_at ?? r.created_at,
+    duration_ms: null,
+    first_input: null,
+    last_output: null,
+    token_usage: { total: null },
+    trace_latency_ms_p50: null,
+    trace_latency_ms_p99: null,
+    cost_summary: { total: { cost: null } },
+  }
+}
+
 function traceStore(fn: () => Response): Response {
   if (!loggedIn) return unauthorized()
   const v = variant()
@@ -1344,6 +1372,26 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       const v = variant()
       if (v === 'scan-fail' && Number(p.offset ?? 0) >= 100) return text('internal error', 500)
       const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down')
+      // session/list reads chat_sessions, so a recorded harness chat is a session too (service.rs); without harness
+      // traces in the mock it is the DB-only row. First page only: the extra rows don't shift later offsets.
+      if (!Number(p.offset ?? 0)) {
+        ensureChatSeed(chatCtx)
+        const start = p.start_time ? Date.parse(p.start_time) : nowFn() - 7 * 86_400_000
+        const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
+        const recorded = chatMockRows()
+          .filter(
+            (r) =>
+              r.is_coding_agent &&
+              r.user_id === ADMIN_ID &&
+              Date.parse(r.created_at) >= start &&
+              Date.parse(r.created_at) <= nowFn(),
+          )
+          .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
+        const limit = Math.min(100, Math.max(1, Number.parseInt(p.limit ?? '', 10) || 25))
+        body.data.sessions = [...recorded, ...body.data.sessions]
+          .sort((a, b) => Date.parse(b.start_time ?? '') - Date.parse(a.start_time ?? ''))
+          .slice(0, limit)
+      }
       if (v === 'empty')
         body.data = {
           ...body.data,
@@ -1356,6 +1404,9 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     http.get(`${OBS}/session/:sessionId`, ({ params: p }) =>
       traceStore(() => {
         const id = String(p.sessionId)
+        ensureChatSeed(chatCtx)
+        if (hasVariant('ledger-no-trace') && chatMockRows().some((r) => r.session_id === id))
+          return text('trace store unavailable', 502)
         const data = observabilityData(getSeed())
         // A chat from the chat mock is a session too (live, a chat's id IS its session id): answer
         // with the seeded showcase session, re-keyed, so View session / Open full trace resolve.
@@ -1365,8 +1416,20 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
           data.byId.get(id) ??
           (showcase ? { ...showcase, session_id: id, title: chat!.title } : undefined)
         // The server answers 404 for unknown AND inaccessible sessions (reveal no existence).
+        // A recorded harness chat names its own (harness) agent, not the showcase's.
+        const harness =
+          chat?.is_coding_agent && chat.agent_id
+            ? getAgents().agents.find((a) => a.id === chat.agent_id)?.name
+            : undefined
         return s
-          ? HttpResponse.json({ data: { session: sessionDetail(getSeed(), s) } })
+          ? HttpResponse.json({
+              data: {
+                session: {
+                  ...sessionDetail(getSeed(), s),
+                  ...(harness ? { agent_name: harness } : {}),
+                },
+              },
+            })
           : text(`session '${id}' not found`, 404)
       }),
     ),
@@ -1434,6 +1497,30 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       if (!getHarnessSeed().agents.some((a) => a.id === p.agent_id)) return undefined
       const limit = Math.min(100, Math.max(1, Number(p.limit) || 50))
       return HttpResponse.json(chatSessions(limit, p.agent_id ?? undefined))
+    }),
+    // GET /api/chat/sessions/:id/messages for those sessions (the ledger, PR1b): newest page first, ascending, paged
+    // back with ?prev_cursor= as the chat routes; any other id is the chat group's.
+    http.get('/api/chat/sessions/:id/messages', ({ params: prm, request }) => {
+      if (!loggedIn) return unauthorized()
+      const all = harnessMessages(String(prm.id))
+      if (!all) return undefined
+      const p = params(request)
+      const limit = Math.min(500, Math.max(1, Number(p.limit) || 100))
+      const end = p.prev_cursor
+        ? Math.max(
+            0,
+            all.findIndex((m) => m.id === p.prev_cursor),
+          )
+        : all.length
+      const page = all.slice(Math.max(0, end - limit), end)
+      const has_more = end - limit > 0
+      return HttpResponse.json({
+        data: page,
+        has_more,
+        next_cursor: has_more ? (page.at(-1)?.id ?? null) : null,
+        prev_cursor: page[0]?.id ?? null,
+        hitl: [],
+      })
     }),
     http.get(`${OBS}/coding-agents/usage`, ({ request }) => {
       if (!loggedIn) return unauthorized()
@@ -1618,6 +1705,42 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return HttpResponse.json(
           budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
+        )
+      }),
+    ),
+    // The ledger's per-session budgets (proposed AH-8, plans/feat-agent-centric.md PR1b): the caller's own sessions
+    // only (the messages route's rule); the recorded demo chat has a $1 session budget.
+    http.get('/api/budgets/session/:id', ({ params: p }) =>
+      routed(() => {
+        if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
+        ensureChatSeed(chatCtx)
+        const id = String(p.id)
+        const row = chatMockRows().find((r) => r.session_id === id && r.user_id === ADMIN_ID)
+        const recorded = row ? chatMockMessages(id) : harnessMessages(id)
+        const hs = getHarnessSeed().sessions.find((x) => x.session_id === id)
+        if (!recorded || (!row && !hs)) throw new MockHttpError(404, `session '${id}' not found`)
+        const turns = new Map<string, number>()
+        for (const m of recorded)
+          if (m.role === 'assistant') {
+            const key = m.external_turn_id ?? m.id
+            turns.set(key, (turns.get(key) ?? 0) + Number(m.cost_usd ?? 0))
+          }
+        return envelope(
+          sessionBudgets(
+            getBudgets(),
+            getSeed(),
+            getAgents().agents,
+            ADMIN_ID,
+            {
+              agentId: row ? row.agent_id : (hs?.agent_id ?? null),
+              start: Date.parse(row ? row.created_at : (hs?.started_at ?? '')),
+              turns: [...turns].map(([turn_id, used]) => ({
+                turn_id,
+                used_usd: Math.round(used * 1e6) / 1e6,
+              })),
+            },
+            id.endsWith('c004') ? 1 : undefined,
+          ),
         )
       }),
     ),
@@ -1956,6 +2079,82 @@ function harnessAgentDetail(a: HarnessSeed['agents'][number]) {
 }
 
 /** Own-only, newest first (ORDER BY updated_at DESC), optionally one agent (`?agent_id=`), as chat/routes.rs. */
+/**
+ * A harness session's recorded messages (the ledger, plans/feat-agent-centric.md PR1b): a recorded chat stores a user and
+ * an assistant message per turn with the CLI's usage, so the viewer's own seed sessions answer `/messages` as the chat
+ * routes would (owner-only: anyone else's is null, a 404). One tool call per turn (the trace writers' constant); the
+ * context report is the proposed per-turn record (AH-7), which the ledger reads only in preview mode.
+ */
+const HARNESS_PROMPTS = [
+  'Fix the failing test in the billing module',
+  'Explain what this function does',
+  'Refactor the retry logic',
+  'Add structured logging to the worker',
+  'Write the migration for the new column',
+]
+const HARNESS_TOOLS = ['read_file', 'grep', 'edit_file', 'run_tests', 'bash']
+function harnessMessages(sessionId: string): ChatMessage[] | null {
+  const hs = harnessData()
+  const s = hs.sessions.find((x) => x.session_id === sessionId && x.user_id === viewer().id)
+  const agent = s && hs.agents.find((a) => a.id === s.agent_id)
+  if (!s || !agent) return null
+  return harnessTurns(hs, [agent])
+    .filter((t) => t.session_id === sessionId)
+    .flatMap((t, i): ChatMessage[] => {
+      const base = { session_id: sessionId, external_turn_id: t.trace_id }
+      const replyAt = t.ts + 30_000
+      const pool = 30 + i * 2
+      return [
+        {
+          ...base,
+          id: `${t.trace_id}-u`,
+          role: 'user',
+          content: HARNESS_PROMPTS[i % HARNESS_PROMPTS.length]!,
+          timestamp: new Date(t.ts).toISOString(),
+        },
+        {
+          ...base,
+          id: `${t.trace_id}-a`,
+          role: 'assistant',
+          content: 'Done.',
+          timestamp: new Date(replyAt).toISOString(),
+          model: t.model,
+          input_tokens: t.input_tokens,
+          output_tokens: t.output_tokens,
+          // An unpriced turn has no cost (NULL), never $0.
+          cost_usd: t.cost_usd ? t.cost_usd.toFixed(6) : null,
+          usage_estimated: true,
+          metadata: {
+            coding_agent: {
+              capture_policy: 'content',
+              tool_calls: [
+                {
+                  id: `${t.trace_id}-call`,
+                  name: HARNESS_TOOLS[i % HARNESS_TOOLS.length],
+                  kind: 'tool',
+                  status: 'succeeded',
+                  started_at: new Date(t.ts + 5_000).toISOString(),
+                  ended_at: new Date(t.ts + 6_200).toISOString(),
+                  duration_ms: 1_200,
+                  association: 'exact',
+                  timestamp_quality: 'exact',
+                },
+              ],
+              context: {
+                'nasiko.context.strategy': 'pacms',
+                'nasiko.context.level': 'medium',
+                'nasiko.context.pool': pool,
+                'nasiko.context.pool_tokens': Math.round(t.input_tokens * 1.6),
+                'nasiko.context.kept': Math.round(pool / 3),
+                'nasiko.context.kept_tokens_est': t.input_tokens,
+              },
+            },
+          },
+        },
+      ]
+    })
+}
+
 function chatSessions(limit: number, agentId?: string) {
   const hs = harnessData()
   const me = viewer()

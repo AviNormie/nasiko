@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { traceSearchSchema, type TraceSearch } from '@/features/sessions/search'
 import { prefetchSessionDetail } from '@/features/sessions/api'
+import { LedgerPage } from '@/features/hub/components/LedgerPage'
 import { SessionTracePage } from '@/features/trace/SessionTracePage'
 import { useSetSearch } from '@/lib/search'
 
@@ -18,6 +19,9 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
 
 function TraceRoute() {
   const { sessionId } = Route.useParams()
+  const search = Route.useSearch()
   const setSearch = useSetSearch<TraceSearch>(Route.fullPath, true)
-  return <SessionTracePage sessionId={sessionId} search={Route.useSearch()} setSearch={setSearch} />
+  // The ledger is its own page, outside the trace page's success branch (plans/feat-agent-centric.md eng "Ledger").
+  if (search.view === 'ledger') return <LedgerPage sessionId={sessionId} search={search} />
+  return <SessionTracePage sessionId={sessionId} search={search} setSearch={setSearch} />
 }
