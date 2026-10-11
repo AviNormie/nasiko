@@ -11,8 +11,13 @@
  * - Needs is a count from fleet-level reads only: the agent needing action, its share of the failed sessions in the
  *   checked sample, and its pending requests. Unknown while those reads load.
  * - Totals are the sum of the rows shown, so a member never sees a total that doesn't match their rows.
+ * - Budget use (PR2b) is the agent budget's status, a preview of the proposed R-L10 contract: present only for agents
+ *   with a budget the viewer can read. It never sorts, so a background refresh never moves a row.
  */
 import type { AgentHealth } from '@/features/overview/health'
+import type { SpendTimeseriesPoint } from '@/features/tokenops/types'
+import type { Crossing } from '@/features/tokenops/forecast'
+import { copy } from './copy'
 import type { Scope } from './search'
 
 export interface HomeAgent {
@@ -35,6 +40,19 @@ export interface HomeRow extends HomeAgent {
   /** Tokens saved in the window; null when the savings read has no row for the agent. */
   saved: number | null
   savedBasis: string | null
+  /** This agent's budget for the month; null when it has none the viewer can read (or budgets are off). */
+  budget: RowBudget | null
+}
+
+/** One budget's use this period (the status read), and when it reaches its limit at this pace (X5). */
+export interface RowBudget {
+  used: number
+  limit: number
+  /** When the period resets (ISO), for the month name. */
+  resetsAt: string
+  /** Calls with no price this period: counted as $0, so use is a floor. */
+  unpriced: boolean
+  crossing: Crossing | null
 }
 
 export interface HomeInput {
@@ -45,6 +63,7 @@ export interface HomeInput {
   saved: ReadonlyMap<string, { tokens: number; basis: string }> | null
   ratings: ReadonlyMap<string, AgentHealth> | null
   needs: ReadonlyMap<string, number> | null
+  budgets?: ReadonlyMap<string, RowBudget> | null
 }
 
 export function buildRows(i: HomeInput): HomeRow[] {
@@ -62,6 +81,7 @@ export function buildRows(i: HomeInput): HomeRow[] {
         requests: money ? money.operations : null,
         saved: saved ? saved.tokens : null,
         savedBasis: saved ? saved.basis : null,
+        budget: i.budgets?.get(a.id) ?? null,
       }
     })
 }
@@ -143,3 +163,76 @@ export function needsByAgent(i: {
   for (const id of i.requestAgents) add(id)
   return out
 }
+
+// ─── PR2b: owner groups and sparklines ─────────────────────────────────────────────
+
+export interface RowGroup {
+  key: string
+  label: string
+  rows: HomeRow[]
+  /** Sum of the group's spend; null while any of it is unknown. */
+  spend: number | null
+}
+
+/** The group every owner the viewer can't name falls into (members read no user list). */
+export const OTHER_OWNERS = 'other-owners'
+const MINE = 'mine'
+
+/**
+ * Fleet's owner groups: the viewer's own first, then each named owner by name; owners the viewer can't name share one
+ * group, last. Rows keep their order inside a group.
+ */
+export function groupByOwner(
+  rows: readonly HomeRow[],
+  ownerName: (id: string) => string | null,
+  labels: { you: string; others: string },
+): RowGroup[] {
+  const groups = new Map<string, RowGroup>()
+  for (const r of rows) {
+    const name = r.mine ? labels.you : ownerName(r.ownerId)
+    const key = r.mine ? MINE : name ? `owner:${r.ownerId}` : OTHER_OWNERS
+    const g = groups.get(key) ?? { key, label: name ?? labels.others, rows: [], spend: 0 }
+    g.rows.push(r)
+    g.spend = g.spend === null || r.spend === null ? null : g.spend + r.spend
+    groups.set(key, g)
+  }
+  const rank = (g: RowGroup) => (g.key === MINE ? 0 : g.key === OTHER_OWNERS ? 2 : 1)
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label))
+}
+
+const HOUR = 3_600_000
+const DAY = 86_400_000
+
+/**
+ * A row's spend per bucket across the window, zero-filled: the timeseries is sparse (only buckets with data appear),
+ * and an omitted bucket is a real zero (TokenOps' `series.ts` rule).
+ */
+export function sparkPoints(
+  series: { bucket: 'hour' | 'day'; points: readonly SpendTimeseriesPoint[] },
+  win: { start: Date; end: Date },
+): number[] {
+  const step = series.bucket === 'hour' ? HOUR : DAY
+  const byStart = new Map(series.points.map((p) => [Date.parse(p.bucket_start), p.spend_usd]))
+  const out: number[] = []
+  for (let t = Math.floor(win.start.getTime() / step) * step; t < win.end.getTime(); t += step)
+    out.push(byStart.get(t) ?? 0)
+  return out
+}
+
+/** The budget period's month ("Oct"): the period that resets at `resetsAt` is the month before it (UTC). */
+export const budgetMonth = (iso: string) =>
+  new Date(Date.parse(iso) - 1).toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
+
+/** Fleet's owner groups in display order, or null for Yours' one list. */
+export const rowGroups = (
+  rows: readonly HomeRow[],
+  grouped: boolean,
+  ownerName: (id: string) => string | null,
+): RowGroup[] | null =>
+  grouped
+    ? groupByOwner(rows, ownerName, { you: copy.groups.you, others: copy.groups.others })
+    : null
+
+/** A row's owner line: "You", the owner's name, or "Another user" when the viewer can't name them. */
+export const ownerLine = (r: HomeRow, ownerName: (id: string) => string | null) =>
+  r.mine ? copy.table.you : (ownerName(r.ownerId) ?? copy.table.anotherUser)

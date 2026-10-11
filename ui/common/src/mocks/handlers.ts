@@ -270,6 +270,8 @@ export const MOCK_VARIANTS = [
   // The harness session ledger (plans/feat-agent-centric.md PR1b): a recorded chat's observability session read fails,
   // so the ledger renders from its messages alone.
   'ledger-no-trace',
+  // The scoped home (plans/feat-agent-centric.md DX mocks): a server without budgets (bare 404 on /api/budgets).
+  'home-budgets-absent',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
 ] as const
@@ -1684,12 +1686,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     // R2 budgets: the proposed R-L10 contract (docs/designs/openruntime-llm-router-recommendations.md). No server yet.
     http.get('/api/budgets', () =>
       routed(() => {
+        if (variant() === 'home-budgets-absent') return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return envelope(listBudgets(getBudgets(), ADMIN_ID))
       }),
     ),
     http.get('/api/budgets/status', () =>
       routed(() => {
+        if (variant() === 'home-budgets-absent') return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return HttpResponse.json(
           budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),

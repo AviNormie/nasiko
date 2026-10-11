@@ -8,13 +8,13 @@
  * decides (`scope.ts`), and until it does the table shows neutral skeleton rows. The window is the Overview's
  * `?range=` (7/30/90 days). "Now" is frozen per visit and moves on return, as the Overview's did.
  *
- * PR2b adds the spend sparklines, last change, budget use and owner grouping; PR2c the EE levels.
+ * PR2b adds the spend sparklines, last change, budget use (a preview) and owner grouping, and two-line rows below
+ * 640 px; PR2c the EE levels.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -23,7 +23,6 @@ import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { displayStatus } from '@/features/agents/status'
 import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
 import { usePausedFlows } from '@/features/flows/paused'
 import { homeNarrative } from '@/features/narrative/home'
@@ -31,16 +30,18 @@ import { usePersona } from '@/features/onboarding/api'
 import { homeScopeFor } from '@/features/onboarding/logic'
 import { FirstRun, FirstRunLead, FirstRunPreview } from '@/features/overview/components/FirstRun'
 import { NeedsYou } from '@/features/overview/components/NeedsYou'
-import { RATED_STATUSES, type Rating } from '@/features/overview/health'
 import { SetupGuide } from '@/features/overview/components/SetupGuide'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES } from '@/features/overview/search'
 import { meQuery, type Me } from '@/lib/api/auth'
 import { fmtLocalTime, fmtMoney, fmtMoneyFloor, fmtTokens } from '@/lib/format'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
-import { useHome, type SourceStatus } from './api'
+import { useHome, type HomeBudgets, type SourceStatus } from './api'
+import { PhoneRows } from './components/PhoneRows'
+import { RowsTable } from './components/RowsTable'
 import { copy } from './copy'
-import { DEFAULT_SORT, sortRows, totals, type HomeRow, type Sort, type SortKey } from './rows'
+import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import type { HomeSearch, Scope } from './search'
 import { RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
@@ -138,11 +139,26 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const { needsYou } = home
   const pausedFlows = usePausedFlows(needsYou.needs.rows.some((r) => r.kind === 'request'))
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT)
+  const phone = useMediaQuery(PHONE, false)
   const rows = home.rows ? sortRows(home.rows, sort) : null
   const t = rows ? totals(rows) : null
   const sentence = t
     ? homeNarrative({ scope: scope ?? 'fleet', ...t, floor: home.unpriced, days })
     : null
+
+  const rowsProps = {
+    rows: rows ?? [],
+    grouped: scope === 'fleet',
+    days,
+    range,
+    now,
+    win: home.win,
+    series: me.is_superuser,
+    ratingsPending: home.ratingsPending,
+    savedStatus: home.savedStatus,
+    budgets: home.budgets,
+    ownerName: home.owner,
+  }
 
   // First run: nothing deployed or registered yet. Its Setup guide (or deploy) card is on the page already.
   const firstRun = !!home.dir.data && !home.dir.data.length
@@ -222,6 +238,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           unpriced={home.unpriced}
           savedStatus={home.savedStatus}
           savedCapped={home.savedCapped}
+          budgets={home.budgets}
         />
       ) : null}
       {scope === 'fleet' && !me.is_superuser ? (
@@ -275,17 +292,11 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           {t && t.spend === 0 && !home.unpriced && !rows.some((r) => (r.requests ?? 0) > 0) ? (
             <p className="m-0 text-sm text-muted-foreground">{copy.empty.noUsage(days)}</p>
           ) : null}
-          <RowsTable
-            rows={rows}
-            days={days}
-            sort={sort}
-            onSort={setSort}
-            ratingsPending={home.ratingsPending}
-            savedStatus={home.savedStatus}
-            owner={(r) =>
-              r.mine ? copy.table.you : (home.owner(r.ownerId) ?? copy.table.anotherUser)
-            }
-          />
+          {phone ? (
+            <PhoneRows {...rowsProps} />
+          ) : (
+            <RowsTable {...rowsProps} sort={sort} onSort={setSort} />
+          )}
         </>
       )}
     </Frame>
@@ -300,6 +311,7 @@ function Strip({
   unpriced,
   savedStatus,
   savedCapped,
+  budgets,
 }: {
   totals: ReturnType<typeof totals>
   member: boolean
@@ -308,11 +320,17 @@ function Strip({
   unpriced: boolean
   savedStatus: SourceStatus
   savedCapped: boolean
+  budgets: HomeBudgets
 }) {
   const savedKnown = savedStatus === 'ok' || savedStatus === 'stale'
+  // Yours shows the viewer's own monthly budget; Fleet has no authoritative fleet budget to show, and owner and agent
+  // budgets overlap, so they are never summed into one (design "Home scope semantics").
+  const own = scope === 'yours' && budgets.state === 'ok' ? budgets.own : null
   return (
     <section aria-label={copy.strip.label} className="flex flex-col gap-1">
-      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-3">
+      <div
+        className={`grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border *:rounded-none *:border-0 ${own ? '@[560px]/overview:grid-cols-2 @[880px]/overview:grid-cols-4' : '@[560px]/overview:grid-cols-3'}`}
+      >
         <KpiTile
           label={copy.strip.spend}
           aside={
@@ -353,165 +371,41 @@ function Strip({
             <span className="text-xs text-muted-foreground">{copy.strip.basis(t.savedBasis)}</span>
           ) : null}
         </KpiTile>
+        {own ? (
+          <KpiTile
+            label={copy.budget.own}
+            title={copy.budget.ownHint}
+            aside={
+              <Badge variant="outline" className="text-3xs">
+                {copy.budget.preview}
+              </Badge>
+            }
+            value={`${Math.round((own.used / own.limit) * 100)}%`}
+          >
+            <span className="text-xs text-muted-foreground">
+              {copy.budget.use(
+                fmtMoneyFloor(own.used, own.unpriced),
+                fmtMoney(own.limit),
+                budgetMonth(own.resetsAt),
+              )}
+            </span>
+          </KpiTile>
+        ) : null}
         <KpiTile label={copy.strip.needs} value={t.needing === null ? '—' : String(t.needing)} />
       </div>
-      {asOf ? (
-        <p className="m-0 self-end text-xs text-muted-foreground">
-          {copy.strip.asOf(fmtLocalTime(asOf))}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs text-muted-foreground">
+        <p className="m-0">
+          {budgets.state === 'off'
+            ? copy.budget.off
+            : budgets.state === 'failed'
+              ? copy.budget.failed
+              : null}
         </p>
-      ) : null}
+        {asOf ? <p className="m-0">{copy.strip.asOf(fmtLocalTime(asOf))}</p> : null}
+      </div>
     </section>
   )
 }
 
-const SORTABLE: Record<string, SortKey> = {
-  name: 'name',
-  needs: 'needs',
-  spend: 'spend',
-  saved: 'saved',
-}
-
-function RowsTable({
-  rows,
-  days,
-  sort,
-  onSort,
-  ratingsPending,
-  savedStatus,
-  owner,
-}: {
-  rows: HomeRow[]
-  days: number
-  sort: Sort
-  onSort: (s: Sort) => void
-  ratingsPending: boolean
-  savedStatus: SourceStatus
-  owner: (r: HomeRow) => string
-}) {
-  const columns: DataTableColumn<HomeRow>[] = [
-    {
-      id: 'name',
-      header: copy.table.name,
-      // A value makes the column sortable (TanStack); the order itself comes from `sortRows`.
-      accessorFn: (r) => r.displayName,
-      meta: { rowHeader: true },
-      cell: ({ row }) => (
-        <span className="flex min-w-0 flex-col">
-          <span className="flex flex-wrap items-center gap-2">
-            <Link
-              to="/agents/$agentId"
-              params={{ agentId: row.original.id }}
-              className="font-medium underline-offset-4 hover:underline pointer-coarse:py-3"
-            >
-              {row.original.displayName}
-            </Link>
-            {row.original.harness ? <Badge variant="outline">{copy.table.harness}</Badge> : null}
-          </span>
-          <span className="text-xs text-muted-foreground">{owner(row.original)}</span>
-        </span>
-      ),
-    },
-    {
-      id: 'health',
-      header: copy.table.health,
-      enableSorting: false,
-      cell: ({ row }) => <Health row={row.original} pending={ratingsPending} />,
-    },
-    {
-      id: 'needs',
-      header: copy.table.needs,
-      accessorFn: (r) => r.needs,
-      meta: { numeric: true },
-      cell: ({ row }) => (row.original.needs === null ? '—' : row.original.needs),
-    },
-    {
-      id: 'spend',
-      header: copy.table.spend(days),
-      accessorFn: (r) => r.spend,
-      meta: { numeric: true },
-      cell: ({ row }) =>
-        row.original.spend === null ? (
-          '—'
-        ) : (
-          <span>
-            {fmtMoney(row.original.spend)}
-            {row.original.harness && row.original.spend > 0 ? (
-              <span className="ml-1 text-xs text-muted-foreground">{copy.table.estimate}</span>
-            ) : null}
-          </span>
-        ),
-    },
-    {
-      id: 'saved',
-      header: copy.table.saved,
-      accessorFn: (r) => r.saved,
-      meta: { numeric: true },
-      cell: ({ row }) =>
-        row.original.saved !== null ? (
-          fmtTokens(row.original.saved)
-        ) : savedStatus === 'ok' || savedStatus === 'stale' ? (
-          <span className="text-muted-foreground">{copy.strip.notReported}</span>
-        ) : (
-          '—'
-        ),
-    },
-  ]
-  return (
-    // Wider than a phone: this box scrolls the columns, and takes focus so the keyboard can too (PR2b adds two-line
-    // phone rows).
-    <div
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region must be focusable (axe scrollable-region-focusable)
-      tabIndex={0}
-      role="region"
-      aria-label={copy.table.label}
-      className="overflow-x-auto rounded-md contain-inline-size focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-    >
-      <DataTable
-        className="w-max min-w-full"
-        label={copy.table.label}
-        columns={columns}
-        data={rows}
-        getRowId={(r) => r.id}
-        sorting={[{ id: sort.key, desc: sort.desc }]}
-        onSortingChange={(next) => {
-          const s = next[0]
-          const key = s ? SORTABLE[s.id] : undefined
-          onSort(key && s ? { key, desc: s.desc } : DEFAULT_SORT)
-        }}
-      />
-    </div>
-  )
-}
-
-const BADGE: Record<Exclude<Rating, 'unknown'>, 'success' | 'warning' | 'destructive'> = {
-  healthy: 'success',
-  watch: 'warning',
-  action: 'destructive',
-}
-
-function Health({ row, pending }: { row: HomeRow; pending: boolean }) {
-  const h = row.health
-  // Harnesses and agents that aren't deployed are never rated; a deployed agent whose inputs failed is Unknown.
-  const rated = !row.harness && RATED_STATUSES.includes(displayStatus(row.status, false))
-  if (rated && pending) return <span className="text-muted-foreground">{copy.table.checking}</span>
-  if (!h || h.rating === 'unknown')
-    return (
-      <span className="text-muted-foreground">
-        {rated && h ? overviewCopy.rating.unknown : copy.table.notRated}
-      </span>
-    )
-  const reason = h.reasons[0]?.text
-  return (
-    <span className="flex flex-col gap-0.5">
-      {/* Each rating opens the Agents catalog filtered to it (the Overview's Fleet health counts did). */}
-      <Badge asChild variant={BADGE[h.rating]} className={`w-fit ${TOUCH}`}>
-        <Link to="/agents" search={{ health: h.rating }}>
-          {overviewCopy.rating[h.rating]}
-        </Link>
-      </Badge>
-      {reason && h.rating !== 'healthy' ? (
-        <span className="text-xs text-muted-foreground">{reason}</span>
-      ) : null}
-    </span>
-  )
-}
+/** Below this the rows are two lines each (design "Responsive": < 640 px). */
+const PHONE = '(max-width: 639px)'

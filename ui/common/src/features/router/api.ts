@@ -437,7 +437,15 @@ export function useBudgets(enabled = true) {
   })
 }
 
-export function useBudgetStatus(enabled: boolean) {
+/** A poll ends on a bare 404 (a server without budgets) or a 401: asking again every minute can't change either. */
+export const budgetPollEnds = (err: unknown) =>
+  err instanceof ApiError && (err.status === 404 || err.status === 401)
+
+/**
+ * The status of every budget the caller can read. `pollMs` re-reads it while the tab is visible (the home's budget
+ * column, plans/feat-agent-centric.md PR2 "Live budgets"): no retry, since the next poll is the retry.
+ */
+export function useBudgetStatus(enabled: boolean, pollMs?: number) {
   const path = '/api/budgets/status'
   return useQuery({
     queryKey: routerKeys.budgetStatus,
@@ -449,6 +457,13 @@ export function useBudgetStatus(enabled: boolean) {
     },
     enabled,
     ...list,
+    ...(pollMs
+      ? {
+          retry: false,
+          refetchInterval: (q: { state: { error: unknown } }) =>
+            budgetPollEnds(q.state.error) ? false : pollMs,
+        }
+      : {}),
   })
 }
 

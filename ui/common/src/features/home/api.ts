@@ -9,8 +9,22 @@
  *
  * A figure is shown only for the window it was read for: a window change's kept-previous data is "loading", never the
  * new window's number. A source that failed is unknown ("—"), never 0.
+ *
+ * PR2b adds one budgets read for all rows (a preview of the proposed R-L10 contract, polled every minute while the tab
+ * is visible), and two reads per row on screen through a limiter of 4: the agent's spend series (superusers only: the
+ * timeseries isn't ACL-scoped) and its build records (last change). A row read is dropped when its row scrolls away.
  */
+import { useQuery } from '@tanstack/react-query'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
+import { fetchAgentBuilds } from '@/features/deploy/api'
+import { createLimiter } from '@/features/observability/limiter'
+import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/router/api'
+import type { Budget, BudgetStatus } from '@/features/router/types'
+import { crossingDate } from '@/features/tokenops/forecast'
+import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
+import type { ResolvedWindow } from '@/features/tokenops/window'
+import { apiData, withQuery } from '@/lib/api/client'
+import { isPreview } from '@/lib/env'
 import { isHarness } from '@/features/agents/status'
 import { usePendingRequests } from '@/features/chat/api'
 import { pendingRequestRows } from '@/features/chat/waiting'
@@ -19,9 +33,9 @@ import { uniqueByName } from '@/features/overview/health'
 import type { Range } from '@/features/overview/search'
 import { useDashboard, useSavings } from '@/features/tokenops/api'
 import type { Me } from '@/lib/api/auth'
-import { buildRows, needsByAgent, type HomeAgent } from './rows'
+import { buildRows, needsByAgent, type HomeAgent, type RowBudget } from './rows'
 import type { Scope } from './search'
-import { SAVINGS_ROWS } from './tuning'
+import { BUDGET_POLL_MS, ROW_READ_STALE_MS, ROW_READS, SAVINGS_ROWS } from './tuning'
 
 /** Where a source stands for the current window: its numbers are shown only when `ok` (or `stale`, kept and labelled). */
 export type SourceStatus = 'loading' | 'ok' | 'failed' | 'stale'
@@ -56,6 +70,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
   const ready = !!fleet.error || (!!fleet.summary && any)
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const pending = usePendingRequests(me.sub, true)
+  const budgets = useHomeBudgets(any)
 
   const agents: HomeAgent[] = (dir.data ?? []).map((a) => ({
     id: a.id,
@@ -123,6 +138,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
           // Ratings settle together: a half-loaded set calls agents Healthy before their comparisons arrive.
           ratings: fleet.ratingsPending ? null : (fleet.summary?.byId ?? null),
           needs: needsMap,
+          budgets: budgets.byAgent,
         })
       : null
 
@@ -133,6 +149,8 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
     needsYou,
     rows,
     ratingsPending: fleet.ratingsPending,
+    budgets,
+    win,
     owner: (id: string) => users.data?.get(id) ?? null,
     spendStatus,
     /** Calls in the window had no price: spend is a floor. */
@@ -146,4 +164,98 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
       if (savings.isError) void savings.refetch()
     },
   }
+}
+
+// ─── PR2b: budgets, and the reads per row on screen ─────────────────────────────────────────────
+
+/**
+ * Where budgets stand: `off` when this server has none (a bare 404) or they aren't a preview here (every budget is
+ * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep.
+ */
+export type BudgetsState = 'off' | 'loading' | 'failed' | 'ok'
+
+export interface HomeBudgets {
+  state: BudgetsState
+  /** Agent budgets by agent id; null until both reads answered. */
+  byAgent: ReadonlyMap<string, RowBudget> | null
+  /** The viewer's own monthly budget (calls billed to them), when they set one. */
+  own: RowBudget | null
+  /** When the status was last read (the X5 clock and the "updated" stamp). */
+  updatedAt: number
+}
+
+function rowBudget(b: Budget, st: BudgetStatus, now: Date): RowBudget {
+  const days = st.daily.map((d) => ({
+    date: d.date,
+    spend_usd: d.cost_usd,
+    operations: 0,
+    intensity: 0,
+  }))
+  return {
+    used: st.used_usd,
+    limit: b.limit_usd,
+    resetsAt: st.resets_at,
+    unpriced: st.unpriced_calls > 0,
+    crossing: crossingDate(b.limit_usd, days, now),
+  }
+}
+
+function useHomeBudgets(any: boolean): HomeBudgets {
+  const preview = isPreview('router')
+  const list = useBudgets(preview && any)
+  const status = useBudgetStatus(preview && !!list.data?.length, BUDGET_POLL_MS)
+  const off = !preview || budgetPollEnds(list.error) || budgetPollEnds(status.error)
+  const failed = (list.isError && !list.data) || (status.isError && !status.data)
+  const state: BudgetsState = off
+    ? 'off'
+    : failed
+      ? 'failed'
+      : list.isPending || (!!list.data?.length && status.isPending)
+        ? 'loading'
+        : 'ok'
+  if (state !== 'ok' || !list.data) return { state, byAgent: null, own: null, updatedAt: 0 }
+  // The status' own read time: the elapsed days and its daily series must agree (router budgets' rule).
+  const now = new Date(status.dataUpdatedAt)
+  const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
+  const byAgent = new Map<string, RowBudget>()
+  let own: RowBudget | null = null
+  for (const b of list.data) {
+    const st = byId.get(b.id)
+    if (!st) continue
+    if (b.scope === 'agent' && b.agent_id) byAgent.set(b.agent_id, rowBudget(b, st, now))
+    else if (b.scope === 'owner') own = rowBudget(b, st, now)
+  }
+  return { state, byAgent, own, updatedAt: status.dataUpdatedAt }
+}
+
+/** Row reads in flight across the page (eng "Home execution table": limiter of 4). */
+const rowLimiter = createLimiter(ROW_READS)
+
+const FINOPS = '/api/observability/finops'
+
+/**
+ * One agent's spend series for the window, for its sparkline. Superusers only: `/finops/spend-timeseries` is fleet-wide
+ * on the server, not ACL-scoped (eng "Member money"). Mounted only while the row is on screen; leaving it cancels the
+ * read, or drops it from the limiter's queue.
+ */
+export function useRowSeries(id: string, win: Pick<ResolvedWindow, 'key' | 'params'>) {
+  const path = withQuery(`${FINOPS}/spend-timeseries`, { ...win.params, agent_id: id })
+  return useQuery({
+    queryKey: ['home', 'series', id, win.key],
+    queryFn: ({ signal }) =>
+      rowLimiter(signal, () => apiData<FinopsSpendTimeseries>(path, { signal })),
+    staleTime: ROW_READ_STALE_MS,
+    meta: { path: `${FINOPS}/spend-timeseries` },
+  })
+}
+
+/** One agent's build records (newest 20), for its last change; `{available:false}` without deploy rights. */
+export function useRowBuilds(id: string) {
+  return useQuery({
+    queryKey: ['home', 'builds', id],
+    queryFn: ({ signal }) => rowLimiter(signal, () => fetchAgentBuilds(id, signal)),
+    staleTime: ROW_READ_STALE_MS,
+    retry: false,
+    meta: { path: '/api/builds/agent/{id}' },
+  })
 }
