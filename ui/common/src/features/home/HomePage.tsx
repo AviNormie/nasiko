@@ -140,7 +140,9 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT)
   const rows = home.rows ? sortRows(home.rows, sort) : null
   const t = rows ? totals(rows) : null
-  const sentence = t ? homeNarrative({ scope: scope ?? 'fleet', ...t, days }) : null
+  const sentence = t
+    ? homeNarrative({ scope: scope ?? 'fleet', ...t, floor: home.unpriced, days })
+    : null
 
   // First run: nothing deployed or registered yet. Its Setup guide (or deploy) card is on the page already.
   const firstRun = !!home.dir.data && !home.dir.data.length

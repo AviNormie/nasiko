@@ -11,6 +11,8 @@ export interface HomeNarrativeInput {
   harnesses: number
   /** Sum of the rows' spend; null while it loads or failed. */
   spend: number | null
+  /** Some calls in the window had no price: the spend is at least this much. */
+  floor?: boolean
   days: number
   /** Rows that need the viewer; null while those reads load. */
   needing: number | null
@@ -30,8 +32,11 @@ export function homeNarrative(i: HomeNarrativeInput): string | null {
     i.spend === null
       ? ''
       : i.spend > 0
-        ? ` spent ${fmtMoney(i.spend)} in the last ${i.days} days`
-        : ` spent nothing in the last ${i.days} days`
+        ? ` spent ${i.floor ? 'at least ' : ''}${fmtMoney(i.spend)} in the last ${i.days} days`
+        : // Nothing priced is not nothing spent when calls went unpriced: leave the amount out.
+          i.floor
+          ? ''
+          : ` spent nothing in the last ${i.days} days`
   const needs = i.needing ? `; ${i.needing} ${i.needing === 1 ? 'needs' : 'need'} you` : ''
   return money || needs ? `${who}${money}${needs}.` : null
 }
