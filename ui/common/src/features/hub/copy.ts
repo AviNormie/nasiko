@@ -5,6 +5,7 @@
  */
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+const sessionsN = (n: number) => plural(n, 'session', 'sessions')
 
 export const copy = {
   section: 'Activity over time',
@@ -109,10 +110,13 @@ export const copy = {
     checked: (parts: string[]) => `Checked ${parts.join(', ')}.`,
     partRequests: 'pending requests',
     partStatus: 'its health (rated on the last 7 days)',
+    // An empty sample starts at the agent's creation or 7 days back, so it means this agent had none in 7 days (QA).
     partSessions: (checked: number, found: number, scanned: number) =>
-      found === 0
-        ? `the latest ${scanned} sessions you can see (none of them this agent's)`
-        : `${checked} of this agent's ${found} sessions in the latest ${scanned} you can see`,
+      scanned === 0
+        ? "this agent's sessions (none in the last 7 days)"
+        : found === 0
+          ? `the latest ${sessionsN(scanned)} you can see (none of them this agent's)`
+          : `${checked} of this agent's ${found} sessions in the latest ${scanned} you can see`,
     unproven: (n: number) =>
       `${n} pending ${n === 1 ? 'request' : 'requests'} can't be tied to your chats yet, so requests aren't fully checked.`,
     shared: '(another visible agent has the same name: some may be its sessions)',
@@ -135,7 +139,10 @@ export const copy = {
   runs: {
     sessions: 'Recent sessions',
     sessionsWindow: 'last 7 days',
-    sessionsNone: (scanned: number) => `None in the latest ${scanned} sessions checked.`,
+    sessionsNone: (scanned: number) =>
+      scanned === 0
+        ? 'None in the last 7 days.'
+        : `None in the latest ${sessionsN(scanned)} checked.`,
     sessionsAll: (name: string) => `Sessions for ${name}`,
     sessionsShared: 'Another visible agent has the same name: these may be its sessions.',
     sessionsError: "Sessions couldn't load",
