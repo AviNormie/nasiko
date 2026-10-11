@@ -160,6 +160,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     savedStatus: home.savedStatus,
     budgets: home.budgets,
     ownerName: home.owner,
+    unpriced: home.unpriced,
   }
 
   // First run: nothing deployed or registered yet. Its Setup guide (or deploy) card is on the page already.

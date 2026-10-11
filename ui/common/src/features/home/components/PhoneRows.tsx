@@ -23,7 +23,7 @@ export function PhoneRows(p: RowsProps) {
         groups.map((g) => (
           <section key={g.key} aria-label={g.label} className="flex flex-col gap-1">
             <h2 className="m-0 text-xs font-medium">
-              <GroupLabel group={g} />
+              <GroupLabel group={g} floor={p.unpriced} />
             </h2>
             <List {...p} rows={g.rows} />
           </section>
