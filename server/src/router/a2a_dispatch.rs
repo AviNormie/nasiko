@@ -296,6 +296,7 @@ pub async fn a2a_dispatch_handler(
             &state,
             agent,
             &query,
+            &text,
             &outbound_query,
             &task_id,
             &context_id,
@@ -639,11 +640,16 @@ pub(crate) async fn orchestrator_stream(
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — mirrors the direct-agent proxy
     // (`agent_proxy.rs`). `derive_boundary_signals` reads `metadata->>'context_id'`.
+    // `user_message` is what the LLM gateway's salience gate and classifier score;
+    // only a user-started turn has one — a HITL resume's `raw_text` is platform-written.
     //
     // Re-opens on conflict for the same reason as the proxy path: a repeat
     // request under one traceparent must not inherit the `completed` status the
     // previous one left, or strict attribution denies the agent's LLM calls.
-    let flow_metadata = serde_json::json!({ "context_id": context_id });
+    let flow_metadata = match kind {
+        TurnKind::User => serde_json::json!({ "context_id": context_id, "user_message": raw_text }),
+        TurnKind::Continuation => serde_json::json!({ "context_id": context_id }),
+    };
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, 'orchestrator', $3, 'running', $4)
@@ -1186,6 +1192,8 @@ async fn agent_stream(
     // agent without also being recorded as "what the user said" in the flow UI or an
     // observability/audit trail.
     query: &str,
+    // What the caller typed, before history packing — recorded on the flow for the LLM gateway.
+    user_message: &str,
     // What's actually sent to the agent in the A2A request body — `query`, or `query` with
     // injected context prepended. Never read for persistence/tracing.
     outbound_query: &str,
@@ -1244,9 +1252,13 @@ async fn agent_stream(
     // falls back to the per-turn flow_id, so every turn of one conversation looks
     // like a new conversation and the sticky decision is never reused.
     //
+    // `user_message` (the text before history packing) feeds the LLM gateway's
+    // salience gate and classifier — see the orchestrator branch above.
+    //
     // Re-opens on conflict — see the orchestrator branch above: a repeat request
     // under one traceparent must not inherit the previous one's `completed`.
-    let flow_metadata = serde_json::json!({ "context_id": context_id });
+    let flow_metadata =
+        serde_json::json!({ "context_id": context_id, "user_message": user_message });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
