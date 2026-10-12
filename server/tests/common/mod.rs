@@ -369,6 +369,7 @@ impl TestServer {
         self.admin_pool.close().await;
     }
 
+    #[allow(dead_code)]
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
@@ -451,7 +452,6 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         embedding_model: "text-embedding-3-small".into(),
         agent_call_timeout_secs: 600,
         pacms_history_pool_size: 150,
-        minimal_code_holdout_pct: 0,
         savings_factor_refresh_secs: 86_400,
         savings_factor_min_samples: 1_600,
         savings_factor_window_days: 30,

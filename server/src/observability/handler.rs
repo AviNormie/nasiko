@@ -13,7 +13,7 @@ use tracing::instrument;
 use utoipa::IntoParams;
 
 use super::service::{
-    EnsureSessionOutcome, InsightsRequest, ObservabilityService, parse_iso_or_default,
+    EnsureSessionOutcome, FinopsAccess, InsightsRequest, ObservabilityService, parse_iso_or_default,
 };
 
 /// Request extension injected by EE middleware to scope FinOps queries to a
@@ -494,8 +494,7 @@ pub async fn get_finops_dashboard(
             Err(r) => return r,
         };
 
-    let user_ids = user_scope.map(|Extension(s)| s.0);
-    let accessible_agent_ids = accessible_agent_ids(&state, &claims).await;
+    let scope = finops_scope(&state, &claims, user_scope).await;
     let owner_id = (params.my_agent && agent_name.is_none()).then_some(claims.sub.as_str());
     match svc(&state)
         .get_finops_dashboard(
@@ -508,8 +507,7 @@ pub async fn get_finops_dashboard(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
-            user_ids.as_deref(),
-            accessible_agent_ids.as_deref(),
+            scope.access(),
             owner_id,
             view,
         )
@@ -569,10 +567,11 @@ fn resolve_range_params(
         (status = 400, description = "Malformed filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_timeseries(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsFilterParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -582,6 +581,8 @@ pub async fn get_finops_spend_timeseries(
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_timeseries(
             params.start_time.as_deref(),
@@ -590,6 +591,7 @@ pub async fn get_finops_spend_timeseries(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -611,10 +613,11 @@ pub async fn get_finops_spend_timeseries(
         (status = 400, description = "Malformed month/filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_calendar(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsSpendCalendarParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -624,6 +627,8 @@ pub async fn get_finops_spend_calendar(
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_calendar(
             &params.month,
@@ -631,6 +636,7 @@ pub async fn get_finops_spend_calendar(
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -652,22 +658,26 @@ pub async fn get_finops_spend_calendar(
         (status = 400, description = "Malformed date/filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_spend_calendar_day(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsDayDrilldownParams>,
 ) -> Response {
     let agent_name = match resolve_agent_filter(&state.db, params.agent_id.as_deref()).await {
         Ok(n) => n,
         Err(r) => return r,
     };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_spend_calendar_day(
             &params.date,
             agent_name.as_deref(),
             params.model.as_deref(),
             params.provider.as_deref(),
+            access,
         )
         .await
     {
@@ -691,10 +701,11 @@ pub async fn get_finops_spend_calendar_day(
         (status = 400, description = "Malformed filter"),
     ),
 )]
-#[instrument(skip(state))]
+#[instrument(skip(state, user_scope))]
 pub async fn get_finops_attributions(
     State(state): State<AppState>,
-    _claims: Claims,
+    claims: Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
     Query(params): Query<FinopsAttributionsParams>,
 ) -> Response {
     if let Err(r) = validate_range(params.range.as_deref()) {
@@ -713,6 +724,8 @@ pub async fn get_finops_attributions(
             Ok(v) => v,
             Err(r) => return r,
         };
+    let scope = finops_scope(&state, &claims, user_scope).await;
+    let access = scope.access();
     match svc(&state)
         .get_finops_attributions(
             start_time.as_deref(),
@@ -725,6 +738,7 @@ pub async fn get_finops_attributions(
             params.sort_dir.as_deref(),
             params.limit,
             params.offset,
+            access,
         )
         .await
     {
@@ -796,6 +810,35 @@ pub async fn get_agent_hours(
     {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => obs_err(e),
+    }
+}
+
+struct CallerScope {
+    user_ids: Option<Vec<uuid::Uuid>>,
+    accessible_agent_ids: Option<Vec<uuid::Uuid>>,
+    workflow_owner: Option<uuid::Uuid>,
+}
+
+impl CallerScope {
+    fn access(&self) -> FinopsAccess<'_> {
+        FinopsAccess {
+            user_ids: self.user_ids.as_deref(),
+            accessible_agent_ids: self.accessible_agent_ids.as_deref(),
+            workflow_owner: self.workflow_owner,
+        }
+    }
+}
+
+async fn finops_scope(
+    state: &AppState,
+    claims: &Claims,
+    user_scope: Option<Extension<FinopsUserScope>>,
+) -> CallerScope {
+    CallerScope {
+        user_ids: user_scope.map(|Extension(s)| s.0),
+        accessible_agent_ids: accessible_agent_ids(state, claims).await,
+        workflow_owner: (!claims.is_superuser)
+            .then(|| claims.sub.parse().unwrap_or(uuid::Uuid::nil())),
     }
 }
 
@@ -1036,215 +1079,5 @@ async fn resolve_agent_uuid(
     match found {
         Some(id) => Ok(Some(id)),
         None => Err((StatusCode::NOT_FOUND, "agent not found").into_response()),
-    }
-}
-
-// ─── 6c. GET /finops/context-savings (+ /agents, /top-requests) ───────────────
-
-/// Query params for the three `context-savings` routes.
-///
-/// The window and agent filter are spelled exactly as the other finops routes spell them, so the
-/// page can carry its filter state across without translating it.
-#[derive(Debug, Deserialize)]
-pub struct ContextSavingsParams {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
-    pub range: Option<String>,
-    pub agent_id: Option<String>,
-    /// `daily` | `hourly`. Only read by the totals route.
-    pub series: Option<String>,
-    /// Row cap for `/agents` and `/top-requests`.
-    pub limit: Option<i64>,
-    /// One chart bar's interval, for `/top-requests`.
-    pub from: Option<String>,
-    pub to: Option<String>,
-}
-
-/// Rows returned by the two list routes. The UI asks for 5; the cap stops a wide window returning
-/// the whole estate in one response.
-const CONTEXT_DEFAULT_LIMIT: i64 = 10;
-const CONTEXT_MAX_LIMIT: i64 = 50;
-
-/// Resolve everything the three routes share: window, agent filter, access list, limit.
-///
-/// One function, because an agent filter that resolved differently on the chart and on the table
-/// beneath it would show two scopes under one heading.
-#[allow(clippy::result_large_err)]
-async fn context_savings_query<'a>(
-    state: &AppState,
-    claims: &Claims,
-    params: &'a ContextSavingsParams,
-    accessible: &'a Option<Vec<uuid::Uuid>>,
-) -> Result<super::context_savings::ContextSavingsQuery<'a>, Response> {
-    validate_range(params.range.as_deref())?;
-    let series = super::context_savings::Bucket::parse(params.series.as_deref())?;
-
-    let (start_time, end_time) =
-        resolve_range_params(&params.start_time, &params.end_time, &params.range)?;
-    let start = parse_iso_or_default(start_time.as_deref(), 30);
-    let end = end_time
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|d| d.with_timezone(&Utc))
-        .unwrap_or_else(Utc::now);
-
-    // An unknown or deleted agent is a 400 (the filter cannot be honoured), while one the caller
-    // may not see is a 404 with the same body as "no such agent" — telling the two apart would let
-    // a non-grantee enumerate agent names.
-    let agent_id = match params.agent_id.as_deref().filter(|s| !s.is_empty()) {
-        None => None,
-        Some(raw) => match super::routes::resolve_agent(&state.db, raw).await {
-            None => {
-                return Err(
-                    (StatusCode::BAD_REQUEST, format!("agent '{raw}' not found")).into_response(),
-                );
-            }
-            Some((id, _)) => {
-                if !crate::acl::can_access_agent(state, claims, id).await {
-                    return Err((StatusCode::NOT_FOUND, "agent not found").into_response());
-                }
-                Some(id)
-            }
-        },
-    };
-
-    let parse_bound = |raw: Option<&str>, field: &str| match raw.filter(|s| !s.is_empty()) {
-        None => Ok(None),
-        Some(s) => DateTime::parse_from_rfc3339(s)
-            .map(|d| Some(d.with_timezone(&Utc)))
-            .map_err(|_| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("{field} must be an RFC 3339 timestamp"),
-                )
-                    .into_response()
-            }),
-    };
-    let from = parse_bound(params.from.as_deref(), "from")?;
-    let to = parse_bound(params.to.as_deref(), "to")?;
-
-    let limit = match params.limit {
-        None => CONTEXT_DEFAULT_LIMIT,
-        Some(n) if (1..=CONTEXT_MAX_LIMIT).contains(&n) => n,
-        Some(_) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("limit must be 1-{CONTEXT_MAX_LIMIT}"),
-            )
-                .into_response());
-        }
-    };
-
-    let caller_id = claims.user_uuid().map_err(IntoResponse::into_response)?;
-
-    Ok(super::context_savings::ContextSavingsQuery {
-        start,
-        end,
-        agent_id,
-        caller_id,
-        caller_is_superuser: claims.is_superuser,
-        accessible_agent_ids: accessible.as_deref(),
-        series,
-        limit,
-        from,
-        to,
-    })
-}
-
-/// The envelope these routes answer in.
-///
-/// Deliberately the older `{data, status_code, message}` shape rather than the current standard:
-/// the Optimization page parses this one today, and a route that ships in the newer shape reads to
-/// it as a malformed response, not as a better one.
-#[derive(Debug, serde::Serialize)]
-pub struct ContextSavingsEnvelope<T> {
-    pub data: T,
-    pub status_code: u16,
-    pub message: String,
-}
-
-fn context_envelope<T: serde::Serialize>(data: T) -> Response {
-    Json(ContextSavingsEnvelope {
-        data,
-        status_code: 200,
-        message: "ok".into(),
-    })
-    .into_response()
-}
-
-fn context_failure(e: sqlx::Error, what: &str) -> Response {
-    tracing::error!(%e, "{what} query failed");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
-}
-
-/// `GET /api/observability/finops/context-savings`
-#[utoipa::path(
-    get,
-    path = "/api/observability/finops/context-savings",
-    tag = "observability",
-    responses((status = 200, description = "History selection savings for a window")),
-    security(("bearer_auth" = []))
-)]
-pub async fn get_context_savings(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(params): Query<ContextSavingsParams>,
-) -> Response {
-    let accessible = accessible_agent_ids(&state, &claims).await;
-    let query = match context_savings_query(&state, &claims, &params, &accessible).await {
-        Ok(q) => q,
-        Err(r) => return r,
-    };
-    match super::context_savings::get_context_savings(&state.db, &query).await {
-        Ok(data) => context_envelope(data),
-        Err(e) => context_failure(e, "context savings"),
-    }
-}
-
-/// `GET /api/observability/finops/context-savings/agents`
-#[utoipa::path(
-    get,
-    path = "/api/observability/finops/context-savings/agents",
-    tag = "observability",
-    responses((status = 200, description = "History volume per agent")),
-    security(("bearer_auth" = []))
-)]
-pub async fn get_context_savings_agents(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(params): Query<ContextSavingsParams>,
-) -> Response {
-    let accessible = accessible_agent_ids(&state, &claims).await;
-    let query = match context_savings_query(&state, &claims, &params, &accessible).await {
-        Ok(q) => q,
-        Err(r) => return r,
-    };
-    match super::context_savings::get_by_agent(&state.db, &query).await {
-        Ok(data) => context_envelope(data),
-        Err(e) => context_failure(e, "context savings by agent"),
-    }
-}
-
-/// `GET /api/observability/finops/context-savings/top-requests`
-#[utoipa::path(
-    get,
-    path = "/api/observability/finops/context-savings/top-requests",
-    tag = "observability",
-    responses((status = 200, description = "The requests that carried the most history")),
-    security(("bearer_auth" = []))
-)]
-pub async fn get_context_savings_top_requests(
-    State(state): State<AppState>,
-    claims: Claims,
-    Query(params): Query<ContextSavingsParams>,
-) -> Response {
-    let accessible = accessible_agent_ids(&state, &claims).await;
-    let query = match context_savings_query(&state, &claims, &params, &accessible).await {
-        Ok(q) => q,
-        Err(r) => return r,
-    };
-    match super::context_savings::get_top_requests(&state.db, &query).await {
-        Ok(data) => context_envelope(data),
-        Err(e) => context_failure(e, "context savings top requests"),
     }
 }
