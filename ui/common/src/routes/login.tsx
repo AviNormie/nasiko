@@ -1,8 +1,8 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, CircleAlert, Eye, EyeOff } from 'lucide-react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { createFileRoute, useLocation, useNavigate } from '@tanstack/react-router'
+import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod/mini'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -16,6 +16,7 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { Spinner } from '@/components/ui/spinner'
+import { useSlots } from '@/app/edition-context'
 import { copy } from '@/app/shell/copy'
 import { LoginGlow, LoginShowcase } from '@/app/shell/LoginShowcase'
 import { NasikoLockup } from '@/app/shell/NasikoMark'
@@ -30,13 +31,15 @@ import {
   stopDeployWork,
   whenSignedOut,
 } from '@/app/shell/signOut'
-import { lockedFor, login, safeRedirect } from '@/lib/api/auth'
-import { ApiError, isTimeoutError } from '@/lib/api/client'
+import { lockedFor, login, type Me, safeRedirect } from '@/lib/api/auth'
+import { ApiError, apiFetch, isTimeoutError } from '@/lib/api/client'
 import {
   broadcastSession,
   bumpSignInGeneration,
   clearSignedOutMark,
+  markExternalSignIn,
   signedOutMark,
+  takeExternalSignIn,
   withSessionLock,
 } from '@/lib/session'
 import { env } from '@/lib/env'
@@ -50,6 +53,8 @@ export const Route = createFileRoute('/login')({
     signout: opt(z.literal('failed')),
     // Set by Settings when a password change came back without a new session (plans/feat-settings.md §1.1).
     password: opt(z.literal('changed')),
+    // Back from a `loginMethods` slot's provider (EE single sign-on): its cookie is set, or `#error=<code>` says why not.
+    signin: opt(z.literal('external')),
   }),
   component: LoginPage,
 })
@@ -62,9 +67,43 @@ const loginSchema = z.object({
 type LoginValues = z.infer<typeof loginSchema>
 
 function LoginPage() {
-  const { redirect, expired, signout, password } = Route.useSearch()
+  const { redirect, expired, signout, password, signin } = Route.useSearch()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const LoginMethods = useSlots().loginMethods
+  const hash = useLocation({ select: (l) => l.hash })
+  const externalError =
+    signin === 'external'
+      ? (new URLSearchParams(hash.replace(/^#/, '')).get('error') ?? undefined)
+      : undefined
+  const [finishing, setFinishing] = useState(signin === 'external' && !externalError)
+  const finishStarted = useRef(false)
+  // An external sign-in comes back here, its cookie already set, to finish as the password one does below.
+  useEffect(() => {
+    if (!finishing || finishStarted.current) return
+    finishStarted.current = true
+    const startedHere = takeExternalSignIn()
+    void (async () => {
+      try {
+        // A failed logout's barrier lifts only for a sign-in this tab started (review D1).
+        if (signedOutMark() === true && !startedHere) throw new Error('not started in this tab')
+        await whenSignedOut()
+        await withSessionLock(async () => {
+          const me = await apiFetch<Me>('/api/me', { timeout: LOGIN_TIMEOUT_MS })
+          bumpSignInGeneration()
+          clearSignedOutMark()
+          broadcastSession({ type: 'signed-in', sub: me.sub })
+        })
+        await resetQueryClient(queryClient)
+        await navigate({ to: safeRedirect(redirect), replace: true })
+      } catch {
+        // No session came back (or not ours to resume): the form, as on any visit.
+        setFinishing(false)
+      }
+    })()
+  }, [finishing, navigate, queryClient, redirect])
+  // Where an external sign-in returns to: here, carrying the page to open after.
+  const returnTo = `/login?${new URLSearchParams({ signin: 'external', ...(redirect ? { redirect: safeRedirect(redirect) } : {}) })}`
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues:
@@ -218,14 +257,21 @@ function LoginPage() {
                   type="submit"
                   size="lg"
                   className="h-13 rounded-[10px] text-[15px]"
-                  disabled={busy || retrying}
+                  disabled={busy || retrying || finishing}
                 >
-                  {busy ? <Spinner aria-hidden /> : null}
-                  {busy ? copy.login.submitting : copy.login.submit}
-                  {busy ? null : <ArrowRight aria-hidden />}
+                  {busy || finishing ? <Spinner aria-hidden /> : null}
+                  {busy || finishing ? copy.login.submitting : copy.login.submit}
+                  {busy || finishing ? null : <ArrowRight aria-hidden />}
                 </Button>
               </FieldGroup>
             </form>
+            {LoginMethods ? (
+              <LoginMethods
+                returnTo={returnTo}
+                onStart={markExternalSignIn}
+                error={externalError}
+              />
+            ) : null}
             <WaitlistLoginLink />
           </div>
         </div>
