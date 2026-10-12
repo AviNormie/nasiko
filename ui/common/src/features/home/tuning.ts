@@ -27,3 +27,11 @@ export const SPARK_W = 64
 export const SPARK_H = 20
 /** Rows a phone list draws before "Show N more" (decision #50). */
 export const PHONE_ROWS = 25
+/** The chart band's By agent bars before Other (PR2d). */
+export const BAND_BARS = 10
+/** Saved tokens by agent's bars before Other: short, so it sits level with the health panel beside it. */
+export const SAVED_BARS = 5
+/** Agents stacked in Over time: the chart kit's five series colours (`seriesAt`). */
+export const BAND_STACK = 5
+/** The chart band's placeholder while its chunk loads. */
+export const BAND_SKELETON_PX = 420

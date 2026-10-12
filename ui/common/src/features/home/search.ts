@@ -5,6 +5,8 @@
  *
  * Scope: `yours`, `fleet`, or `unit:<id>`, an org level an edition layer adds (PR2c, the `homeOrgScope` slot). The core
  * only checks its shape; what a unit holds is the layer's.
+ *
+ * Health (PR2d): the chart band's health bar narrows the table to one rating.
  */
 import { z } from 'zod/mini'
 import { opt } from '@/lib/search'
@@ -33,5 +35,7 @@ export const homeSearchSchema = z.object({
   range: opt(z.enum(RANGES)),
   /** No static default: the persona decides when the URL doesn't (`scope.ts`). */
   scope: opt(scopeSchema),
+  /** The table's health filter (PR2d, decision #62): the Agents catalog's key and values; Not rated is `unknown`. */
+  health: opt(z.enum(['action', 'watch', 'healthy', 'unknown'])),
 })
 export type HomeSearch = z.infer<typeof homeSearchSchema>
