@@ -178,7 +178,10 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
 
   // The health bar narrows the table only (#62): the strip and the charts keep the whole scope.
   const health = search.health
-  const shown = rows ? filterByHealth(rows, health) : null
+  // Every row reads Not rated until the ratings answer, so the filter waits for them: a shared `?health=watch` link
+  // never opens on "No rows are Watch".
+  const healthPending = !!health && home.ratingsPending
+  const shown = rows ? filterByHealth(rows, healthPending ? undefined : health) : null
   const healthName = (h: NonNullable<HomeSearch['health']>) =>
     h === 'unknown' ? copy.charts.notRated : overviewCopy.rating[h]
 
@@ -427,10 +430,15 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
             />
           </Suspense>
           {health ? (
-            <p role="status" className="m-0 flex flex-wrap items-center gap-2 text-sm">
-              {shown?.length
-                ? copy.charts.filtered(healthName(health), shown.length, rows.length)
-                : copy.charts.noneMatch(healthName(health))}
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {/* Only the sentence is live: Clear isn't re-announced with each change. */}
+              <p role="status" className="m-0">
+                {healthPending
+                  ? copy.charts.filterPending(healthName(health))
+                  : shown?.length
+                    ? copy.charts.filtered(healthName(health), shown.length, rows.length)
+                    : copy.charts.noneMatch(healthName(health))}
+              </p>
               <Button
                 size="sm"
                 variant="ghost"
@@ -439,7 +447,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
               >
                 {copy.charts.clear}
               </Button>
-            </p>
+            </div>
           ) : null}
           {!shown?.length ? null : phone ? (
             <PhoneRows {...rowsProps} />
