@@ -137,7 +137,7 @@ export const useGuideState = () =>
 export function useGuideHiddenNav(): readonly string[] {
   const { due } = useGuide()
   const state = useGuideState()
-  return due || (state.open && state.firstRun) ? HIDE_OVERVIEW : NONE
+  return due || (state.open && state.firstRun) ? HIDE_HOME : NONE
 }
-const HIDE_OVERVIEW = ['/'] as const
+const HIDE_HOME = ['/'] as const
 const NONE = [] as const

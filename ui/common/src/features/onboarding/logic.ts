@@ -1,4 +1,4 @@
-/** Pure onboarding rules (plan Task 1): the step model, where each persona lands, and the Overview's ticks. */
+/** Pure onboarding rules (plan Task 1): the step model, where each persona lands, and the home's Setup guide ticks. */
 import { DRAFT_PREFIX } from '@/lib/draftKeys'
 import type { Onboarding, Persona } from './types'
 

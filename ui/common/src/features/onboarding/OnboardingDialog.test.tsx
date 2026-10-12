@@ -30,6 +30,9 @@ describe('first-run guide', () => {
     renderApp('/')
     await guide()
     expect(within(nav()).queryByRole('link', { name: 'Home', hidden: true })).toBeNull()
+    // Home was the first group's only item: Fleet opens the nav, without a header (PR3 review).
+    expect(within(nav()).getByRole('link', { name: 'Agents', hidden: true })).toBeInTheDocument()
+    expect(within(nav()).queryByText(shellCopy.nav.fleet)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Setup guide', hidden: true })).toBeNull()
     await waitFor(() => expect(screen.getByRole('button', { name: /get started/i })).toHaveFocus())
   })
@@ -87,6 +90,7 @@ describe('first-run guide', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(await screen.findByRole('button', { name: 'Setup guide' })).toBeInTheDocument()
     expect(within(nav()).getByRole('link', { name: 'Home' })).toBeInTheDocument()
+    expect(within(nav()).getByText(shellCopy.nav.fleet)).toBeInTheDocument()
     expect(localStorage.getItem(skipKey(ADMIN_ID))).toBe('1')
   })
 
