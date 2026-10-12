@@ -17,7 +17,6 @@ import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
 import {
   budgetAlerts,
   budgetStatus,
-  sessionBudgets,
   buildBudgetState,
   createBudget,
   deleteBudget,
@@ -46,8 +45,6 @@ import {
   traceDetail,
 } from './observability'
 import { generateSeed, SEED_MODELS, type Seed } from './seed'
-import { contextSavings, contextSavingsAgents, topRequests } from './contextSavings'
-import { hash as hashString } from './spanBuilder'
 import {
   fleetUnpriced,
   myAgentDashboardRows,
@@ -59,7 +56,6 @@ import {
   ADMIN_ID,
   DEFAULT_PERSONA,
   generateHarnessSeed,
-  harnessTurns,
   type HarnessSeed,
   type HUser,
 } from './seed-harness'
@@ -95,14 +91,7 @@ import {
   usageByAgent,
   type RouterState,
 } from './router'
-import {
-  chatHandlers,
-  chatMockMessages,
-  chatMockRows,
-  ensureChatSeed,
-  resetChatMock,
-  type ChatMockContext,
-} from './chatStore'
+import { chatHandlers, chatMockRows, resetChatMock } from './chatStore'
 import {
   advanceBuild,
   buildDeployState,
@@ -118,18 +107,12 @@ import {
   type MockBuild,
 } from './deploy'
 import { buildMcpState, mcpHandlers, type McpState } from './mcp'
-import { optimizationHandlers, resetOptimizationMock } from './optimization'
 import { buildWorkflowsState, workflowHandlers, type WorkflowsState } from './workflows'
-import { buildFlowsState, flowHandlers, type FlowsState } from './flows'
-import { eventHandlers } from './events'
 import { checkZip, MAX_ZIP_BYTES } from '@/features/deploy/zipcheck'
 import { nameProblem } from '@/features/deploy/name'
 import { parseVersion } from '@/features/deploy/version'
 import { DEFAULT_REGISTRY, parseReference } from '@/features/deploy/registry'
 import type { BuildStatus, UploadPipelineStatus } from '@/features/deploy/types'
-import type { ChatMessage, ChatSessionRow } from '@/features/chat/types'
-import { CODING_SESSION_TITLE } from '@/features/chat/serverContract'
-import type { SessionSummary } from '@/features/observability/types'
 import { PERSONAS, type Persona } from '@/features/onboarding/types'
 
 // Built on first use, so mock mode doesn't block first paint on seed generation.
@@ -247,31 +230,6 @@ export const MOCK_VARIANTS = [
   // /api/me/onboarding (bare 404), or a user who already picked a persona.
   'onboarding-absent',
   'onboarding-done',
-  // Context optimization (plans/feat-context-optimization.md §3): answers as today's server (no off switch, no tier
-  // values, no last-chat preview: the proposed CX-5, CX-T1 and CX-6 are bare 404s or absent).
-  'optimization-classic',
-  // The Optimization page's states (plans/feat-optimization-page.md §7, T6): requests ran but none reported (R2E(1)),
-  // or every savings read fails (R2C; the agent lists and your settings still work).
-  'optimization-no-reports',
-  'optimization-down',
-  // Flows (plans/feat-flows.md §2a): no flows yet (first run), or a server without /api/flows (bare 404).
-  'flows-empty',
-  'flows-absent',
-  // Agent hub (plans/feat-agent-centric.md DX mocks): the gate's dashboard read for one agent answers 404 "agent not
-  // found" (not visible), 500, or 400 (unknown or deleted); every marker read fails; this agent has no savings row;
-  // an agent with more builds in the window than the read returns; a server without the proposed event log.
-  'hub-not-visible',
-  'hub-gate-error',
-  'hub-deleted',
-  'hub-markers-fail',
-  'hub-no-savings-row',
-  'hub-many-builds',
-  'events-absent',
-  // The harness session ledger (plans/feat-agent-centric.md PR1b): a recorded chat's observability session read fails,
-  // so the ledger renders from its messages alone.
-  'ledger-no-trace',
-  // The scoped home (plans/feat-agent-centric.md DX mocks): a server without budgets (bare 404 on /api/budgets).
-  'home-budgets-absent',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
 ] as const
@@ -439,22 +397,14 @@ function getWorkflows(): WorkflowsState {
 }
 /** The workflows mock's live state, for tests. */
 export const workflowsMockState = (): WorkflowsState => getWorkflows()
-// Flows (plans/feat-flows.md): built from the agents state, rebuilt with it.
-let flowsState: FlowsState | null = null
-function getFlows(): FlowsState {
-  return (flowsState ??= buildFlowsState({
-    agents: getAgents,
-    me: () => ({ id: ADMIN_ID }),
-    now: () => nowFn(),
-  }))
-}
-/** The flows mock's live state, for tests. */
-export const flowsMockState = (): FlowsState => getFlows()
 // Settings (plans/feat-settings.md): the singleton row, and the password the mock last set (null: any is current).
 let settingsRow: Record<string, unknown> | null = null
 // Secret values the mock was sent (the router state keeps names only); a seed secret reads as a fake key.
 let secretValues = new Map<string, string>()
 let mockPassword: string | null = null
+// context_selection.rs: the viewer's chat-context preferences, at the migrations' defaults (0038, 0039).
+const CHAT_CONTEXT_DEFAULTS = { strategy: 'pacms', level: 'medium' }
+let chatContext = { ...CHAT_CONTEXT_DEFAULTS }
 /** settings.rs `get_settings` with no row: its hard-coded defaults (not the env's, ST-1). */
 const SETTINGS_DEFAULTS = {
   router_model: 'deepseek-v4-pro',
@@ -522,13 +472,12 @@ export function resetAgentsMock() {
   routerState = null
   mcpState = null
   workflowsState = null
-  flowsState = null
   budgetState = null
   settingsRow = null
   secretValues = new Map()
   mockPassword = null
+  chatContext = { ...CHAT_CONTEXT_DEFAULTS }
   onboardingRow = ONBOARDED
-  resetOptimizationMock()
   resetChatMock()
   // The chat knobs tests can turn (v1c DX3).
   fixedSuperuser = null
@@ -599,7 +548,6 @@ export function configureMocks(
     routerState = null
     mcpState = null
     workflowsState = null
-    flowsState = null
     budgetState = null
   }
   if (opts.persona !== undefined) fixedPersona = opts.persona
@@ -648,27 +596,6 @@ const text = (body: string, status: number) =>
 /** No cookie: `require_auth` → `validate_bearer`'s reason. */
 const unauthorized = () => authRejection('missing or invalid token')
 
-/** A recorded chat as a `session/list` row: the DB-only fallback (no harness traces in the mock), raw agent name. */
-function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummary {
-  return {
-    id: r.session_id,
-    session_id: r.session_id,
-    agent_id: agentName,
-    session_annotations: [],
-    session_annotation_summaries: [],
-    num_traces: null,
-    start_time: r.created_at,
-    end_time: r.updated_at ?? r.created_at,
-    duration_ms: null,
-    first_input: null,
-    last_output: null,
-    token_usage: { total: null },
-    trace_latency_ms_p50: null,
-    trace_latency_ms_p99: null,
-    cost_summary: { total: { cost: null } },
-  }
-}
-
 /** Session/trace/span answers are `{data: …}` (no status_code/message) and plain-text errors. */
 function traceStore(fn: () => Response): Response {
   if (!loggedIn) return unauthorized()
@@ -691,117 +618,6 @@ function sseStream(lines: string[], closeMessage: string): ReadableStream<Uint8A
 }
 
 export const handlerGroups: Record<Mockable, HttpHandler[]> = {
-  // The proposed agent event log (mocks/events.ts), before the agents routes it sits under.
-  events: eventHandlers({
-    loggedIn: () => loggedIn,
-    now: () => nowFn(),
-    agents: () => getAgents().agents,
-    hasVariant: (v) => hasVariant(v),
-    unauthorized: () => unauthorized(),
-    text: (body, status) => text(body, status),
-  }),
-  // Flows (plans/feat-flows.md): before observability and chat, which answer the trace and flow ids it doesn't own.
-  flows: flowHandlers({
-    loggedIn: () => loggedIn,
-    me: () => sessionUser(),
-    agents: getAgents,
-    now: () => nowFn(),
-    hasVariant: (v) => hasVariant(v as MockVariant),
-    state: getFlows,
-    seedTrace: (id) => {
-      const found = observabilityData(getSeed()).traceById.get(id)
-      if (!found) return null
-      const { trace: t, session } = found
-      return {
-        traceId: t.trace_id,
-        agentId: t.agent_id,
-        agentName: t.agent_name,
-        startMs: t.ts,
-        // The trace's own extent (its agent calls included): the request's latency ends before they do.
-        latencyMs: traceDetail(getSeed(), id)?.latency_ms ?? t.latency_ms,
-        sessionId: session.session_id,
-      }
-    },
-  }),
-  // plans/feat-context-optimization.md: the merged /api/me routes plus the proposed CX-5/CX-T1/CX-6 (optimization.ts).
-  optimization: optimizationHandlers({
-    loggedIn: () => loggedIn,
-    me: () => sessionUser(),
-    classic: () => hasVariant('optimization-classic'),
-    now: () => nowFn(),
-    chats: () => {
-      ensureChatSeed(chatCtx)
-      return chatMockRows()
-    },
-    messages: chatMockMessages,
-    text: (body, status) => text(body, status),
-    unauthorized: () => unauthorized(),
-  }).concat([
-    // CX-V3 / V3a / V3b / V3c (proposed): context savings, its series, per agent and top requests
-    // (plans/feat-optimization-page.md eng E1, C2–C4; mocks/contextSavings.ts). Today's server has none of them.
-    // From the agent seed only: coding-harness turns are recorded from local CLIs and never run selection.
-    ...(['', '/agents', '/top-requests'] as const).map((sub) =>
-      http.get(`${FINOPS}/context-savings${sub}`, ({ request }) => {
-        if (hasVariant('optimization-classic'))
-          return loggedIn ? new HttpResponse(null, { status: 404 }) : unauthorized()
-        if (hasVariant('optimization-down'))
-          return loggedIn ? text('internal error', 500) : unauthorized()
-        return respond(() => {
-          const q = params(request)
-          const url = new URL(request.url)
-          const agents = getAgents().agents
-          const byId = new Map(agents.map((a) => [a.id, a]))
-          const opts = {
-            now: nowFn(),
-            compressOf: (id: string) => byId.get(id)?.compress ?? false,
-            compressedOf: (id: string) => byId.get(id)?.compressSeeded ?? false,
-            noReports: hasVariant('optimization-no-reports'),
-            // ACL-scoped like the dashboard (review: adversarial): the agents mock's own access rule.
-            visible: (id: string) => {
-              const a = byId.get(id)
-              const v = sessionUser()
-              return (
-                !!a &&
-                (v.is_superuser ||
-                  a.owner_id === v.id ||
-                  a.is_public ||
-                  a.userGrants.includes(v.id))
-              )
-            },
-          }
-          if (sub === '')
-            return contextSavings(getSeed(), { ...q, series: url.searchParams.get('series') }, opts)
-          if (sub === '/agents')
-            return contextSavingsAgents(getSeed(), q, {
-              ...opts,
-              nameOf: (id, raw) => byId.get(id)?.display_name ?? raw,
-            })
-          const me = sessionUser()
-          // Requests group into chats as Sessions shows them (one per agent per day), so a row's title and link match.
-          const obs = observabilityData(getSeed()).traceById
-          return topRequests(
-            getSeed(),
-            {
-              ...q,
-              from: url.searchParams.get('from'),
-              to: url.searchParams.get('to'),
-              limit: url.searchParams.get('limit'),
-            },
-            {
-              ...opts,
-              viewer: { id: me.id, superuser: me.is_superuser },
-              sessionOf: (traceId) => {
-                const s = obs.get(traceId)?.session
-                return s ? { id: s.session_id, title: s.title } : null
-              },
-              // Mock rule: one chat in three belongs to another user, so a member sees redacted rows (C4).
-              ownerOf: (sid) => (hashString(sid) % 3 === 0 ? 'another-user' : me.id),
-            },
-          )
-        })
-      }),
-    ),
-  ]),
   // nasiko-cloud-rs 41f776ae `onboarding.rs`: bare JSON; a persona outside the enum is Axum's 422 Json rejection.
   onboarding: [
     http.get('/api/me/onboarding', () => {
@@ -929,7 +745,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     http.put('/api/agents/:id', async ({ params: prm, request }) => {
       const a = managed(String(prm.id))
       if (a instanceof Response) return a
-      // catalog/routes.rs `update`: every field is COALESCE, so an absent one is left as it was.
       const body = (await request.json().catch(() => ({}))) as {
         display_name?: string
         description?: string
@@ -941,7 +756,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       if (typeof body.display_name === 'string') a.display_name = body.display_name
       if (typeof body.description === 'string') a.description = body.description
       if (body.metadata && typeof body.metadata === 'object') a.metadata = body.metadata
-      if (typeof body.compress_enabled === 'boolean') a.compress = body.compress_enabled
+      if (typeof body.compress_enabled === 'boolean') a.compress_enabled = body.compress_enabled
       if (typeof body.minimal_code_enabled === 'boolean')
         a.minimal_code_enabled = body.minimal_code_enabled
       a.updated_at = new Date(nowFn()).toISOString()
@@ -1261,14 +1076,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       // `my_agent=true` (Harnesses live fallback, handler.rs:497) answers from the harness seed for
       // the viewer's own agents; TokenOps never sends it, so its numbers are untouched.
       if (p.my_agent === 'true') return respond(() => myAgentDashboard(p))
-      // The agent hub's gate (one agent's dashboard): handler.rs answers an inaccessible agent 404 "agent not found",
-      // an unknown or deleted one 400 (resolve_agent_filter).
-      if (p.agent_id && loggedIn) {
-        const v = variant()
-        if (v === 'hub-not-visible') return text('agent not found', 404)
-        if (v === 'hub-gate-error') return text('internal error', 500)
-        if (v === 'hub-deleted') return text(`unknown agent '${p.agent_id}'`, 400)
-      }
       return respond(() => dashboard(getFinopsSeed(), p, nowFn()))
     }),
   ],
@@ -1331,35 +1138,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       respond(() => topTraces(getFinopsSeed(), params(request), nowFn())),
     ),
   ],
-  savings: [
-    http.get(`${FINOPS}/savings`, ({ request }) =>
-      respond(() => {
-        // savings.rs `coverage`: counted over every live agent (no ACL), from the agents mock, so the Optimization
-        // page's Mechanisms counts follow the same switches as its other blocks. The rest is the fixed sample.
-        const s = savings()
-        const live = getAgents().agents.filter((a) => !a.deleted)
-        const comments = (a: (typeof live)[number]) =>
-          (a.metadata?.features as Record<string, unknown> | undefined)?.prompt_comments ===
-          'enabled'
-        const minimal = (a: (typeof live)[number]) => a.minimal_code_enabled === true
-        return {
-          ...s,
-          by_agent: savingsByAgent(
-            [...s.by_agent, ...seedSavingsRows(params(request))],
-            params(request),
-          ),
-          coverage: {
-            ...s.coverage,
-            agents_total: live.length,
-            agents_with_compress_enabled: live.filter((a) => a.compress).length,
-            agents_with_minimal_code_enabled: live.filter(minimal).length,
-            agents_with_prompt_comments: live.filter(comments).length,
-            agents_optimized: live.filter((a) => a.compress || minimal(a) || comments(a)).length,
-          },
-        }
-      }),
-    ),
-  ],
+  savings: [http.get(`${FINOPS}/savings`, () => respond(() => savings()))],
   observability: [
     // `owner=` lists are the Harnesses live fallback's (harnesses group): pass them through, so
     // VITE_NASIKO_MOCK=observability alone never answers them from the harness seed.
@@ -1374,14 +1153,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       const p = params(request)
       const v = variant()
       if (v === 'scan-fail' && Number(p.offset ?? 0) >= 100) return text('internal error', 500)
-      // session/list reads chat_sessions, so a recorded harness chat is a session too (service.rs): the viewer's own,
-      // or everyone's for a superuser. Without harness traces in the mock it is the DB-only row.
-      ensureChatSeed(chatCtx)
-      const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
-      const recorded = chatMockRows()
-        .filter((r) => r.is_coding_agent && (superuser() || r.user_id === ADMIN_ID))
-        .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
-      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down', recorded)
+      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down')
       if (v === 'empty')
         body.data = {
           ...body.data,
@@ -1394,9 +1166,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     http.get(`${OBS}/session/:sessionId`, ({ params: p }) =>
       traceStore(() => {
         const id = String(p.sessionId)
-        ensureChatSeed(chatCtx)
-        if (hasVariant('ledger-no-trace') && chatMockRows().some((r) => r.session_id === id))
-          return text('trace store unavailable', 502)
         const data = observabilityData(getSeed())
         // A chat from the chat mock is a session too (live, a chat's id IS its session id): answer
         // with the seeded showcase session, re-keyed, so View session / Open full trace resolve.
@@ -1406,20 +1175,8 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
           data.byId.get(id) ??
           (showcase ? { ...showcase, session_id: id, title: chat!.title } : undefined)
         // The server answers 404 for unknown AND inaccessible sessions (reveal no existence).
-        // A recorded harness chat names its own (harness) agent, not the showcase's.
-        const harness =
-          chat?.is_coding_agent && chat.agent_id
-            ? getAgents().agents.find((a) => a.id === chat.agent_id)?.name
-            : undefined
         return s
-          ? HttpResponse.json({
-              data: {
-                session: {
-                  ...sessionDetail(getSeed(), s),
-                  ...(harness ? { agent_name: harness } : {}),
-                },
-              },
-            })
+          ? HttpResponse.json({ data: { session: sessionDetail(getSeed(), s) } })
           : text(`session '${id}' not found`, 404)
       }),
     ),
@@ -1487,30 +1244,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       if (!getHarnessSeed().agents.some((a) => a.id === p.agent_id)) return undefined
       const limit = Math.min(100, Math.max(1, Number(p.limit) || 50))
       return HttpResponse.json(chatSessions(limit, p.agent_id ?? undefined))
-    }),
-    // GET /api/chat/sessions/:id/messages for those sessions (the ledger, PR1b): newest page first, ascending, paged
-    // back with ?prev_cursor= as the chat routes; any other id is the chat group's.
-    http.get('/api/chat/sessions/:id/messages', ({ params: prm, request }) => {
-      if (!loggedIn) return unauthorized()
-      const all = harnessMessages(String(prm.id))
-      if (!all) return undefined
-      const p = params(request)
-      const limit = Math.min(500, Math.max(1, Number(p.limit) || 100))
-      const end = p.prev_cursor
-        ? Math.max(
-            0,
-            all.findIndex((m) => m.id === p.prev_cursor),
-          )
-        : all.length
-      const page = all.slice(Math.max(0, end - limit), end)
-      const has_more = end - limit > 0
-      return HttpResponse.json({
-        data: page,
-        has_more,
-        next_cursor: has_more ? (page.at(-1)?.id ?? null) : null,
-        prev_cursor: page[0]?.id ?? null,
-        hitl: [],
-      })
     }),
     http.get(`${OBS}/coding-agents/usage`, ({ request }) => {
       if (!loggedIn) return unauthorized()
@@ -1686,53 +1419,15 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     // R2 budgets: the proposed R-L10 contract (docs/designs/openruntime-llm-router-recommendations.md). No server yet.
     http.get('/api/budgets', () =>
       routed(() => {
-        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return envelope(listBudgets(getBudgets(), ADMIN_ID))
       }),
     ),
     http.get('/api/budgets/status', () =>
       routed(() => {
-        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
         if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
         return HttpResponse.json(
           budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
-        )
-      }),
-    ),
-    // The ledger's per-session budgets (proposed AH-8, plans/feat-agent-centric.md PR1b): the caller's own sessions
-    // only (the messages route's rule); the recorded demo chat has a $1 session budget.
-    http.get('/api/budgets/session/:id', ({ params: p }) =>
-      routed(() => {
-        if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
-        ensureChatSeed(chatCtx)
-        const id = String(p.id)
-        const row = chatMockRows().find((r) => r.session_id === id && r.user_id === ADMIN_ID)
-        const recorded = row ? chatMockMessages(id) : harnessMessages(id)
-        const hs = getHarnessSeed().sessions.find((x) => x.session_id === id)
-        if (!recorded || (!row && !hs)) throw new MockHttpError(404, `session '${id}' not found`)
-        const turns = new Map<string, number>()
-        for (const m of recorded)
-          if (m.role === 'assistant') {
-            const key = m.external_turn_id ?? m.id
-            turns.set(key, (turns.get(key) ?? 0) + Number(m.cost_usd ?? 0))
-          }
-        return envelope(
-          sessionBudgets(
-            getBudgets(),
-            getSeed(),
-            getAgents().agents,
-            ADMIN_ID,
-            {
-              agentId: row ? row.agent_id : (hs?.agent_id ?? null),
-              start: Date.parse(row ? row.created_at : (hs?.started_at ?? '')),
-              turns: [...turns].map(([turn_id, used]) => ({
-                turn_id,
-                used_usd: Math.round(used * 1e6) / 1e6,
-              })),
-            },
-            id.endsWith('c004') ? 1 : undefined,
-          ),
         )
       }),
     ),
@@ -1908,6 +1603,29 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       )
       return HttpResponse.json(settingsRow)
     }),
+    // context_selection.rs (nasiko-cloud-rs 1a305a63): bare objects, any signed-in user, the caller's own. A value
+    // outside the enum never reaches the handler: Axum's Json extractor answers a plain-text 422.
+    ...(
+      [
+        ['/api/me/context-strategy', 'strategy', ['pacms', 'topk', 'lastk']],
+        ['/api/me/pacms-budget', 'level', ['low', 'medium', 'high']],
+      ] as const
+    ).flatMap(([path, key, values]) => [
+      http.get(path, () =>
+        loggedIn ? HttpResponse.json({ [key]: chatContext[key] }) : unauthorized(),
+      ),
+      http.patch(path, async ({ request }) => {
+        if (!loggedIn) return unauthorized()
+        const v = ((await request.json().catch(() => ({}))) as Record<string, unknown>)[key]
+        if (typeof v !== 'string' || !(values as readonly string[]).includes(v))
+          return text(
+            `Failed to deserialize the JSON body into the target type: ${key}: unknown variant`,
+            422,
+          )
+        chatContext[key] = v
+        return HttpResponse.json({ [key]: v })
+      }),
+    ]),
   ],
 }
 
@@ -2070,82 +1788,6 @@ function harnessAgentDetail(a: HarnessSeed['agents'][number]) {
   }
 }
 
-/**
- * A harness session's recorded messages (the ledger, plans/feat-agent-centric.md PR1b): a recorded chat stores a user and
- * an assistant message per turn with the CLI's usage, so the viewer's own seed sessions answer `/messages` as the chat
- * routes would (owner-only: anyone else's is null, a 404). One tool call per turn (the trace writers' constant); the
- * context report is the proposed per-turn record (AH-7), which the ledger reads only in preview mode.
- */
-const HARNESS_PROMPTS = [
-  'Fix the failing test in the billing module',
-  'Explain what this function does',
-  'Refactor the retry logic',
-  'Add structured logging to the worker',
-  'Write the migration for the new column',
-]
-const HARNESS_TOOLS = ['read_file', 'grep', 'edit_file', 'run_tests', 'bash']
-function harnessMessages(sessionId: string): ChatMessage[] | null {
-  const hs = harnessData()
-  const s = hs.sessions.find((x) => x.session_id === sessionId && x.user_id === viewer().id)
-  const agent = s && hs.agents.find((a) => a.id === s.agent_id)
-  if (!s || !agent) return null
-  return harnessTurns(hs, [agent])
-    .filter((t) => t.session_id === sessionId)
-    .flatMap((t, i): ChatMessage[] => {
-      const base = { session_id: sessionId, external_turn_id: t.trace_id }
-      const replyAt = t.ts + 30_000
-      const pool = 30 + i * 2
-      return [
-        {
-          ...base,
-          id: `${t.trace_id}-u`,
-          role: 'user',
-          content: HARNESS_PROMPTS[i % HARNESS_PROMPTS.length]!,
-          timestamp: new Date(t.ts).toISOString(),
-        },
-        {
-          ...base,
-          id: `${t.trace_id}-a`,
-          role: 'assistant',
-          content: 'Done.',
-          timestamp: new Date(replyAt).toISOString(),
-          model: t.model,
-          input_tokens: t.input_tokens,
-          output_tokens: t.output_tokens,
-          // An unpriced turn has no cost (NULL), never $0.
-          cost_usd: t.cost_usd ? t.cost_usd.toFixed(6) : null,
-          usage_estimated: true,
-          metadata: {
-            coding_agent: {
-              capture_policy: 'content',
-              tool_calls: [
-                {
-                  id: `${t.trace_id}-call`,
-                  name: HARNESS_TOOLS[i % HARNESS_TOOLS.length],
-                  kind: 'tool',
-                  status: 'succeeded',
-                  started_at: new Date(t.ts + 5_000).toISOString(),
-                  ended_at: new Date(t.ts + 6_200).toISOString(),
-                  duration_ms: 1_200,
-                  association: 'exact',
-                  timestamp_quality: 'exact',
-                },
-              ],
-              context: {
-                'nasiko.context.strategy': 'pacms',
-                'nasiko.context.level': 'medium',
-                'nasiko.context.pool': pool,
-                'nasiko.context.pool_tokens': Math.round(t.input_tokens * 1.6),
-                'nasiko.context.kept': Math.round(pool / 3),
-                'nasiko.context.kept_tokens_est': t.input_tokens,
-              },
-            },
-          },
-        },
-      ]
-    })
-}
-
 /** Own-only, newest first (ORDER BY updated_at DESC), optionally one agent (`?agent_id=`), as chat/routes.rs. */
 function chatSessions(limit: number, agentId?: string) {
   const hs = harnessData()
@@ -2167,8 +1809,7 @@ function chatSessions(limit: number, agentId?: string) {
       user_id: x.user_id,
       agent_id: x.agent_id,
       agent_url: `/api/agents/${x.agent_id}`,
-      // The server titles every recorded harness session the same (coding_agent_telemetry.rs, observability/service.rs).
-      title: CODING_SESSION_TITLE,
+      title: `${agent(x.agent_id)?.display_name ?? 'Session'}`,
       created_at: x.started_at,
       updated_at: updated,
       agent_name: agent(x.agent_id)?.name ?? null,
@@ -2195,7 +1836,7 @@ function chatScenario(): ChatScenario | null {
   )
 }
 
-const chatCtx: ChatMockContext = {
+handlerGroups.chat = chatHandlers({
   loggedIn: () => loggedIn,
   userId: () => ADMIN_ID,
   now: () => nowFn(),
@@ -2219,8 +1860,7 @@ const chatCtx: ChatMockContext = {
   hasVariant: (v) =>
     (CHAT_PAGE_VARIANTS as readonly string[]).includes(v) && hasVariant(v as MockVariant),
   superuser,
-}
-handlerGroups.chat = chatHandlers(chatCtx)
+})
 
 /**
  * Deploy group (plans/feat-deploy.md §9). ACL as the server: a superuser sees every build and upload, anyone else only
@@ -2498,10 +2138,7 @@ function deployHandlers(): HttpHandler[] {
     http.get('/api/builds/agent/:agentId', ({ params: p }) => {
       if (!loggedIn) return unauthorized()
       if (variant() === 'deploy-no-rights') return noRights()
-      if (variant() === 'hub-markers-fail') return text('internal error', 500)
       const now = nowFn()
-      if (variant() === 'hub-many-builds')
-        return HttpResponse.json(manyBuilds(String(p.agentId), now))
       // list_builds: the agent's owner or a superuser, whether or not it has builds.
       const agent = getAgents().agents.find((a) => a.id === String(p.agentId))
       if (!superuser() && agent && agent.owner_id !== ADMIN_ID) return noRights()
@@ -2631,6 +2268,8 @@ function usageResponse(fn: () => unknown): Response {
 /** What an edition's mocks build on: the core mock's live state and response helpers (never copies of them). */
 export const mockCtx = {
   loggedIn: () => loggedIn,
+  seed: getSeed,
+  finopsSeed: getFinopsSeed,
   now: () => nowFn(),
   variant,
   superuser,
@@ -2648,80 +2287,4 @@ export const mockCtx = {
   envelope,
   unauthorized,
   usageResponse,
-}
-
-/**
- * The agent hub's savings rows (plans/feat-agent-centric.md PR1 lanes): `/finops/savings` `by_agent` gains a row per seed
- * agent that saved tokens in the window, from the same context-savings reports the Optimization page reads, so the hub's
- * "Tokens saved" total has a row to find. `?mock=hub-no-savings-row` leaves them out ("not reported").
- */
-function seedSavingsRows(p: Record<string, string | null>) {
-  if (p.scope !== 'agent' || variant() === 'hub-no-savings-row') return []
-  const agents = getAgents().agents
-  const byId = new Map(agents.map((a) => [a.id, a]))
-  const rows = contextSavingsAgents(
-    getFinopsSeed(),
-    { ...p, agent_id: null },
-    {
-      now: nowFn(),
-      compressOf: (id) => byId.get(id)?.compress ?? false,
-      compressedOf: (id) => byId.get(id)?.compressSeeded ?? false,
-      nameOf: (id, raw) => byId.get(id)?.display_name ?? raw,
-    },
-  )
-  return rows
-    .filter((r) => r.pool_tokens > r.sent_tokens)
-    .map((r) => {
-      const saved = r.pool_tokens - r.sent_tokens
-      return {
-        saved_tokens: saved,
-        saved_input_tokens: saved,
-        saved_output_tokens: 0,
-        saved_cost_usd: 0,
-        actual_tokens: r.sent_tokens,
-        actual_cost_usd: 0,
-        baseline_tokens: r.pool_tokens,
-        baseline_cost_usd: 0,
-        token_reduction_pct: Math.round((saved / r.pool_tokens) * 1000) / 10,
-        cost_reduction_pct: null,
-        basis: 'measured' as const,
-        agent_id: r.agent_id,
-        agent_name: r.name,
-        calls: r.reports,
-        input_tokens_before: r.pool_tokens,
-        input_tokens_after: r.sent_tokens,
-      }
-    })
-}
-
-/**
- * handler.rs `get_finops_savings` (b2a966332): `agent_id` narrows the rows to that agent, and `by_agent` is capped at
- * `limit` (default `SAVINGS_DEFAULT_LIMIT` = 25), so an agent outside the top 25 is only found with the filter.
- */
-function savingsByAgent<T extends { agent_id: string }>(
-  rows: T[],
-  p: Record<string, string | null>,
-): T[] {
-  const filtered = p.agent_id ? rows.filter((r) => r.agent_id === p.agent_id) : rows
-  return filtered.slice(0, Math.max(1, Number(p.limit) || 25))
-}
-
-/** `?mock=hub-many-builds`: the newest 20 of 25 successful builds over the last 10 days (the read's cap, D-6). */
-function manyBuilds(agentId: string, now: number) {
-  const DAY_MS = 86_400_000
-  return Array.from({ length: 20 }, (_, i) => {
-    const at = now - Math.round(((i + 1) * 10 * DAY_MS) / 25)
-    return {
-      id: `5eed000b-0000-4000-9000-${String(900 + i).padStart(12, '0')}`,
-      agent_id: agentId,
-      github_url: null,
-      commit_hash: null,
-      version_tag: `1.${30 - i}.0`,
-      image_reference: `registry.local/agent:1.${30 - i}.0`,
-      status: 'success',
-      logs_url: null,
-      created_at: new Date(at - 150_000).toISOString(),
-      updated_at: new Date(at).toISOString(),
-    }
-  })
 }
