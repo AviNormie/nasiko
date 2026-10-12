@@ -202,7 +202,7 @@ function SpendTrend({
             <Swatch series={k.series} /> <span className="truncate">{k.label}</span>
           </span>
         ))}
-        <span className="sr-only">{copy.charts.trendSummary(top.length, days)}</span>
+        <span className="sr-only">{copy.charts.trendSummary(top.length, days, fleet)}</span>
       </figcaption>
       <div role="presentation" style={{ height: CHART_H }}>
         <BarChart

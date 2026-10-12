@@ -107,8 +107,8 @@ export const copy = {
     otherCount: (n: number) => `Other (${n})`,
     noSpend: (days: number) => `No spend in the last ${days} days.`,
     trendFailed: 'spend over time',
-    trendSummary: (n: number, days: number) =>
-      `Spend per day over the last ${days} days for the top ${n} agents. By agent lists the totals.`,
+    trendSummary: (n: number, days: number, fleet: boolean) =>
+      `Spend per day over the last ${days} days for the top ${n} agents${fleet ? ' and the rest of the fleet' : ''}. By agent lists the totals.`,
     estimate: 'Includes harness estimates (API list price)',
     saved: 'Saved tokens by agent',
     savedSubtitle: (basis: string | null) =>
@@ -126,6 +126,7 @@ export const copy = {
       `Showing ${shown} of ${of}: ${name}. The totals and charts cover all of them.`,
     clear: 'Clear',
     noneMatch: (name: string) => `No rows are ${name} right now.`,
+    filterPending: (name: string) => `Checking health before showing only ${name}…`,
   },
   error: "The agents couldn't load",
   unitFailed: "This unit's members couldn't load",

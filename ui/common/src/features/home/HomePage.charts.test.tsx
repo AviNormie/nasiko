@@ -5,11 +5,12 @@
  */
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { configureMocks } from '@/mocks/handlers'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
-import { recordRequests } from '@/test/setup'
+import { recordRequests, server } from '@/test/setup'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -51,7 +52,7 @@ describe('spend', () => {
     const series = rec.urls.filter((u) => u.pathname.endsWith('/finops/spend-timeseries'))
     // One fleet read (no agent_id) for Other, and at most five agent reads for the stack.
     expect(series.filter((u) => !u.searchParams.get('agent_id')).length).toBeGreaterThan(0)
-    expect(within(spend).getByText(copy.charts.trendSummary(5, 30))).toBeInTheDocument()
+    expect(within(spend).getByText(copy.charts.trendSummary(5, 30, true))).toBeInTheDocument()
 
     await userEvent.click(within(spend).getByRole('radio', { name: copy.charts.byAgent }))
     expect(within(spend).getAllByRole('listitem').length).toBeGreaterThan(1)
@@ -116,6 +117,26 @@ describe('health filter', () => {
 
   it('a ?health= link opens with the table filtered', async () => {
     renderApp('/?scope=yours&health=watch')
+    await screen.findByText(/^Showing \d+ of \d+: Watch/, undefined, T)
+    for (const r of await dataRows()) expect(r).toHaveTextContent('Watch')
+  })
+
+  it('a ?health= link waits for the ratings: never "none match" while every row still reads Not rated', async () => {
+    // Ratings read the fleet's spend series; hold it until released.
+    let release = () => {}
+    const held = new Promise<void>((r) => (release = r))
+    server.use(
+      http.get('*/api/observability/finops/spend-timeseries', async ({ request }) => {
+        if (!new URL(request.url).searchParams.get('agent_id')) await held
+        return undefined
+      }),
+    )
+    renderApp('/?scope=yours&health=watch')
+    await screen.findByText(copy.charts.filterPending('Watch'), undefined, T)
+    expect(screen.queryByText(/^No rows are/)).toBeNull()
+    // The table keeps every row meanwhile.
+    expect((await dataRows()).length).toBeGreaterThan(0)
+    release()
     await screen.findByText(/^Showing \d+ of \d+: Watch/, undefined, T)
     for (const r of await dataRows()) expect(r).toHaveTextContent('Watch')
   })
