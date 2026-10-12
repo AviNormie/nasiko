@@ -211,44 +211,9 @@ pub async fn a2a_dispatch_handler(
         Err(e) => return Ok(e.into_response()),
     };
 
-    // Prefer the explicit metadata.session_id (web UI), fall back to the
-    // message contextId — the CLI reuses its CP session id as contextId, so
-    // multi-turn chats keep their history either way. An unknown id simply
-    // fetches zero rows.
-    let history_sid = session_id.as_deref().unwrap_or(&context_id);
-    let history_store = state.history_vector_store();
-    let history = context_selection::fetch_for_user(
-        &state.db,
-        user_id,
-        history_sid,
-        &history_store,
-        &text,
-        &ContextTiers::from_config(&state.config)
-            .with_overrides(&state.db)
-            .await,
-    )
-    .await;
-
-    let query = history.with_current_query(&text);
-
-    if is_orchestrator {
-        orchestrator_stream(
-            &state,
-            OrchestratorTurn {
-                query: &query,
-                raw_text: &text,
-                task_id: &task_id,
-                context_id: &context_id,
-                user_id,
-                is_superuser: claims.is_superuser,
-                client_owns_transcript: session_id.is_some(),
-                transcript_role: "user",
-                file_parts: vec![],
-                kind: TurnKind::User,
-                context_report: Some(&history.report),
-            },
-        )
-        .await
+    // Resolved before the history fetch: the target's switch decides IP-4.
+    let target_agent = if is_orchestrator {
+        None
     } else {
         let target = agent_id.as_deref().unwrap();
         // Resolve the target (UUID or name) to a concrete agent row FIRST, then
@@ -265,6 +230,32 @@ pub async fn a2a_dispatch_handler(
         if !crate::acl::can_access_agent(&state, &claims, agent.id).await {
             return Err(A2aDispatchError::AgentNotFound(target.to_string()));
         }
+        Some(agent)
+    };
+    let compress_history = target_agent.as_ref().is_none_or(|a| a.compress_enabled);
+
+    // Prefer the explicit metadata.session_id (web UI), fall back to the
+    // message contextId — the CLI reuses its CP session id as contextId, so
+    // multi-turn chats keep their history either way. An unknown id simply
+    // fetches zero rows.
+    let history_sid = session_id.as_deref().unwrap_or(&context_id);
+    let history_store = state.history_vector_store();
+    let history = context_selection::fetch_for_user(
+        &state.db,
+        user_id,
+        history_sid,
+        &history_store,
+        &text,
+        &ContextTiers::from_config(&state.config)
+            .with_overrides(&state.db)
+            .await,
+        compress_history,
+    )
+    .await;
+
+    let query = history.with_current_query(&text);
+
+    if let Some(agent) = target_agent {
         // Supplemental context for this one, already-chosen agent, ranked against the real
         // query text (in addition to any pinned content) — a no-op on OSS. Kept in a separate
         // `outbound_query` local, distinct from `query`: `agent_stream` persists/traces `query`
@@ -293,6 +284,24 @@ pub async fn a2a_dispatch_handler(
             session_id,
             history.user_turn_count(),
             Some(&history.report),
+        )
+        .await
+    } else {
+        orchestrator_stream(
+            &state,
+            OrchestratorTurn {
+                query: &query,
+                raw_text: &text,
+                task_id: &task_id,
+                context_id: &context_id,
+                user_id,
+                is_superuser: claims.is_superuser,
+                client_owns_transcript: session_id.is_some(),
+                transcript_role: "user",
+                file_parts: vec![],
+                kind: TurnKind::User,
+                context_report: Some(&history.report),
+            },
         )
         .await
     }
@@ -571,9 +580,14 @@ pub(crate) async fn orchestrator_stream(
         Some(text)
     };
 
-    // One read per turn, shared by IP-3 below. See `compression_opt_in` for why this is
-    // aggregated over the caller's agents rather than read off a single one.
-    let compression_opted_in = nasiko_orchestrator::compression_opt_in(&state.db, user_id).await;
+    // IP-3 skips opted-out agents' results; unreadable switches turn it off for the turn.
+    let uncompressed_tools = match opted_out_agent_tools(&state.db).await {
+        Ok(tools) => Some(tools),
+        Err(e) => {
+            tracing::warn!(error = %e, "IP-3 off for this turn: agent switches unreadable");
+            None
+        }
+    };
 
     let config = OrchestratorConfig {
         // `state.config.openai_model` is already loaded via `env_or("OPENAI_MODEL",
@@ -591,14 +605,13 @@ pub(crate) async fn orchestrator_stream(
         preamble,
         // IP-3. Read here rather than defaulted, because `ContextConfig::default()` is
         // deliberately inert — without this the compressor is compiled in but unreachable.
-        // Gated by the deployment flag AND the per-agent opt-in, so the UI switch starts and
-        // stops this with the rest of the stack instead of leaving one layer running.
         context: nasiko_react_agent::ContextConfig {
             compress: nasiko_compress::Policy {
-                enabled: state.config.react_compress_enabled && compression_opted_in,
+                enabled: state.config.react_compress_enabled && uncompressed_tools.is_some(),
                 min_bytes: state.config.react_compress_min_bytes,
                 ..Default::default()
             },
+            uncompressed_tools: uncompressed_tools.unwrap_or_default(),
             ..nasiko_react_agent::ContextConfig::default()
         },
     };
@@ -1203,7 +1216,7 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
     // superuser-ACL-bypass would leak it into ordinary chat
     // history/usage tracking.
     sqlx::query_as::<_, AgentRow>(
-        "SELECT id, name, status, minimal_code_enabled, skills \
+        "SELECT id, name, status, minimal_code_enabled, skills, compress_enabled \
          FROM agents \
          WHERE (id::text = $1 OR name = $1) AND status = 'running' AND NOT is_internal",
     )
@@ -1212,6 +1225,22 @@ async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDi
     .await
     .map_err(|e| A2aDispatchError::Internal(e.to_string()))?
     .ok_or_else(|| A2aDispatchError::AgentNotFound(target.to_string()))
+}
+
+/// Orchestrator tool names of the agents whose Token optimization switch is off.
+async fn opted_out_agent_tools(
+    db: &sqlx::PgPool,
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM agents \
+         WHERE status = 'running' AND NOT is_internal AND NOT compress_enabled",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(names
+        .iter()
+        .map(|name| nasiko_react_agent::A2aTool::tool_name(name))
+        .collect())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2445,6 +2474,8 @@ struct AgentRow {
     /// The agent card's skills, classified here rather than in SQL so the dispatch path and
     /// the settings page share one answer — see [`catalog::models::has_coding_skills`].
     skills: sqlx::types::Json<Vec<crate::catalog::models::Skill>>,
+    /// Decides whether the history sent to this agent is compressed (IP-4).
+    compress_enabled: bool,
 }
 
 #[derive(Debug)]
