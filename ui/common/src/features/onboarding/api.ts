@@ -102,7 +102,7 @@ export function useGuide() {
 }
 
 // ─── The open guide ─────────────────────────────────────────────────────────────────────────────────────────────────
-// One guide per page, opened by `/` for a first-time user or by the Overview's Setup guide; the sidebar hides Overview
+// One guide per page, opened by `/` for a first-time user or by the home's Setup guide; the sidebar hides Home
 // while a first-run guide is open, so the shell and the route read the same state.
 
 export interface GuideState {
@@ -133,7 +133,7 @@ export const useGuideState = () =>
     () => guideState,
   )
 
-/** The sidebar paths to hide: Overview, while the guide stands in for it. */
+/** The sidebar paths to hide: Home, while the guide stands in for it. */
 export function useGuideHiddenNav(): readonly string[] {
   const { due } = useGuide()
   const state = useGuideState()

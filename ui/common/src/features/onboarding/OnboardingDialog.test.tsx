@@ -1,6 +1,6 @@
 /**
  * The first-run guide (docs/superpowers/specs/2026-10-01-login-onboarding-design.md §2-§3): a first-time user gets it on
- * `/` with Overview hidden; the persona saves on Continue; the model step saves a default config; skipping lasts the
+ * `/` with Home hidden; the persona saves on Continue; the model step saves a default config; skipping lasts the
  * session; the Ready step opens the persona's page.
  */
 import { screen, waitFor, within } from '@testing-library/react'
@@ -25,11 +25,11 @@ const nav = () => screen.getByRole('navigation', { name: shellCopy.navLabel, hid
 const guide = () => screen.findByRole('dialog', { name: /welcome to nasiko/i })
 
 describe('first-run guide', () => {
-  it('stands in for the Overview and hides its nav item', async () => {
+  it('stands in for Home and hides its nav item', async () => {
     firstTime()
     renderApp('/')
     await guide()
-    expect(within(nav()).queryByRole('link', { name: 'Overview', hidden: true })).toBeNull()
+    expect(within(nav()).queryByRole('link', { name: 'Home', hidden: true })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Setup guide', hidden: true })).toBeNull()
     await waitFor(() => expect(screen.getByRole('button', { name: /get started/i })).toHaveFocus())
   })
@@ -78,7 +78,7 @@ describe('first-run guide', () => {
     })
   })
 
-  it('skips for the session: the Overview and its nav item come back', async () => {
+  it('skips for the session: Home and its nav item come back', async () => {
     firstTime()
     const user = userEvent.setup()
     renderApp('/')
@@ -86,7 +86,7 @@ describe('first-run guide', () => {
     await user.click(screen.getByRole('button', { name: 'Skip guide' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(await screen.findByRole('button', { name: 'Setup guide' })).toBeInTheDocument()
-    expect(within(nav()).getByRole('link', { name: 'Overview' })).toBeInTheDocument()
+    expect(within(nav()).getByRole('link', { name: 'Home' })).toBeInTheDocument()
     expect(localStorage.getItem(skipKey(ADMIN_ID))).toBe('1')
   })
 
@@ -184,6 +184,6 @@ describe('first-run guide', () => {
       ),
     )
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(within(nav()).getByRole('link', { name: 'Overview' })).toBeInTheDocument()
+    expect(within(nav()).getByRole('link', { name: 'Home' })).toBeInTheDocument()
   })
 })

@@ -70,7 +70,7 @@ describe('sidebar items', () => {
     ['/deploy', 'Agents'],
     ['/builds', 'Agents'],
     ['/chat', 'Chat'],
-    ['/', 'Overview'],
+    ['/', 'Home'],
   ])('marks %s as %s with aria-current', async (url, label) => {
     renderApp(url)
     await waitFor(() => expect(navLink(label)).toHaveAttribute('aria-current', 'page'))
@@ -114,7 +114,7 @@ describe('sidebar items', () => {
   it('shows a way back into the app on an unknown URL', async () => {
     renderApp('/no-such-page')
     await screen.findByRole('heading', { name: 'Page not found' })
-    expect(screen.getByRole('link', { name: 'Back to Overview' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/')
     expect(screen.getByRole('link', { name: 'Go to Chat' })).toHaveAttribute('href', '/chat')
   })
 
@@ -158,7 +158,7 @@ describe('sidebar items', () => {
 })
 
 describe('header brand link', () => {
-  it('goes to the Overview through the router without marking itself current', async () => {
+  it('goes Home through the router without marking itself current', async () => {
     wide()
     const { router } = renderApp('/agents')
     await screen.findByRole('navigation', { name: 'Main' })
@@ -167,7 +167,7 @@ describe('header brand link', () => {
     await userEvent.click(brand)
     await waitFor(() => expect(router.state.location.pathname).toBe('/'))
     expect(brand).not.toHaveAttribute('aria-current')
-    expect(navLink('Overview')).toHaveAttribute('aria-current', 'page')
+    expect(navLink('Home')).toHaveAttribute('aria-current', 'page')
   })
 
   it('leaves a modified click (new tab) to the browser', async () => {
@@ -208,8 +208,7 @@ describe('layout', () => {
     await router.navigate({ to: '/agents' })
     await waitFor(() => expect(wrapper()).toHaveClass('min-h-screen'))
     expect(wrapper()).not.toHaveClass('h-dvh')
-    // The page column keeps the max width; the top bar spans the whole page area.
-    expect(document.querySelector('#main .max-w-page')).toBeInTheDocument()
+    expect(document.getElementById('main')).toHaveClass('max-w-page')
   })
 
   it.each(['/login', '/no-such-page'])(

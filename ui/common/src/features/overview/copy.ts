@@ -7,9 +7,9 @@ import type { Severity, SourceId } from './needs'
 const pct = (v: number) => `${Math.round(v)}%`
 
 export const copy = {
-  title: 'Overview',
+  title: 'Home',
   loading: 'Loading',
-  loadingPage: 'Loading the Overview',
+  loadingPage: 'Loading the home',
   meFailed: "Couldn't reach OpenRuntime to load your account.",
   checkStatus: 'Check server status',
   retry: 'Retry',
@@ -23,7 +23,7 @@ export const copy = {
     button: 'Setup guide',
     title: 'Set up OpenRuntime',
     intro:
-      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on the Overview once it runs.',
+      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on Home once it runs.',
   },
   needs: {
     title: 'Needs you',
