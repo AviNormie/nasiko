@@ -9,7 +9,7 @@ const pct = (v: number) => `${Math.round(v)}%`
 export const copy = {
   title: 'Home',
   loading: 'Loading',
-  loadingPage: 'Loading the home',
+  loadingPage: 'Loading Home',
   meFailed: "Couldn't reach OpenRuntime to load your account.",
   checkStatus: 'Check server status',
   retry: 'Retry',

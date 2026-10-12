@@ -322,11 +322,12 @@ function NavGroups({
                 : undefined,
         )}
       >
-        {/* A group with no items (Lab, in a production build) has no header either. */}
-        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g) => (
+        {/* A group with no items (Lab, in a production build) has no header either, and the first group drawn has none:
+            while the onboarding guide hides Home, Fleet opens the nav without a header or a leading hairline. */}
+        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g, i) => (
           <SidebarGroup key={g.id} className={cn(GROUP, 'py-0')}>
             {/* In the rail a header becomes a short hairline: the icons stay one even column, the groups still apart. */}
-            {g.label ? (
+            {g.label && i > 0 ? (
               <>
                 <SidebarGroupLabel className="mt-5 mb-1 h-4 px-2 text-2xs font-medium tracking-[0.04em] text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
                   {g.label}
