@@ -174,26 +174,8 @@ pub async fn agent_proxy(
 
     // Every message send must belong to a persisted session (may inject a
     // generated contextId into the body — see `ensure_chat_session`).
-    let prepared = ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
-    let (body_bytes, persist_info) = (prepared.body, prepared.persist);
-
-    // What this request's history selection chose from, and what it kept. Recorded here rather
-    // than where it was measured: `proxy_span` is the request span the trace page looks for, and
-    // only this scope holds it.
-    if let (Some(report), Ok(user_id)) = (prepared.context_report.as_ref(), claims.user_uuid()) {
-        crate::telemetry::record_context_report(
-            &state.db,
-            &proxy_span,
-            report,
-            crate::telemetry::ContextRecord {
-                user_id,
-                agent_id: Some(agent_id),
-                session_id: persist_info.as_ref().map(|p| p.session_id.clone()),
-                trace_id: Some(flow_ctx.flow_id.clone()),
-                span_id: Some(flow_ctx.parent_span_id.clone()),
-            },
-        );
-    }
+    let (body_bytes, persist_info) =
+        ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
 
     // Persist the user message to chat_messages (fire-and-forget, mirrors CLI
     // behaviour). No trace_id column: session_traces (below) is the
@@ -619,49 +601,27 @@ struct PersistInfo {
 /// Non-message traffic (GetTask, card fetches, …) passes through untouched.
 /// Returns `(body_bytes, Some(PersistInfo))` for message-send requests so the
 /// caller can persist user + agent messages to `chat_messages`.
-/// What `ensure_chat_session` worked out about this request: the body to forward, whether to
-/// persist the turn, and what history selection carried.
-///
-/// A struct rather than a 3-tuple because the third element is only meaningful to the caller — it
-/// owns the request span the report has to be attached to, and this function does not.
-struct PreparedRequest {
-    body: axum::body::Bytes,
-    persist: Option<PersistInfo>,
-    context_report: Option<nasiko_orchestrator::ContextReport>,
-}
-
-impl PreparedRequest {
-    /// Not an A2A send, so nothing was selected and nothing is persisted.
-    fn passthrough(body: axum::body::Bytes) -> Self {
-        Self {
-            body,
-            persist: None,
-            context_report: None,
-        }
-    }
-}
-
 async fn ensure_chat_session(
     state: &AppState,
     claims: &Claims,
     agent_id: Uuid,
     _agent_base_url: &str,
     body_bytes: axum::body::Bytes,
-) -> Result<PreparedRequest, StatusCode> {
+) -> Result<(axum::body::Bytes, Option<PersistInfo>), StatusCode> {
     // Not JSON, or not a message send → pass through; the agent is the
     // authority on whether the payload is valid A2A.
     let Ok(mut rpc) = serde_json::from_slice::<serde_json::Value>(&body_bytes) else {
-        return Ok(PreparedRequest::passthrough(body_bytes));
+        return Ok((body_bytes, None));
     };
     let is_send = rpc
         .get("method")
         .and_then(|m| m.as_str())
         .is_some_and(|m| MESSAGE_SEND_METHODS.contains(&m));
     if !is_send {
-        return Ok(PreparedRequest::passthrough(body_bytes));
+        return Ok((body_bytes, None));
     }
     let Some(message) = rpc.pointer_mut("/params/message") else {
-        return Ok(PreparedRequest::passthrough(body_bytes));
+        return Ok((body_bytes, None));
     };
 
     let user_id: Uuid = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -775,31 +735,19 @@ async fn ensure_chat_session(
     // routing/orchestrator path, so direct `--agent`/`-u` chat gets the
     // continuity its own "resume with --session-id" hint implies.
     let mut rewrite_needed = injected;
-    let mut context_report = None;
     if !user_text.is_empty() && same_agent_session {
-        // This agent receives the history, so its switch decides IP-4; unreadable reads as off.
-        let compress_history: bool =
-            sqlx::query_scalar("SELECT compress_enabled FROM agents WHERE id = $1")
-                .bind(agent_id)
-                .fetch_optional(&state.db)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(false);
         let history_store = state.history_vector_store();
+        // A direct chat: this agent's own switch decides history compression.
         let history = context_selection::fetch_for_user(
             &state.db,
             user_id,
+            context_selection::CompressionScope::Agent(agent_id),
             &session_id,
             &history_store,
             &user_text,
-            &ContextTiers::from_config(&state.config)
-                .with_overrides(&state.db)
-                .await,
-            compress_history,
+            &ContextTiers::from_config(&state.config),
         )
         .await;
-        context_report = Some(history.report.clone());
         if !history.is_empty()
             && let Some(part) = message
                 .get_mut("parts")
@@ -819,17 +767,9 @@ async fn ensure_chat_session(
             tracing::error!(error = %e, "agent proxy: failed to re-serialize body after contextId/history injection");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-        return Ok(PreparedRequest {
-            body: rewritten.into(),
-            persist: persist_info,
-            context_report,
-        });
+        return Ok((rewritten.into(), persist_info));
     }
-    Ok(PreparedRequest {
-        body: body_bytes,
-        persist: persist_info,
-        context_report,
-    })
+    Ok((body_bytes, persist_info))
 }
 
 /// Extract the agent's reply text from a JSON-RPC response for persistence.
