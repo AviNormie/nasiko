@@ -39,12 +39,9 @@ import { CORE_SECTIONS } from './search'
 interface Row {
   key: string
   label: string
-  to:
-    | '/settings'
-    | '/settings/secrets'
-    | '/settings/chat-context'
-    | '/settings/appearance'
-    | '/settings/password'
+  // A layer's own `personalSettingsLinks` entry carries its own route (e.g. `/settings/memory`), not one of the
+  // core's — same widening `LayerNavItem` uses for the app sidebar (edition.ts).
+  to: string
   section?: string
 }
 
@@ -65,7 +62,7 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
   // Chat's breakpoint for an inline rail (ChatPage `wide`).
   const wide = useMediaQuery('(min-width: 1024px)')
   const [sheetOpen, setSheetOpen] = useState(false)
-  const { settingsSections } = useSlots()
+  const { settingsSections, personalSettingsLinks } = useSlots()
   const location = useRouterState({ select: (s) => s.location })
   const admin = me.data?.is_superuser === true
   const inGroup = (g: 'workspace' | 'security') => settingsSections.filter((s) => s.group === g)
@@ -95,6 +92,9 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
         ...withLayer([], admin ? inGroup('security') : []),
         { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
         { key: 'chat-context', label: copy.chatContext.label, to: '/settings/chat-context' },
+        // Every user's own, like Secrets/Chat context above — never gated by `admin` (personalSettingsLinks is
+        // a plain nav link to the layer's own route, not a `/settings?section=` page).
+        ...personalSettingsLinks.map((l): Row => ({ key: l.key, label: l.label, to: l.to })),
       ],
     },
     {
