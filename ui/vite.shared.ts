@@ -215,7 +215,7 @@ export function nasikoApp(o: AppOptions): UserConfig {
       babel({
         presets: [reactCompilerPreset()],
         exclude:
-          /[\\/]node_modules[\\/]|[\\/]src[\\/](weave[\\/]core|mocks|test)[\\/]|\.test\.tsx?$|\.gen\.ts$/,
+          /[\\/]node_modules[\\/]|[\\/]src[\\/](weave[\\/]core|genui[\\/]lang|mocks|test)[\\/]|\.test\.tsx?$|\.gen\.ts$/,
       }),
       tailwindcss(),
       routesManifest(routes),

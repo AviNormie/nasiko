@@ -40,6 +40,7 @@ export default defineConfig({
         // Vendored, framework-free, and not ours to cover. Matched by shape
         // rather than by edition path: a published config names no edition.
         '**/src/weave/core/**',
+        '**/src/genui/lang/**',
         '**/main.tsx',
       ],
       thresholds: { lines: 60, statements: 60, functions: 60, branches: 60 },
