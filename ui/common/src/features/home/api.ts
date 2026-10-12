@@ -14,7 +14,7 @@
  * is visible), and two reads per row on screen through a limiter of 4: the agent's spend series (superusers only: the
  * timeseries isn't ACL-scoped) and its build records (last change). A row read is dropped when its row scrolls away.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useSlots } from '@/app/edition-context'
 import type { HomeLevel } from '@/app/edition'
@@ -36,6 +36,7 @@ import { uniqueByName } from '@/features/overview/health'
 import type { Range } from '@/features/overview/search'
 import { useDashboard, useSavings } from '@/features/tokenops/api'
 import type { Me } from '@/lib/api/auth'
+import type { AgentPerf } from './charts'
 import { buildRows, needsByAgent, type HomeAgent, type RowBudget } from './rows'
 import { isUnitScope, unitOf, type Scope } from './search'
 import { BUDGET_POLL_MS, ROW_READ_STALE_MS, ROW_READS, SAVINGS_ROWS } from './tuning'
@@ -92,6 +93,21 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
           dash.data.agents.map((r) => [
             r.agent_id,
             { cost: r.total_cost, operations: r.operations },
+          ]),
+        )
+      : null
+  // Cost × p95's figures (PR2d): the same ACL-scoped rows, only while they describe this window.
+  const perf: Map<string, AgentPerf> | null =
+    dash.data && spend
+      ? new Map(
+          dash.data.agents.map((r) => [
+            r.agent_id,
+            {
+              operations: r.operations,
+              costPerOp: r.avg_cost_per_operation,
+              p95: r.avg_latency_p95_ms,
+              hours: r.container_hours,
+            },
           ]),
         )
       : null
@@ -160,6 +176,9 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
     win,
     owner: (id: string) => users.data?.get(id) ?? org.names.get(id) ?? null,
     spendStatus,
+    perf,
+    /** The dashboard's failure, for the band's Cost × p95 panel (its retry is `retryMoney`). */
+    dashError: dash.error,
     /** Calls in the window had no price: spend is a floor. */
     unpriced: (dash.data?.summary.unpriced_calls ?? 0) > 0 && spendStatus !== 'loading',
     savedStatus,
@@ -264,10 +283,18 @@ const FINOPS = '/api/observability/finops'
  * aggregate), so a failure isn't retried (the row keeps its total) and a batched per-agent series is a server ask.
  */
 export function useRowSeries(id: string, win: Pick<ResolvedWindow, 'start' | 'end'>) {
+  return useQuery(seriesQuery(id, win))
+}
+
+/**
+ * The series read behind `useRowSeries`; `null` reads the whole fleet's (the chart band's Other, on Fleet only). The
+ * band stacks the same queries the sparklines read, so a row on screen costs its series once.
+ */
+export function seriesQuery(id: string | null, win: Pick<ResolvedWindow, 'start' | 'end'>) {
   const bounds = { start_time: win.start.toISOString(), end_time: win.end.toISOString() }
-  const path = withQuery(`${FINOPS}/spend-timeseries`, { ...bounds, agent_id: id })
-  return useQuery({
-    queryKey: ['home', 'series', id, bounds.start_time, bounds.end_time],
+  const path = withQuery(`${FINOPS}/spend-timeseries`, id ? { ...bounds, agent_id: id } : bounds)
+  return queryOptions({
+    queryKey: ['home', 'series', id ?? 'fleet', bounds.start_time, bounds.end_time],
     queryFn: ({ signal }) =>
       rowLimiter(signal, async () => {
         const body = await apiData<FinopsSpendTimeseries>(path, { signal })

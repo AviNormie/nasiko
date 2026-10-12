@@ -90,6 +90,43 @@ export const copy = {
       'A unit shows the agents and harnesses its members own, its sub-units included.',
     noUsage: (days: number) => `No usage in the last ${days} days.`,
   },
+  charts: {
+    label: 'Charts',
+    spend: (days: number) => `Spend · ${days}d`,
+    overTime: 'Over time',
+    byAgent: 'By agent',
+    view: 'Spend view',
+    trendSubtitle: (shown: number, of: number, fleet: boolean) =>
+      fleet
+        ? `Per day, the top ${shown} agents and the rest of the fleet`
+        : of > shown
+          ? `Per day, the top ${shown} of ${of} agents with spend; the others aren't drawn`
+          : 'Per day, by agent',
+    byAgentSubtitle: 'Largest first',
+    other: 'Other',
+    otherCount: (n: number) => `Other (${n})`,
+    noSpend: (days: number) => `No spend in the last ${days} days.`,
+    trendFailed: 'spend over time',
+    trendSummary: (n: number, days: number) =>
+      `Spend per day over the last ${days} days for the top ${n} agents. By agent lists the totals.`,
+    estimate: 'Includes harness estimates (API list price)',
+    saved: 'Saved tokens by agent',
+    savedSubtitle: (basis: string | null) =>
+      basis ? `Largest first · basis: ${basis}` : 'Largest first',
+    savedCapped: 'Agents past the first 200 may have savings too',
+    noSaved: 'No savings reported in this window.',
+    savedFailed: "Savings couldn't load",
+    openHub: 'Open the agent',
+    health: 'Health',
+    healthSubtitle: 'Pick a rating to show only those rows below',
+    healthFilter: (name: string, n: number) => `Show only ${name} (${n})`,
+    healthChecking: 'Checking health…',
+    notRated: 'Not rated',
+    filtered: (name: string, shown: number, of: number) =>
+      `Showing ${shown} of ${of}: ${name}. The totals and charts cover all of them.`,
+    clear: 'Clear',
+    noneMatch: (name: string) => `No rows are ${name} right now.`,
+  },
   error: "The agents couldn't load",
   unitFailed: "This unit's members couldn't load",
   unitStale: "Couldn't refresh this unit's members: the rows are from the last successful read",

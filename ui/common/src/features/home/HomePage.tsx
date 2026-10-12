@@ -9,12 +9,13 @@
  * `?range=` (7/30/90 days). "Now" is frozen per visit and moves on return, as the Overview's did.
  *
  * PR2b adds the spend sparklines, last change, budget use (a preview) and owner grouping, and two-line rows below
- * 640 px; PR2c the EE levels.
+ * 640 px; PR2c the EE levels; PR2d the chart band between the strip and the table (`components/ChartBand`), whose health
+ * bar filters the table (`?health=`).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -45,14 +46,25 @@ import { fmtLocalTime, fmtMoney, fmtMoneyFloor, fmtTokens } from '@/lib/format'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
 import { budgetsShown, useHome, type HomeBudgets, type SourceStatus } from './api'
+import { filterByHealth } from './charts'
 import { PhoneRows } from './components/PhoneRows'
 import { RowsTable } from './components/RowsTable'
 import { copy } from './copy'
 import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import { isUnitScope, type HomeSearch, type Scope } from './search'
-import { PHONE_QUERY, RETURN_REFRESH_MS, SKELETON_ROW_PX, SKELETON_ROWS, TOUCH } from './tuning'
+import {
+  BAND_SKELETON_PX,
+  PHONE_QUERY,
+  RETURN_REFRESH_MS,
+  SKELETON_ROW_PX,
+  SKELETON_ROWS,
+  TOUCH,
+} from './tuning'
 import { useBudgetStamp } from './useBudgetStamp'
+
+/** The chart band is its own chunk (PR2d, #63): the chart kit loads only when it draws. */
+const ChartBand = lazy(() => import('./components/ChartBand'))
 
 type SetSearch = (patch: Partial<HomeSearch>, opts?: { replace?: boolean }) => void
 
@@ -164,8 +176,14 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       })
     : null
 
+  // The health bar narrows the table only (#62): the strip and the charts keep the whole scope.
+  const health = search.health
+  const shown = rows ? filterByHealth(rows, health) : null
+  const healthName = (h: NonNullable<HomeSearch['health']>) =>
+    h === 'unknown' ? copy.charts.notRated : overviewCopy.rating[h]
+
   const rowsProps = {
-    rows: rows ?? [],
+    rows: shown ?? [],
     // Fleet and an org level group by owner; Yours is one owner.
     grouped: scope !== 'yours',
     days,
@@ -389,7 +407,41 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           {t && t.spend === 0 && !home.unpriced && !rows.some((r) => (r.requests ?? 0) > 0) ? (
             <p className="m-0 text-sm text-muted-foreground">{copy.empty.noUsage(days)}</p>
           ) : null}
-          {phone ? (
+          <Suspense fallback={<PanelSkeleton height={BAND_SKELETON_PX} />}>
+            <ChartBand
+              rows={rows}
+              superuser={me.is_superuser}
+              fleet={scope === 'fleet'}
+              days={days}
+              win={home.win}
+              perf={home.perf}
+              spendStatus={home.spendStatus}
+              dashError={home.dashError}
+              savedStatus={home.savedStatus}
+              savedCapped={home.savedCapped}
+              unpriced={home.unpriced}
+              retryMoney={home.retryMoney}
+              ratingsPending={home.ratingsPending}
+              health={health}
+              onHealth={(h) => change({ health: h })}
+            />
+          </Suspense>
+          {health ? (
+            <p role="status" className="m-0 flex flex-wrap items-center gap-2 text-sm">
+              {shown?.length
+                ? copy.charts.filtered(healthName(health), shown.length, rows.length)
+                : copy.charts.noneMatch(healthName(health))}
+              <Button
+                size="sm"
+                variant="ghost"
+                className={TOUCH}
+                onClick={() => change({ health: undefined })}
+              >
+                {copy.charts.clear}
+              </Button>
+            </p>
+          ) : null}
+          {!shown?.length ? null : phone ? (
             <PhoneRows {...rowsProps} />
           ) : (
             <RowsTable {...rowsProps} sort={sort} onSort={setSort} />
