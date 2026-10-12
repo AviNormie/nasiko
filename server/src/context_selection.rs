@@ -155,18 +155,13 @@ fn parse_rfc3339(raw: Option<&str>) -> Option<DateTime<Utc>> {
 
 /// The full state of the caller's selection preferences.
 ///
-/// `history_compression` and `blocked_by` are not preferences — they are the *effective* state of a
-/// switch that lives on the caller's agents, served here because the page showing these settings is
-/// where a user asks "is compression on, and if not, why not". Working it out client-side means
-/// re-deriving a server rule from a paginated agent list.
+/// `history_compression` is not a preference: it is the effective state for the caller's
+/// Orchestrator chats. A direct chat follows the addressed agent's own switch.
 #[derive(Debug, Serialize)]
 struct ContextStrategyResponse {
     strategy: ContextSelectionStrategy,
     enabled: bool,
     history_compression: bool,
-    /// The caller's live, non-internal agents with the switch off. Empty when compression is on,
-    /// and also when the caller owns no agents — nothing is blocking it, there is nothing to agree.
-    blocked_by: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -176,26 +171,25 @@ pub(crate) struct ContextStrategyUpdate {
     enabled: Option<bool>,
 }
 
-/// Whether this deployment allows history compression at all, before any per-agent switch.
-///
-/// Resolved from the tier table rather than read off a config field, so this answer and the one the
-/// chat path applies come from the same place.
-fn history_compression_allowed(state: &AppState) -> bool {
-    ContextTiers::from_config(&state.config).compress.enabled
+/// History compression for Orchestrator chats, resolved exactly as the chat path resolves it:
+/// the deployment flag narrowed by `settings.compress_history`.
+async fn history_compression_allowed(state: &AppState) -> bool {
+    ContextTiers::from_config(&state.config)
+        .with_overrides(&state.db)
+        .await
+        .compress
+        .enabled
 }
 
 async fn strategy_response(
     state: &AppState,
-    user_id: Uuid,
     strategy: ContextSelectionStrategy,
     enabled: bool,
 ) -> ContextStrategyResponse {
-    let (opted_in, blocked_by) = nasiko_orchestrator::compression_state(&state.db, user_id).await;
     ContextStrategyResponse {
         strategy,
         enabled,
-        history_compression: opted_in && history_compression_allowed(state),
-        blocked_by,
+        history_compression: history_compression_allowed(state).await,
     }
 }
 
@@ -235,7 +229,7 @@ pub(crate) async fn get_context_strategy(
             return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
         }
     };
-    Json(strategy_response(&state, user_id, strategy, enabled).await).into_response()
+    Json(strategy_response(&state, strategy, enabled).await).into_response()
 }
 
 #[utoipa::path(
@@ -260,8 +254,9 @@ pub(crate) async fn update_context_strategy(
     };
 
     match apply_preferences(&state.db, user_id, Some(body.strategy), None, body.enabled).await {
-        Ok(saved) => Json(strategy_response(&state, user_id, saved.strategy, saved.enabled).await)
-            .into_response(),
+        Ok(saved) => {
+            Json(strategy_response(&state, saved.strategy, saved.enabled).await).into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -351,7 +346,6 @@ struct ContextResponse {
     level: PacmsBudgetLevel,
     enabled: bool,
     history_compression: bool,
-    blocked_by: Vec<Uuid>,
 }
 
 /// `PATCH /api/me/context` — strategy, tier and switch in one transaction.
@@ -387,13 +381,11 @@ pub(crate) async fn update_context(
         Err(e) => return e.into_response(),
     };
 
-    let (opted_in, blocked_by) = nasiko_orchestrator::compression_state(&state.db, user_id).await;
     Json(ContextResponse {
         strategy: saved.strategy,
         level: saved.level,
         enabled: saved.enabled,
-        history_compression: opted_in && history_compression_allowed(&state),
-        blocked_by,
+        history_compression: history_compression_allowed(&state).await,
     })
     .into_response()
 }
