@@ -85,7 +85,7 @@ describe('TokenOps page', () => {
     expect(within(panel).getByText('Measured + estimated')).toBeInTheDocument()
   })
 
-  it('shows one page loader under the sticky bar on a cold load; a window change keeps the panels', async () => {
+  it('shows one page loader under the header on a cold load; a window change keeps the panels', async () => {
     server.use(
       http.get(`*${FINOPS}/dashboard`, async () => {
         await delay(300)

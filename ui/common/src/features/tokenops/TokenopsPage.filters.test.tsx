@@ -95,19 +95,18 @@ describe('drill-down chips and metrics', () => {
     await user.click(within(kpis).getByRole('button', { name: /Fewer metrics/ }))
     expect(within(kpis).queryByText('Active agents')).toBeNull()
 
-    const crumbs = screen.getByRole('navigation', { name: 'Drill-down' })
-    expect(within(crumbs).getByText(liveAgent.display_name)).toHaveAttribute(
+    // The drill path is the top bar's breadcrumb: TokenOps › day › agent.
+    const crumbs = () => screen.getByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs()).getByText(liveAgent.display_name)).toHaveAttribute(
       'aria-current',
-      'location',
+      'page',
     )
     await user.click(screen.getByRole('button', { name: 'Remove agent filter' }))
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('agent'))
-    await user.click(
-      within(screen.getByRole('navigation', { name: 'Drill-down' })).getByRole('button', {
-        name: 'Last 30 days',
-      }),
-    )
+    await user.click(within(crumbs()).getByRole('button', { name: 'TokenOps' }))
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('day'))
-    expect(screen.queryByRole('navigation', { name: 'Drill-down' })).toBeNull()
+    // Undrilled, the shell's breadcrumb is back: TokenOps is the current page, not a button.
+    expect(within(crumbs()).queryByRole('button', { name: 'TokenOps' })).toBeNull()
+    expect(router.state.location.search).toMatchObject({ preset: '30d' })
   })
 })

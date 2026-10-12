@@ -53,7 +53,7 @@ describe('TokenOps summary', () => {
 
   it('the in-page button lands exactly where the Overview link does', async () => {
     // The user-visible bug: two ways in, two landing positions. The button scrolled without the
-    // sticky-bar offset, so it stopped with the heading tucked under the bar.
+    // offset, so it stopped with the heading tucked under the top bar.
     const offsets: (string | undefined)[] = []
     const original = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = function (this: Element) {
@@ -66,7 +66,7 @@ describe('TokenOps summary', () => {
       const banner = await screen.findByRole('region', { name: /Optimisation saved you/ })
       await userEvent.click(within(banner).getByRole('button', { name: /See the breakdown/ }))
       await waitFor(() => expect(offsets).toHaveLength(1))
-      // Offset applied, not a bare scroll: that is what keeps the heading clear of the sticky bar.
+      // Offset applied, not a bare scroll: that is what keeps the heading clear of the top bar.
       expect(offsets[0]).toMatch(/^\d+px$/)
     } finally {
       Element.prototype.scrollIntoView = original

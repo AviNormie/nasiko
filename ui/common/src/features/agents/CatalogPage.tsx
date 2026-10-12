@@ -4,14 +4,21 @@
  * hidden unless asked for; they never run and the Harnesses page owns their usage.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { Bot, RotateCw, SearchX, X } from 'lucide-react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Toggle } from '@/components/ui/toggle'
-import { PageHeader } from '@/components/shared/page-header'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { PageLoader } from '@/components/shared/page-loader'
 import { SearchInput } from '@/components/shared/search-input'
 import { EmptyState } from '@/components/shared/state-card'
@@ -21,13 +28,17 @@ import { ErrorState, StateCard } from '@/features/observability/StateCard'
 import { useFleetHealth } from '@/features/overview/api'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { meQuery } from '@/lib/api/auth'
+import { useSiblingState } from '@/lib/siblings'
 import { useCatalogAgents, useCatalogTabs, useUsers } from './api'
-import { AgentMark, AgentsNav, FirstRunSteps, StatusBadge } from './components/bits'
+import { AgentMark, AgentsHeader, FirstRunSteps, StatusBadge } from './components/bits'
 import { copy } from './copy'
 import type { CatalogSearch } from './search'
 import { displayStatus, isHarness } from './status'
 import { CARD_SKILLS, TOP_TAGS } from './tuning'
 import type { Agent } from './types'
+
+/** The Tag filter's "no tag" value (a Select item can't be empty). */
+const ALL_TAGS = '__all'
 
 export function CatalogPage({
   search,
@@ -41,10 +52,9 @@ export function CatalogPage({
   const pinnedTabs = useCatalogTabs().data
   const names = useUsers(!!me?.is_superuser).data
   const inputRef = useRef<HTMLInputElement>(null)
-  // Ratings are fetched only while the ?health= filter (the home's rating badges link here) is on (eng review R1).
+  // Ratings are fetched only while the Overview's ?health= filter is on (eng review R1).
   const [now] = useState(() => new Date())
-  // Members never read the fleet-wide spend series (the home and the hub rate them the same way).
-  const fleet = useFleetHealth(now, !!search.health, !!me?.is_superuser)
+  const fleet = useFleetHealth(now, !!search.health)
 
   // "/" focuses search unless the user is already typing somewhere.
   useEffect(() => {
@@ -99,25 +109,23 @@ export function CatalogPage({
       }),
     [pool, search.health, rated, search.tag, search.yours, term, me?.sub],
   )
+  // Previous/Next on the agent page walks the cards as shown when one is clicked.
+  const linkState = useSiblingState(shown.map((a) => a.id))
 
   const header = (
-    <>
-      <PageHeader
-        title={copy.catalogTitle}
-        description={
-          q.data ? (
-            <>
-              {copy.agentsCount(all.length - harnessCount)}
-              {(q.hasNextPage || q.isFetchingNextPage) && !q.isFetchNextPageError
-                ? ` · ${copy.loadingMore}`
-                : ''}
-            </>
-          ) : null
-        }
-        actions={<DeployAgentButton />}
-      />
-      <AgentsNav current="/agents" />
-    </>
+    <AgentsHeader
+      current="/agents"
+      description={
+        <>
+          {copy.catalogSub}
+          {(q.hasNextPage || q.isFetchingNextPage) && !q.isFetchNextPageError
+            ? ` · ${copy.loadingMore}`
+            : ''}
+        </>
+      }
+      // An empty catalog's card offers Deploy itself.
+      action={q.data && all.length === 0 ? null : <DeployAgentButton />}
+    />
   )
 
   // Wait for the ratings, not just the directory: until the dashboards land every agent rates Unknown (/ship review).
@@ -173,30 +181,52 @@ export function CatalogPage({
             <X className="size-3" aria-hidden />
           </Button>
         ) : null}
-        <Chip
-          active={!!search.yours}
-          onClick={() => setSearch({ yours: search.yours ? undefined : true })}
-        >
-          {copy.yours}
-        </Chip>
-        {tags.map((t) => (
-          <Chip
-            key={t}
-            active={search.tag === t}
-            onClick={() => setSearch({ tag: search.tag === t ? undefined : t })}
+        {/* The filters keep to the right: search reads first, then what narrows it. */}
+        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <Select
+            value={search.yours ? 'yours' : 'anyone'}
+            onValueChange={(v) => setSearch({ yours: v === 'yours' ? true : undefined })}
           >
-            {t}
-          </Chip>
-        ))}
-        {harnessCount ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSearch({ harnesses: search.harnesses ? undefined : true })}
-          >
-            {search.harnesses ? copy.hideHarnesses : copy.showHarnesses(harnessCount)}
-          </Button>
-        ) : null}
+            <SelectTrigger size="sm" aria-label={copy.ownerFilter} className="text-xs">
+              <span className="text-muted-foreground">{copy.ownerLabel}:</span> <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="anyone">{copy.anyone}</SelectItem>
+              <SelectItem value="yours">{copy.yours}</SelectItem>
+            </SelectContent>
+          </Select>
+          {tags.length || search.tag ? (
+            <Select
+              value={search.tag ?? ALL_TAGS}
+              onValueChange={(v) => setSearch({ tag: v === ALL_TAGS ? undefined : v })}
+            >
+              <SelectTrigger size="sm" aria-label={copy.tagFilter} className="max-w-56 text-xs">
+                <span className="text-muted-foreground">{copy.tagLabel}:</span> <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_TAGS}>{copy.allTags}</SelectItem>
+                {/* A tag from a link that isn't among the top ones still shows what is applied. */}
+                {search.tag && !tags.includes(search.tag) ? (
+                  <SelectItem value={search.tag}>{search.tag}</SelectItem>
+                ) : null}
+                {tags.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {harnessCount ? (
+            <Label className="gap-2 text-xs font-normal text-muted-foreground">
+              <Switch
+                checked={!!search.harnesses}
+                onCheckedChange={(on) => setSearch({ harnesses: on ? true : undefined })}
+              />
+              {copy.harnessesToggle(harnessCount)}
+            </Label>
+          ) : null}
+        </div>
       </div>
       {search.health && fleet.costFailed ? (
         <StateCard
@@ -257,6 +287,7 @@ export function CatalogPage({
                 meId={me?.sub}
                 ownerName={names?.get(a.owner_id)}
                 reason={search.health ? rated?.get(a.id)?.reasons[0]?.text : undefined}
+                linkState={linkState}
               />
             </li>
           ))}
@@ -266,39 +297,19 @@ export function CatalogPage({
   )
 }
 
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: string
-}) {
-  return (
-    <Toggle
-      variant="outline"
-      size="sm"
-      pressed={active}
-      onPressedChange={onClick}
-      className="min-h-8 rounded-full px-3 text-xs font-normal text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground data-[state=on]:border-primary-text data-[state=on]:bg-primary/10 data-[state=on]:text-primary-text"
-    >
-      {children}
-    </Toggle>
-  )
-}
-
 /** Memoized: every search keystroke re-renders the page, and the catalog can hold hundreds of cards. */
 const AgentCard = memo(function AgentCard({
   agent,
   meId,
   ownerName,
   reason,
+  linkState,
 }: {
   agent: Agent
   meId?: string
   ownerName?: string
   reason?: string
+  linkState: () => HistoryState
 }) {
   const harness = isHarness(agent)
   const name = agent.display_name || agent.name
@@ -312,7 +323,7 @@ const AgentCard = memo(function AgentCard({
       asChild
       className="h-full gap-2 p-4 transition-[color,border-color,box-shadow] hover:border-primary/40 hover:shadow-lg focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
+      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}} state={linkState}>
         <div className="flex items-start gap-3">
           <AgentMark name={name} iconUrl={agent.icon_url} size={36} />
           <div className="min-w-0 flex-1">
@@ -329,7 +340,7 @@ const AgentCard = memo(function AgentCard({
         >
           {agent.description || copy.noDescription}
         </p>
-        {/* The health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
+        {/* The Overview's health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
         {reason ? (
           <p className="line-clamp-1 text-xs font-medium" data-testid="health-reason">
             {copy.healthReason(reason)}

@@ -6,6 +6,7 @@ import { CONFIG_CACHE_SECONDS, SPEND_DAYS } from './tuning'
 
 export const copy = {
   title: 'LLM router',
+  sub: 'Which model and key each of your agents uses, and who pays',
   loading: 'Loading the LLM router',
   howItWorks: 'How routing works',
   howTitle: 'How a call is routed',
@@ -35,7 +36,7 @@ export const copy = {
   anchorsLabel: 'Sections',
 
   // Summary strip
-  summaryLabel: 'Routing summary',
+  summaryLabel: 'Filter agents by routing',
   atLeast: (n: number) => `at least ${n}`,
   summaryAgents: (n: string) => `${n} agents`,
   summaryDefault: (n: string, detail: string | null) =>
@@ -45,13 +46,10 @@ export const copy = {
     `${provider}, ${yourKey ? 'your key' : 'platform key'}`,
   filterNames: { attached: 'Attached', default: 'Your default', none: 'No config' },
   summaryNone: (n: string) => `${n} no config (platform key)`,
-  kpiAgents: 'Your agents',
-  kpiAgentsNote: 'Show all',
+  filterAll: 'All',
   kpiNoDefault: 'No default config',
   kpiAttachedNote: 'A config of their own',
   kpiNoneNote: 'Platform key',
-  filteredBy: (what: string) => `Showing agents: ${what}`,
-  clearFilter: 'Show all',
   foldedTitle: (n: string) => `${n} agents on your default`,
   foldedTitleMore: (n: string) => `${n} more on your default`,
   foldedDetail: (config: string, key: string) => `${config} · ${key}`,
@@ -115,6 +113,7 @@ export const copy = {
 
   // Your configs
   configsTitle: 'Your configs',
+  configsCount: (n: number) => `${n} ${n === 1 ? 'config' : 'configs'}`,
   newConfig: 'New config',
   setADefault: 'Set a default',
   noConfigs: 'No configs yet',
@@ -135,6 +134,7 @@ export const copy = {
 
   // Providers
   providersTitle: 'Providers',
+  providersCount: (n: number) => `${n} ${n === 1 ? 'provider' : 'providers'}`,
   colProvider: 'Provider',
   colModels: 'Models',
   colPrice: 'In / out per 1M',
