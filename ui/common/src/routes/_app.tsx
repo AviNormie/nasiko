@@ -1,5 +1,5 @@
 import { skipToken, useQuery } from '@tanstack/react-query'
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
@@ -47,12 +47,19 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const navHidden = useSlots().navHidden
+  const { navHidden, shellEnd: ShellEnd } = useSlots()
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
+  const path = useRouterState({ select: (s) => s.location.pathname })
   return (
     <AppShell
-      end={<BuildToasts />}
+      end={
+        <>
+          <BuildToasts />
+          {/* A layer's chrome beside every page (EE: the Weave dock). */}
+          {ShellEnd ? <ShellEnd path={path} /> : null}
+        </>
+      }
       hidden={[...guideHidden, ...layerHidden]}
       badges={
         building

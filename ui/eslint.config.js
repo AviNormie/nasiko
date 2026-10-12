@@ -32,10 +32,6 @@ const PUBLIC = {
     'rememberTarget',
     'types',
     'waiting',
-    // The harness session ledger maps recorded tool calls (plans/feat-agent-centric.md eng PUBLIC adds for PR1b) and
-    // finds its chat past the rail's loaded pages.
-    'recorded',
-    'sessionLookup',
   ],
   deploy: [
     'AgentBuildsTab',
@@ -48,20 +44,12 @@ const PUBLIC = {
     'GithubTab',
     'RegistryTab',
     'search',
-    // The agent hub's deploy markers (plans/feat-agent-centric.md eng): the agent's builds read and its record type.
-    'api',
-    'types',
   ],
   // Flows (plans/feat-flows.md): the call model and its duration format (the flow narrative), and "Open flow" (F19).
-  // The agent hub's Flows list reads the list query (plans/feat-agent-centric.md eng PUBLIC adds).
-  flows: ['calls', 'precision', 'components/OpenFlowLink', 'paused', 'api'],
+  flows: ['calls', 'precision', 'components/OpenFlowLink', 'paused'],
   harnesses: ['types', 'rollup', 'copy', 'api', 'constants', 'liveIndividual'],
-  // The agent hub (plans/feat-agent-centric.md PR1a): the agent detail's Overview hosts its timeline.
-  // The home's last change links a marker on the hub inside the hub's default window (PR2b).
-  hub: ['components/HubTimeline', 'events', 'search'],
-  // The agent hub's Tools card counts connectors and blocked tools (plans/feat-agent-centric.md PR1c).
-  mcp: ['components/AgentMcpTab', 'api'],
-  narrative: ['tokenops', 'trace', 'harness', 'flows', 'agentHub', 'home'],
+  mcp: ['components/AgentMcpTab'],
+  narrative: ['tokenops', 'trace', 'harness', 'overview', 'flows'],
   onboarding: ['api', 'GuideCard', 'GuideHost', 'index', 'logic', 'types'],
   // Context optimization (plans/feat-context-optimization.md eng D1): its rules, copy, the trace's Optimization block
   // (M2) and the /optimization Workspace row (T7). TokenOps' own savings panel is main's (PR #28, /finops/savings).
@@ -76,18 +64,7 @@ const PUBLIC = {
     // The Workspace footer's row, so a layer's slot rows (EE Organization policy) line up with the core's.
     'components/WorkspaceRow',
   ],
-  // The agent hub rates one agent with the Overview's own rules (plans/feat-agent-centric.md eng PUBLIC adds).
-  // The scoped home (PR2) keeps the Overview's Needs you, first run and Setup guide, its window and its tuning.
-  overview: [
-    'api',
-    'copy',
-    'health',
-    'search',
-    'tuning',
-    'components/NeedsYou',
-    'components/FirstRun',
-    'components/SetupGuide',
-  ],
+  overview: ['api', 'copy'],
   observability: ['StateCard', 'tuning', 'types', 'spans', 'copy', 'sessions', 'limiter'],
   router: ['components/RoutingCard', 'api', 'types', 'budgets', 'routing'],
   // The hairline rows every Settings page is built from (EE uses them too).
@@ -104,8 +81,7 @@ const PUBLIC = {
     'attribution',
     'series',
   ],
-  // The session ledger (PR1b) shares the session pages' breadcrumb.
-  trace: ['api', 'Waterfall', 'Crumbs'],
+  trace: ['api', 'Waterfall'],
   workflows: [],
 }
 
@@ -290,14 +266,15 @@ export default tseslint.config(
     rules: { 'no-restricted-syntax': ['error', ...banned, noRawElements[0]] },
   },
   // The one fetch wrapper, and the streams it doesn't cover (SSE bodies need the raw Response): chat turns, the
-  // agent log tail (`useLogStream`) and a build's deploy stream (`useBuildStream`); API modules, so still no fetch in
-  // components.
+  // agent log tail (`useLogStream`), a build's deploy stream (`useBuildStream`) and EE's Weave generation; API
+  // modules, so still no fetch in components.
   {
     files: [
       'common/src/lib/api/client.ts',
       'common/src/features/chat/registry.ts',
       'common/src/features/sessions/api.ts',
       'common/src/features/deploy/api.ts',
+      'ee/web/src/weave/stream.ts',
     ],
     rules: {
       'no-restricted-syntax': [
