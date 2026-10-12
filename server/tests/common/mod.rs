@@ -454,6 +454,7 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         savings_factor_refresh_secs: 86_400,
         savings_factor_min_samples: 1_600,
         savings_factor_window_days: 30,
+        minimal_code_holdout_pct: 0, // no flow withheld, so the ladder is deterministic under test
         react_compress_enabled: false,
         react_compress_min_bytes: 2048,
         history_compress_enabled: false,
