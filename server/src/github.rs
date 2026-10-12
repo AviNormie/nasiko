@@ -439,6 +439,14 @@ async fn github_callback_login(
         .await
     {
         Ok(r) => r,
+        // Deactivated or deprovisioned: an expected rejection, so 403 and a
+        // message the person can act on — not the 500 that every other failure
+        // here gets. Matches the password path, which answers `AuthError::Disabled`
+        // the same way.
+        Err(nasiko_auth::AuthError::Disabled) => {
+            tracing::warn!(github_login = %github_user.login, "GitHub SSO login rejected: account deactivated");
+            return (StatusCode::FORBIDDEN, "account deactivated").into_response();
+        }
         Err(e) => {
             tracing::error!(%e, github_login = %github_user.login, "GitHub SSO login: upsert_oauth_user failed");
             return (
