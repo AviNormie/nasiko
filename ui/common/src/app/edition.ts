@@ -49,6 +49,20 @@ export interface SettingsSection {
   Section: ComponentType
 }
 
+/**
+ * A layer's own personal (non-admin) settings row, e.g. EE's memory L2-proxy-consent toggle. Unlike
+ * `SettingsSection` — which renders at `/settings?section=<key>`, a page the core redirects every non-superuser
+ * away from — this is a plain nav link to the layer's own dedicated route (its own file under `routes/_app/`,
+ * same as the core's Chat context), so every user, admin or not, can reach it. Placed in the Security group,
+ * after Chat context: a data/recall preference, the same bucket as that one, not an Account (UI/auth) one.
+ */
+export interface PersonalSettingsLink {
+  key: string
+  label: string
+  /** The layer's own route, e.g. `/settings/memory` — not `/settings?section=`. */
+  to: string
+}
+
 /** The org-unit filter a layer can add to TokenOps (planned in EE). */
 interface OrgUnitFilterProps {
   value?: string
@@ -61,6 +75,7 @@ export interface Slots {
   granteeKinds: GranteeKind[]
   connectorGranteeKinds: ConnectorGranteeKind[]
   settingsSections: SettingsSection[]
+  personalSettingsLinks: PersonalSettingsLink[]
   tokenopsOrgUnitFilter: ComponentType<OrgUnitFilterProps> | null
   topbarStart: ComponentType | null
   shellEnd: ComponentType<{ path: string }> | null
@@ -72,6 +87,7 @@ export const OSS_SLOTS: Slots = {
   granteeKinds: [],
   connectorGranteeKinds: [],
   settingsSections: [],
+  personalSettingsLinks: [],
   tokenopsOrgUnitFilter: null,
   topbarStart: null,
   shellEnd: null,
@@ -106,6 +122,7 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     granteeKinds: [],
     connectorGranteeKinds: [],
     settingsSections: [],
+    personalSettingsLinks: [],
   }
   for (const layer of layers) {
     const s = layer.slots ?? {}
@@ -113,6 +130,8 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     if (s.connectorGranteeKinds)
       out.connectorGranteeKinds = [...out.connectorGranteeKinds, ...s.connectorGranteeKinds]
     if (s.settingsSections) out.settingsSections = [...out.settingsSections, ...s.settingsSections]
+    if (s.personalSettingsLinks)
+      out.personalSettingsLinks = [...out.personalSettingsLinks, ...s.personalSettingsLinks]
     if (s.harnessOrgScope !== undefined) out.harnessOrgScope = s.harnessOrgScope
     if (s.tokenopsOrgUnitFilter !== undefined) out.tokenopsOrgUnitFilter = s.tokenopsOrgUnitFilter
     if (s.topbarStart !== undefined) out.topbarStart = s.topbarStart
