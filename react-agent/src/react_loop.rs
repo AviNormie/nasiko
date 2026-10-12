@@ -363,6 +363,14 @@ impl Orchestrator {
         }
     }
 
+    /// This turn's IP-3 measurement (tool-result bytes in and out), shared with the clone
+    /// `run_stream` hands to its spawned task — so a streaming turn's compression is visible here
+    /// even though nothing else about that turn's context is. Take it before the run, read it
+    /// after.
+    pub fn compression_tally(&self) -> crate::context::CompressionTally {
+        self.context.compression_tally()
+    }
+
     pub fn with_a2a_client(mut self, client: A2aClient) -> Self {
         self.a2a_client = Arc::new(client);
         self
@@ -559,7 +567,8 @@ impl Orchestrator {
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             self.context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -610,7 +619,8 @@ impl Orchestrator {
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
 
@@ -1019,7 +1029,8 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1073,7 +1084,8 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
             } else {
@@ -1263,7 +1275,8 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1317,7 +1330,8 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
             } else {
