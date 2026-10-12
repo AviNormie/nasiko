@@ -216,16 +216,26 @@ pub async fn a2a_dispatch_handler(
     // multi-turn chats keep their history either way. An unknown id simply
     // fetches zero rows.
     let history_sid = session_id.as_deref().unwrap_or(&context_id);
+    // Resolve a direct target before reading history: history compression is decided by the
+    // agent this conversation is with. Authorization still happens below, before anything is
+    // sent to it — reading the caller's own session history needs none.
+    let target_agent = match agent_id.as_deref() {
+        Some(target) if !is_orchestrator => Some(resolve_agent(&state, target).await?),
+        _ => None,
+    };
+    let compression_scope = match &target_agent {
+        Some(agent) => context_selection::CompressionScope::Agent(agent.id),
+        None => context_selection::CompressionScope::Orchestrator,
+    };
     let history_store = state.history_vector_store();
     let history = context_selection::fetch_for_user(
         &state.db,
         user_id,
+        compression_scope,
         history_sid,
         &history_store,
         &text,
-        &ContextTiers::from_config(&state.config)
-            .with_overrides(&state.db)
-            .await,
+        &ContextTiers::from_config(&state.config),
     )
     .await;
 
@@ -245,17 +255,18 @@ pub async fn a2a_dispatch_handler(
                 transcript_role: "user",
                 file_parts: vec![],
                 kind: TurnKind::User,
-                context_report: Some(&history.report),
             },
         )
         .await
     } else {
-        let target = agent_id.as_deref().unwrap();
-        // Resolve the target (UUID or name) to a concrete agent row FIRST, then
+        let target = agent_id.as_deref().unwrap_or_default();
+        // The target (UUID or name) was resolved to a concrete agent row above, FIRST;
         // authorize on the resolved id unconditionally. Gating the authz check
         // behind "does target happen to parse as a UUID" let any name-addressed
         // request (the common case from the UI/CLI) skip the check entirely.
-        let agent = resolve_agent(&state, target).await?;
+        let Some(agent) = target_agent else {
+            return Err(A2aDispatchError::AgentNotFound(target.to_string()));
+        };
         // Edition-aware view access (superuser short-circuit lives inside the check).
         //
         // Deliberately returns the SAME AgentNotFound response as "no such agent"
@@ -292,7 +303,6 @@ pub async fn a2a_dispatch_handler(
             &[],
             session_id,
             history.user_turn_count(),
-            Some(&history.report),
         )
         .await
     }
@@ -421,10 +431,6 @@ pub(crate) struct OrchestratorTurn<'a> {
     /// turn already did. The operator's policy may treat the two differently —
     /// see [`TurnKind`].
     pub(crate) kind: TurnKind,
-    /// What history selection chose from and kept for this turn. Carried rather than recorded at
-    /// the call site because the request span it belongs on is created inside the stream function,
-    /// several hundred lines after selection ran.
-    pub(crate) context_report: Option<&'a nasiko_orchestrator::ContextReport>,
 }
 
 pub(crate) async fn orchestrator_stream(
@@ -442,7 +448,6 @@ pub(crate) async fn orchestrator_stream(
         transcript_role,
         file_parts,
         kind,
-        context_report,
     } = turn;
     // Orchestrator-routed chats never had a `chat_sessions` row, unlike
     // `agent_proxy.rs`'s `ensure_chat_session` for direct agent chat — so
@@ -629,26 +634,6 @@ pub(crate) async fn orchestrator_stream(
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
     let traceparent = crate::telemetry::traceparent_for(&flow_ctx);
-
-    // Selection ran in the caller, before any of this existed; `dispatch_span` is the span the
-    // trace page looks for, so the report is attached here. `agent_id` stays unset — routing has
-    // not chosen one yet — and the read path resolves it through `session_traces`, which this turn
-    // writes as soon as it dispatches.
-    if let Some(report) = context_report {
-        crate::telemetry::record_context_report(
-            &state.db,
-            &dispatch_span,
-            report,
-            crate::telemetry::ContextRecord {
-                user_id,
-                agent_id: None,
-                session_id: Some(context_id.to_string()),
-                trace_id: Some(flow_id.clone()),
-                span_id: Some(flow_ctx.parent_span_id.clone()),
-            },
-        );
-    }
-
     state.flow_guard.init_flow(&flow_ctx, "orchestrator").await;
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
@@ -1225,9 +1210,6 @@ async fn agent_stream(
     // established session (several turns in) leans the other way — see
     // nasiko-coding-policy's minimal_code_addendum() doc comment.
     prior_turn_count: usize,
-    // As `OrchestratorTurn::context_report`: this function owns the `a2a.dispatch` span the
-    // report has to be attached to.
-    context_report: Option<&nasiko_orchestrator::ContextReport>,
 ) -> Result<Response, A2aDispatchError> {
     let endpoint = resolve_endpoint(state, &agent.id.to_string(), &agent.name)
         .await
@@ -1254,35 +1236,7 @@ async fn agent_stream(
     let flow_ctx = crate::telemetry::flow_context_from_span(&dispatch_span)
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
-
-    if let Some(report) = context_report {
-        crate::telemetry::record_context_report(
-            &state.db,
-            &dispatch_span,
-            report,
-            crate::telemetry::ContextRecord {
-                user_id,
-                agent_id: Some(agent.id),
-                session_id: Some(context_id.to_string()),
-                trace_id: Some(flow_id.clone()),
-                span_id: Some(flow_ctx.parent_span_id.clone()),
-            },
-        );
-    }
-
     state.flow_guard.init_flow(&flow_ctx, &agent.name).await;
-
-    // Minimal-code eligibility + holdout, decided once up front so the flow row recorded below and
-    // the addendum injection further down (which only skips when withheld) can't disagree about
-    // which arm this flow landed in. See `nasiko_coding_policy::in_minimal_code_holdout` for why a
-    // control arm is withheld at all — same reasoning as the brevity directive's own holdout.
-    let minimal_code_eligible =
-        agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills);
-    let minimal_code_holdout = minimal_code_eligible
-        && nasiko_coding_policy::in_minimal_code_holdout(
-            &flow_id,
-            state.config.minimal_code_holdout_pct,
-        );
 
     // Carry the A2A context_id so the LLM gateway keys its decision cache on the
     // conversation, not this turn's trace id — same reason as the orchestrator
@@ -1292,14 +1246,7 @@ async fn agent_stream(
     //
     // Re-opens on conflict — see the orchestrator branch above: a repeat request
     // under one traceparent must not inherit the previous one's `completed`.
-    let mut flow_metadata = serde_json::json!({ "context_id": context_id });
-    if minimal_code_eligible {
-        flow_metadata["minimal_code"] = if minimal_code_holdout {
-            serde_json::json!({ "applied": false, "skipped": "holdout" })
-        } else {
-            serde_json::json!({ "applied": true })
-        };
-    }
+    let flow_metadata = serde_json::json!({ "context_id": context_id });
     let _ = sqlx::query(
         r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
            VALUES ($1, $2, $3, $4, $5, 'running', $6)
@@ -1355,25 +1302,19 @@ async fn agent_stream(
     // server-injected context (enterprise supplemental knowledge), and it is what the agent is
     // meant to receive. Building from `query` here silently dropped that injection — the
     // context was resolved on every dispatch and then thrown away.
-    let effective_query = if minimal_code_eligible && !minimal_code_holdout {
-        let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
-        tracing::info!(
-            agent_id = %agent.id,
-            %context_id,
-            prior_turn_count,
-            "a2a_dispatch: injecting minimal-code ladder"
-        );
-        format!("{outbound_query}\n{addendum}")
-    } else {
-        if minimal_code_holdout {
-            tracing::debug!(
+    let effective_query =
+        if agent.minimal_code_enabled && crate::catalog::models::has_coding_skills(&agent.skills) {
+            let addendum = nasiko_coding_policy::minimal_code_addendum(prior_turn_count);
+            tracing::info!(
                 agent_id = %agent.id,
                 %context_id,
-                "a2a_dispatch: minimal-code ladder withheld for this flow's holdout arm"
+                prior_turn_count,
+                "a2a_dispatch: injecting minimal-code ladder"
             );
-        }
-        outbound_query.to_string()
-    };
+            format!("{outbound_query}\n{addendum}")
+        } else {
+            outbound_query.to_string()
+        };
 
     // Streaming first (`message/stream`): agents that stream (all the Rust
     // seed agents, and python a2a-sdk servers) deliver live tokens and tool
@@ -1926,9 +1867,6 @@ pub async fn a2a_upload_handler(
             transcript_role: "user",
             file_parts: collected_files,
             kind: TurnKind::User,
-            // This path mints a fresh context id, so no history was selected and there is nothing
-            // to report. A zero row here would count as a request that optimized nothing.
-            context_report: None,
         },
     )
     .await
