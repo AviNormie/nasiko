@@ -567,8 +567,7 @@ impl Orchestrator {
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join("+");
+                                .collect::<Vec<_>>();
                             self.context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -619,8 +618,7 @@ impl Orchestrator {
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("+"),
+                        .collect::<Vec<_>>(),
                     &combined,
                 );
 
@@ -1029,8 +1027,7 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join("+");
+                                .collect::<Vec<_>>();
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1084,8 +1081,7 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("+"),
+                        .collect::<Vec<_>>(),
                     &combined,
                 );
             } else {
@@ -1275,8 +1271,7 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join("+");
+                                .collect::<Vec<_>>();
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1330,8 +1325,7 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("+"),
+                        .collect::<Vec<_>>(),
                     &combined,
                 );
             } else {

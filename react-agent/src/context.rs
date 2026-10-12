@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use std::collections::HashSet;
+
 use nasiko_compress::Policy;
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +78,8 @@ pub struct ContextConfig {
     ///
     /// Disabled by default — an unconfigured loop stores exactly what it stored before.
     pub compress: Policy<'static>,
+    /// Tools whose results are stored verbatim: agents with their Token optimization switch off.
+    pub uncompressed_tools: HashSet<String>,
 }
 
 impl Default for ContextConfig {
@@ -85,6 +89,7 @@ impl Default for ContextConfig {
             keep_recent: 12,
             chars_per_token: 4,
             compress: Policy::default(),
+            uncompressed_tools: HashSet::new(),
         }
     }
 }
@@ -149,16 +154,22 @@ impl ContextManager {
         });
     }
 
-    pub fn push_tool_result(&mut self, tool_name: &str, content: &str) {
+    /// A batch containing any tool in `uncompressed_tools` is stored verbatim.
+    pub fn push_tool_result(&mut self, tool_names: &[&str], content: &str) {
+        let opted_out = tool_names
+            .iter()
+            .any(|name| self.config.uncompressed_tools.contains(*name));
         // Compress on the way in, so `push`'s token estimate — and therefore the compaction
         // trigger — sees the size the loop will actually carry.
-        let stored = nasiko_compress::compress(content, &self.config.compress).into_text();
-        // Measured here, at the one place the before and after both exist. Every other point in
-        // the loop has only the stored text.
+        let stored = if opted_out {
+            content.to_string()
+        } else {
+            nasiko_compress::compress(content, &self.config.compress).into_text()
+        };
         self.tally.record(content.len(), stored.len());
         self.push(ContextEntry {
             role: ContextRole::ToolResult {
-                tool_name: tool_name.to_string(),
+                tool_name: tool_names.join("+"),
             },
             content: stored,
         });
@@ -339,6 +350,7 @@ mod tests {
             keep_recent: 1,
             chars_per_token: 4,
             compress: Policy::default(),
+            uncompressed_tools: HashSet::new(),
         }
     }
 
@@ -368,7 +380,7 @@ mod tests {
         let payload = noisy_tool_result();
         let mut ctx = ContextManager::new(ContextConfig::default());
 
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
 
         assert_eq!(ctx.entries.last().unwrap().content, payload);
     }
@@ -378,7 +390,7 @@ mod tests {
         let payload = noisy_tool_result();
         let mut ctx = ContextManager::new(compressing_config());
 
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
 
         let stored = &ctx.entries.last().unwrap().content;
         assert!(
@@ -386,6 +398,39 @@ mod tests {
             "stored {} bytes, original {}",
             stored.len(),
             payload.len()
+        );
+    }
+
+    fn opting_out(tool: &str) -> ContextConfig {
+        ContextConfig {
+            uncompressed_tools: HashSet::from([tool.to_string()]),
+            ..compressing_config()
+        }
+    }
+
+    #[test]
+    fn an_opted_out_agent_does_not_stop_compression_for_the_others() {
+        let payload = noisy_tool_result();
+        let mut ctx = ContextManager::new(opting_out("call_agent_a"));
+
+        ctx.push_tool_result(&["call_agent_a"], &payload);
+        assert_eq!(ctx.entries.last().unwrap().content, payload);
+
+        ctx.push_tool_result(&["call_agent_b"], &payload);
+        assert!(ctx.entries.last().unwrap().content.len() < payload.len());
+    }
+
+    #[test]
+    fn a_batch_containing_an_opted_out_agent_is_stored_verbatim() {
+        let payload = noisy_tool_result();
+        let mut ctx = ContextManager::new(opting_out("call_agent_a"));
+
+        ctx.push_tool_result(&["call_agent_b", "call_agent_a"], &payload);
+
+        let entry = ctx.entries.last().unwrap();
+        assert_eq!(entry.content, payload);
+        assert!(
+            matches!(&entry.role, ContextRole::ToolResult { tool_name } if tool_name == "call_agent_b+call_agent_a")
         );
     }
 
@@ -404,7 +449,7 @@ mod tests {
         let tally = ctx.compression_tally();
 
         let mut spawned = ctx.clone();
-        spawned.push_tool_result("fetch_logs", &payload);
+        spawned.push_tool_result(&["fetch_logs"], &payload);
         drop(spawned);
 
         assert!(
@@ -423,8 +468,8 @@ mod tests {
         let mut ctx = ContextManager::new(compressing_config());
         let tally = ctx.compression_tally();
 
-        ctx.push_tool_result("fetch_logs", &payload);
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
 
         assert_eq!(tally.bytes_in(), payload.len() * 2);
         assert_eq!(tally.results_compressed(), 2);
@@ -439,7 +484,7 @@ mod tests {
         let mut ctx = ContextManager::new(ContextConfig::default());
         let tally = ctx.compression_tally();
 
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
 
         assert_eq!(tally.bytes_in(), payload.len());
         assert_eq!(tally.bytes_in(), tally.bytes_out());
@@ -454,10 +499,10 @@ mod tests {
         let payload = noisy_tool_result();
         let mut first = ContextManager::new(compressing_config());
         let old_tally = first.compression_tally();
-        first.push_tool_result("fetch_logs", &payload);
+        first.push_tool_result(&["fetch_logs"], &payload);
 
         let mut second = ContextManager::new(compressing_config());
-        second.push_tool_result("fetch_logs", &payload);
+        second.push_tool_result(&["fetch_logs"], &payload);
 
         assert_eq!(
             old_tally.results_compressed(),
@@ -474,8 +519,8 @@ mod tests {
         let mut plain = ContextManager::new(ContextConfig::default());
         let mut compressed = ContextManager::new(compressing_config());
         for _ in 0..20 {
-            plain.push_tool_result("fetch_logs", &payload);
-            compressed.push_tool_result("fetch_logs", &payload);
+            plain.push_tool_result(&["fetch_logs"], &payload);
+            compressed.push_tool_result(&["fetch_logs"], &payload);
         }
 
         assert!(
@@ -492,7 +537,7 @@ mod tests {
         // Idempotence (invariant I3) is what keeps that from compounding into a second elision.
         let payload = noisy_tool_result();
         let mut ctx = ContextManager::new(compressing_config());
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
         let stored = ctx.entries.last().unwrap().content.clone();
 
         let policy = Policy {
@@ -518,7 +563,7 @@ mod tests {
             ..ContextConfig::default()
         });
 
-        ctx.push_tool_result("fetch_logs", &payload);
+        ctx.push_tool_result(&["fetch_logs"], &payload);
 
         assert_eq!(ctx.entries.last().unwrap().content, payload);
     }
@@ -535,7 +580,7 @@ mod tests {
         let content = format!("{}{}", "a".repeat(299), "€bbbb");
         assert!(content.chars().count() > 300);
 
-        ctx.push_tool_result("tool", &content);
+        ctx.push_tool_result(&["tool"], &content);
         // A second, recent entry so compact_simple() has something to fold
         // into the summary (the tool result) and something to keep verbatim.
         ctx.push_user("recent turn");
@@ -556,7 +601,7 @@ mod tests {
     #[test]
     fn compact_simple_leaves_short_content_untruncated() {
         let mut ctx = ContextManager::new(small_keep_recent_config());
-        ctx.push_tool_result("tool", "short result");
+        ctx.push_tool_result(&["tool"], "short result");
         ctx.push_user("recent turn");
 
         ctx.compact_simple();
