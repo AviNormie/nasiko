@@ -12,6 +12,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopyButton } from '@/components/shared/copy-button'
 import { Panel } from '@/components/shared/panel'
+import { TopBar } from '@/app/shell/TopBar'
+import { PageHeader } from '@/components/shared/page-header'
 import { SectionNav } from '@/components/shared/section-nav'
 import { cn } from '@/lib/utils'
 import { firstRunCommands } from '../format'
@@ -260,7 +262,30 @@ const SECTIONS = [
   { to: '/builds', label: copy.sections.builds },
 ] as const
 
-/** All agents · Your agents · Builds (the Builds page uses it too); "Deploy an agent" stays the header's action. */
+/**
+ * The Agents module's header, the same on All agents, Your agents and Builds: "Deploy an agent" in the top bar, the
+ * module's title, a line about the open section, then the sections. A page whose empty state already offers Deploy
+ * passes no `action`, so the button never shows twice.
+ */
+export function AgentsHeader({
+  current,
+  description,
+  action,
+}: {
+  current: (typeof SECTIONS)[number]['to']
+  description?: ReactNode
+  action: ReactNode
+}) {
+  return (
+    <>
+      <TopBar actions={action} />
+      <PageHeader title={copy.catalogTitle} description={description} />
+      <AgentsNav current={current} />
+    </>
+  )
+}
+
+/** All agents · Your agents · Builds (the Builds page uses it too). */
 export function AgentsNav({ current }: { current: (typeof SECTIONS)[number]['to'] }) {
   return <SectionNav label={copy.sections.label} sections={SECTIONS} current={current} />
 }

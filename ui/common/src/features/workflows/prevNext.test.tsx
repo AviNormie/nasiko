@@ -41,7 +41,7 @@ describe('workflow Previous/Next', () => {
 
   it('asks before stepping away from a draft with unsaved edits', async () => {
     const { router } = renderApp('/workflows/drafts')
-    await screen.findByRole('heading', { name: copy.list.drafts.title }, T)
+    await screen.findByRole('link', { name: copy.nav.drafts, current: 'page' }, T)
     await waitFor(() => expect(titles().length).toBeGreaterThan(1), T)
     const hrefs = titles().map((l) => l.getAttribute('href'))
     await userEvent.click(titles()[0]!)

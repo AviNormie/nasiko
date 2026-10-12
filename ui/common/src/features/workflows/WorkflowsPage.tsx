@@ -4,9 +4,10 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, type HistoryState } from '@tanstack/react-router'
-import { EllipsisVertical, Plus, RotateCw, SearchX, Workflow } from 'lucide-react'
+import { EllipsisVertical, RotateCw, SearchX, Workflow } from 'lucide-react'
 import { memo, useDeferredValue, useState } from 'react'
 import { toast } from 'sonner'
+import { TopBar } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { SearchInput } from '@/components/shared/search-input'
@@ -50,7 +51,7 @@ import {
   type WorkflowSort,
 } from './search'
 import type { WorkflowRow } from './types'
-import { Chip, SectionNav, ToneBadge } from './components/bits'
+import { Chip, CreateWorkflowLink, SectionNav, ToneBadge } from './components/bits'
 import { DeleteWorkflowDialog } from './components/DeleteWorkflowDialog'
 
 /** The last-run line's dot; the words beside it carry the meaning. */
@@ -102,13 +103,7 @@ export function WorkflowsPage({
   const sorts: readonly string[] = mode === 'deployed' ? WORKFLOW_SORTS : DRAFT_SORTS
   const sortLabel = SORT_LABEL[mode] as Record<string, string>
 
-  const create = (
-    <Button asChild size="sm" className="pointer-coarse:min-h-11">
-      <Link to="/workflows/new">
-        <Plus aria-hidden /> {copy.create}
-      </Link>
-    </Button>
-  )
+  const create = <CreateWorkflowLink />
 
   let body
   if (absent)
@@ -186,9 +181,12 @@ export function WorkflowsPage({
 
   return (
     <div className="space-y-4">
-      <PageHeader title={text.title} actions={absent ? null : create} />
+      {/* Create is the module's action: the top bar's right, the same on every section. */}
+      <TopBar actions={absent ? null : create} />
+      <PageHeader title={copy.title} description={copy.sub} />
       <SectionNav current={mode === 'deployed' ? '/workflows' : '/workflows/drafts'} />
       {absent ? null : (
+        // One row the width of the grid: search on the left, the sort on the right.
         <div className="flex flex-wrap items-center gap-2">
           <SearchInput
             aria-label={text.search}
@@ -196,7 +194,7 @@ export function WorkflowsPage({
             value={term}
             onChange={(e) => setSearch({ q: e.target.value || undefined })}
             disabled={empty}
-            className="w-full max-w-none sm:w-80"
+            className="w-full max-w-none sm:w-72"
           />
           {/* `main` ignores `sort` (W-3): a menu that changes nothing is hidden. */}
           {metrics ? (
@@ -205,8 +203,8 @@ export function WorkflowsPage({
               onValueChange={(v) => setSearch({ sort: v === sorts[0] ? undefined : v })}
               disabled={empty}
             >
-              <SelectTrigger size="sm" aria-label={copy.sortLabel}>
-                <SelectValue />
+              <SelectTrigger size="sm" aria-label={copy.sortLabel} className="text-xs sm:ml-auto">
+                <span className="text-muted-foreground">{copy.sortPrefix}:</span> <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {sorts.map((v) => (
