@@ -429,17 +429,46 @@ pub async fn selection_enabled_checked(pool: &PgPool, user_id: Uuid) -> Result<b
 
 // ── The one entry point ───────────────────────────────────────────────────────
 
-/// Fetch the conversation history for `query` the way `user_id` has asked for
-/// it: look up their strategy and budget tier, resolve the tier against this
-/// deployment's [`ContextTiers`], and dispatch into the matching
-/// `SessionHistory::fetch_*`.
+/// Whether one agent has opted into compression. A missing or soft-deleted agent, or a failed
+/// read, is `false` — history then goes out verbatim, the safe direction.
 ///
-/// The preference lookups are cheap indexed row reads, issued concurrently.
-/// None can fail the request — each falls back to its column default (see
-/// `for_user` on each).
+/// The `deleted_at IS NULL` guard is the reason callers use this rather than reading
+/// `agents.compress_enabled` inline: a soft-deleted agent otherwise reports its stale flag.
+pub async fn agent_compression_enabled(pool: &PgPool, agent_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT compress_enabled FROM agents WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
+/// Fetch the conversation history for `query` the way `user_id` has asked for it: look up their
+/// strategy and budget tier, resolve the tier against this deployment's [`ContextTiers`], and
+/// dispatch into the matching `SessionHistory::fetch_*`.
 ///
-/// `compress_history` is the opt-in of whoever receives the history (IP-4): the addressed
-/// agent's switch, or `true` when only the Orchestrator's own model reads it.
+/// The preference lookups are cheap indexed row reads, issued concurrently. None can fail the
+/// request — each falls back to its column default (see `for_user` on each).
+///
+/// # `compress_history` — whose switch gates IP-4
+///
+/// The opt-in of whoever actually *reads* the history, resolved by the caller rather than here:
+///
+/// * **A direct chat with one agent** — that agent's own `compress_enabled`, via
+///   [`agent_compression_enabled`]. The history is stitched into the message forwarded to it, so
+///   it is the reader.
+/// * **An orchestrator-routed chat** — `true`. The history goes into the Orchestrator's own
+///   prompt; agents downstream receive whatever that model then writes, not this text. No agent is
+///   the reader, so no agent's switch applies and the deployment flag alone decides.
+///
+/// Resolved by the caller because the caller usually has the answer already — `a2a_dispatch` holds
+/// the target agent row, so re-reading `compress_enabled` here would be a second query for a value
+/// in hand. An earlier design passed a `CompressionScope` enum and resolved it internally, which
+/// also made orchestrator-routed chats depend on a unanimity rule across *every* agent the user
+/// owned; `162d50bd9` retired that rule in the UI, and the backend follows it here.
 pub async fn fetch_for_user(
     pool: &PgPool,
     user_id: Uuid,
@@ -454,6 +483,8 @@ pub async fn fetch_for_user(
         ContextSelectionStrategy::for_user(pool, user_id),
         selection_enabled(pool, user_id),
     );
+    // IP-4 is gated by the deployment flag AND the reader's switch, so the UI toggle stops it
+    // as part of one layer rather than leaving history compressed after the rest is off.
     let mut cfg = tiers.resolve(level);
     cfg.compress.enabled = cfg.compress.enabled && compress_history;
 

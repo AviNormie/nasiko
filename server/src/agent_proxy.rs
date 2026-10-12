@@ -267,8 +267,13 @@ pub async fn agent_proxy(
         // and uses it as the sticky key, so turn 2+ reuse the model chosen at the
         // turn-1 cold start. Written on the same synchronous, pre-forward insert
         // so the value is guaranteed present before the agent calls back.
+        // `user_message` is the raw text (before history packing) that the LLM gateway's
+        // salience gate and classifier score. An agent→agent hop lands on the conflict
+        // branch below and leaves the flow's root user message in place.
         let metadata = match persist_info.as_ref() {
-            Some(i) => serde_json::json!({ "context_id": i.session_id }),
+            Some(i) => {
+                serde_json::json!({ "context_id": i.session_id, "user_message": i.user_text })
+            }
             None => serde_json::json!({}),
         };
         let _ = sqlx::query(
@@ -778,15 +783,12 @@ async fn ensure_chat_session(
     let mut context_report = None;
     if !user_text.is_empty() && same_agent_session {
         // This agent receives the history, so its switch decides IP-4; unreadable reads as off.
-        let compress_history: bool =
-            sqlx::query_scalar("SELECT compress_enabled FROM agents WHERE id = $1")
-                .bind(agent_id)
-                .fetch_optional(&state.db)
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(false);
+        // Via the shared helper rather than an inline query: that one also excludes soft-deleted
+        // agents, which an inline `WHERE id = $1` does not.
+        let compress_history =
+            nasiko_orchestrator::agent_compression_enabled(&state.db, agent_id).await;
         let history_store = state.history_vector_store();
+        // A direct chat: this agent's own switch decides history compression.
         let history = context_selection::fetch_for_user(
             &state.db,
             user_id,

@@ -145,6 +145,8 @@ impl RoutingEngine for OssRoutingEngine {
                 &history_store,
                 &req.query,
                 &tiers,
+                // Orchestrator-routed: the Orchestrator's own model reads this history, so no
+                // agent's switch gates it and the deployment flag alone decides.
                 true,
             ),
         );
