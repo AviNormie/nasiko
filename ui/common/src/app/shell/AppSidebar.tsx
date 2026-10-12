@@ -143,7 +143,7 @@ export function AppSidebar({
             <>
               <SidebarMenuItem className="min-w-0 flex-1">
                 <SidebarMenuButton asChild tooltip={copy.brandTooltip} className={cn(ROW, 'h-10')}>
-                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Overview item
+                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Home item
                       (§3 rule 4: one current item). */}
                   <a
                     href="/"
@@ -359,7 +359,7 @@ function NavGroups({
                                   : pickShared(prev)
                             : undefined
                         }
-                        // `/` is a prefix of every path: Overview is active only on `/` itself.
+                        // `/` is a prefix of every path: Home is active only on `/` itself.
                         activeOptions={{ includeSearch: false, exact: n.to === '/' }}
                         // The Link only knows its own path; Agents is current on Deploy and Builds too (`also`).
                         aria-current={active?.to === n.to ? 'page' : undefined}

@@ -18,7 +18,7 @@ describe('sidebar health check', () => {
 
   it('on the Overview (/) only the sidebar polls: no 15 s page check (overview eng R6)', async () => {
     const { queryClient } = renderApp('/')
-    await screen.findByRole('heading', { level: 1, name: 'Overview' })
+    await screen.findByRole('heading', { level: 1, name: 'Home' })
     await screen.findByTestId('status-row')
     const observers = queryClient.getQueryCache().find({ queryKey: ['health'] })!.observers
     expect(observers).toHaveLength(1)
