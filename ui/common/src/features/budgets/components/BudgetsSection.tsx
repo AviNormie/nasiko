@@ -22,8 +22,8 @@ import { cn } from '@/lib/utils'
 import { budgetForecast, budgetLabel, sortBudgets, stateView, usedPercent } from '../budgets'
 import { copy } from '../copy'
 import type { Budget, BudgetAlert, BudgetStatus, BudgetStatusResponse } from '../types'
-import { LinkButton } from './bits'
-import { SectionError } from './SectionError'
+import { LinkButton } from '@/features/router/components/bits'
+import { SectionError } from '@/features/router/components/SectionError'
 
 type Q<T> = {
   data?: T

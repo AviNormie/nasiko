@@ -32,11 +32,6 @@ import {
 import type {
   AgentRouting,
   AgentUsage,
-  Budget,
-  BudgetAlert,
-  BudgetStatusResponse,
-  CreateBudgetBody,
-  UpdateBudgetBody,
   CreateConfigBody,
   CreateCustomProviderBody,
   CustomProvider,
@@ -57,9 +52,6 @@ export const routerKeys = {
   registry: ['router', 'registry'] as const,
   custom: ['router', 'custom'] as const,
   usage: ['router', 'usage'] as const,
-  budgets: ['router', 'budgets'] as const,
-  budgetStatus: ['router', 'budgets', 'status'] as const,
-  budgetAlerts: ['router', 'budgets', 'alerts'] as const,
 }
 
 // R-L13: one request per agent until a batch read exists; this page's own limiter, not observability's.
@@ -424,97 +416,3 @@ export function referencingConfigs(err: unknown): string[] | null {
 }
 
 const json = { 'Content-Type': 'application/json' }
-
-// ─── R2 budgets (proposed R-L10, mocked) ────────────────────────────────────
-
-/** The caller's budgets; `['router','budgets']` prefixes status and alerts too, so one invalidation re-reads all three. */
-export function useBudgets(enabled = true, pollMs?: number) {
-  return useQuery({
-    queryKey: [...routerKeys.budgets, 'list'],
-    queryFn: ({ signal }) => apiData<Budget[]>('/api/budgets', { signal }),
-    enabled,
-    ...list,
-    ...budgetPoll(pollMs),
-  })
-}
-
-/**
- * A poll ends on a bare 404 (a server without budgets), a 401 or a 403: asking again every minute can't change any of
- * them.
- */
-export const budgetPollEnds = (err: unknown) =>
-  err instanceof ApiError && (err.status === 404 || err.status === 401 || err.status === 403)
-
-/** Poll options for a budgets read: no retry, since the next poll is the retry. */
-const budgetPoll = (pollMs: number | undefined) =>
-  pollMs
-    ? {
-        retry: false,
-        refetchInterval: (q: { state: { error: unknown } }) =>
-          budgetPollEnds(q.state.error) ? false : pollMs,
-      }
-    : {}
-
-/**
- * The status of every budget the caller can read. `pollMs` re-reads it while the tab is visible (the home's budget
- * column, plans/feat-agent-centric.md PR2 "Live budgets"): no retry, since the next poll is the retry.
- */
-export function useBudgetStatus(enabled: boolean, pollMs?: number) {
-  const path = '/api/budgets/status'
-  return useQuery({
-    queryKey: routerKeys.budgetStatus,
-    queryFn: async ({ signal }) => {
-      const body = await apiFetch<BudgetStatusResponse>(path, { signal })
-      if (!body || !Array.isArray(body.data))
-        throw new ApiError(200, body, path, `GET ${path} → unexpected response (no data array)`)
-      return body
-    },
-    enabled,
-    ...list,
-    ...budgetPoll(pollMs),
-  })
-}
-
-/** @public Hidden until /api/budgets lands (R-L10); RouterPage has the call commented out. */
-export function useBudgetAlerts(enabled: boolean) {
-  return useQuery({
-    queryKey: routerKeys.budgetAlerts,
-    queryFn: ({ signal }) => apiData<BudgetAlert[]>('/api/budgets/alerts', { signal }),
-    enabled,
-    ...list,
-  })
-}
-
-export type SaveBudget =
-  | { mode: 'create'; body: CreateBudgetBody }
-  | { mode: 'update'; id: string; body: UpdateBudgetBody }
-
-export function useSaveBudget() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (v: SaveBudget) =>
-      v.mode === 'create'
-        ? apiData<Budget>('/api/budgets', {
-            method: 'POST',
-            headers: json,
-            body: JSON.stringify(v.body),
-          })
-        : apiData<Budget>(`/api/budgets/${v.id}`, {
-            method: 'PUT',
-            headers: json,
-            body: JSON.stringify(v.body),
-          }),
-    // Awaited, so the mutation stays pending until the list is re-read (no window where a stale row can be clicked again).
-    onSettled: () => qc.invalidateQueries({ queryKey: routerKeys.budgets }),
-  })
-}
-
-export function useDeleteBudget() {
-  const qc = useQueryClient()
-  return useMutation({
-    // DELETE answers `data: null`, so apiFetch (apiData treats a null data as an error).
-    mutationFn: (id: string) => apiFetch(`/api/budgets/${id}`, { method: 'DELETE' }),
-    // Awaited, so the mutation stays pending until the list is re-read (no window where a stale row can be clicked again).
-    onSettled: () => qc.invalidateQueries({ queryKey: routerKeys.budgets }),
-  })
-}

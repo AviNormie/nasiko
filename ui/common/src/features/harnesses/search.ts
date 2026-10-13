@@ -77,6 +77,9 @@ export const HARNESS_MOCK_VARIANTS = [
   'router-legacy',
   'router-budgets-empty',
   'router-budgets-fail',
+  // Budget page variants (plans/feat-budget-burn.md); same reason.
+  'budgets-empty',
+  'budgets-fail',
 ] as const
 
 const id = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))

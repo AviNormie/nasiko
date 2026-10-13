@@ -53,7 +53,13 @@ describe('env', () => {
     warn.mockClear()
     const live = (mock: string) =>
       readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
-    expect(live('router,agents,providers').sort()).toEqual(['agents', 'providers', 'router'])
+    // router brings budgets along (plans/feat-budget-burn.md eng D2).
+    expect(live('router,agents,providers').sort()).toEqual([
+      'agents',
+      'budgets',
+      'providers',
+      'router',
+    ])
     expect(warn).not.toHaveBeenCalled()
     expect(live('router')).toEqual([])
     // providers survives for TokenOps (eng #13); agents survives too.
@@ -63,6 +69,22 @@ describe('env', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('use VITE_NASIKO_MOCK=router,agents,providers'),
     )
+  })
+
+  it('budgets needs agents; router implies budgets, by readEnv and by isPreview (eng D2)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warn.mockClear()
+    const live = (mock: string) =>
+      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
+    expect(live('budgets,agents').sort()).toEqual(['agents', 'budgets'])
+    expect(warn).not.toHaveBeenCalled()
+    expect(live('budgets')).toEqual([])
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('use VITE_NASIKO_MOCK=budgets,agents'),
+    )
+    expect(isPreview('budgets', { mode: 'live', partialMocks: ['router'] })).toBe(true)
+    expect(isPreview('budgets', { mode: 'live', partialMocks: ['agents'] })).toBe(false)
+    expect(isPreview('router', { mode: 'live', partialMocks: ['budgets'] })).toBe(false)
   })
 
   it('chat is mocked only with agents and observability', () => {

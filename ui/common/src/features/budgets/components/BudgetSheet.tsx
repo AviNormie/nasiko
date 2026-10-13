@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/sheet'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useAnnounce } from '../announce'
+import { useAnnounce } from '@/components/shared/announce'
 import { useDeleteBudget, useSaveBudget, type SaveBudget } from '../api'
 import {
   budgetLabel,
@@ -45,12 +45,12 @@ import {
   withStopMark,
 } from '../budgets'
 import { copy } from '../copy'
-import { routerError } from '../errors'
-import { fieldErrors } from '../form'
-import { useReturnFocus } from '../focus'
+import { budgetError } from '../errors'
+import { fieldErrors } from '@/features/router/form'
+import { useReturnFocus } from '@/features/router/focus'
 import type { Budget, BudgetAction, BudgetStatus } from '../types'
 import { LeaveGuard } from '@/components/shared/leave-guard'
-import { LinkButton, Warn } from './bits'
+import { LinkButton, Warn } from '@/features/router/components/bits'
 
 /** The budget form. Scope is '' until picked ("owner" or an agent id); a new budget with no open scope can't save. */
 const schema = z.object({
@@ -207,7 +207,7 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       onError: (e) => setError(e),
     })
   }
-  const errView = error ? routerError(error) : null
+  const errView = error ? budgetError(error) : null
 
   return (
     <>

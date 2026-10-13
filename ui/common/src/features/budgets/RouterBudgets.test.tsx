@@ -397,7 +397,7 @@ describe.skip('new budgets', () => {
       if (!s.budgets.some((b) => b.agent_id === id))
         s.budgets.push({ ...b0, id: `x-${id}`, scope: 'agent', agent_id: id })
     }
-    await queryClient.refetchQueries({ queryKey: ['router', 'budgets'] })
+    await queryClient.refetchQueries({ queryKey: ['budgets'] })
     await waitFor(() =>
       expect(document.querySelectorAll('[data-budget]').length).toBe(s.budgets.length),
     )

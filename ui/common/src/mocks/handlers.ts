@@ -17,6 +17,7 @@ import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
 import {
   budgetAlerts,
   budgetStatus,
+  sessionBudgets,
   buildBudgetState,
   createBudget,
   deleteBudget,
@@ -58,6 +59,7 @@ import {
   ADMIN_ID,
   DEFAULT_PERSONA,
   generateHarnessSeed,
+  harnessTurns,
   type HarnessSeed,
   type HUser,
 } from './seed-harness'
@@ -119,11 +121,15 @@ import { buildMcpState, mcpHandlers, type McpState } from './mcp'
 import { optimizationHandlers, resetOptimizationMock } from './optimization'
 import { buildWorkflowsState, workflowHandlers, type WorkflowsState } from './workflows'
 import { buildFlowsState, flowHandlers, type FlowsState } from './flows'
+import { eventHandlers } from './events'
 import { checkZip, MAX_ZIP_BYTES } from '@/features/deploy/zipcheck'
 import { nameProblem } from '@/features/deploy/name'
 import { parseVersion } from '@/features/deploy/version'
 import { DEFAULT_REGISTRY, parseReference } from '@/features/deploy/registry'
 import type { BuildStatus, UploadPipelineStatus } from '@/features/deploy/types'
+import type { ChatMessage, ChatSessionRow } from '@/features/chat/types'
+import { CODING_SESSION_TITLE } from '@/features/chat/serverContract'
+import type { SessionSummary } from '@/features/observability/types'
 import { PERSONAS, type Persona } from '@/features/onboarding/types'
 
 // Built on first use, so mock mode doesn't block first paint on seed generation.
@@ -170,7 +176,8 @@ export const CHAT_PAGE_VARIANTS = [
  * - `router-repin-fail`: a pin-only PATCH fails with a 500 (the second step of attach → re-pin);
  * - `router-usage-fail` / `router-usage-full`: by-agent usage fails / returns 1,000 rows;
  * - `router-legacy`: configs made elsewhere (openrouter, a missing saved key, a deleted custom provider, off-catalog models).
- * - `router-budgets-empty` / `router-budgets-fail`: no budgets / every /api/budgets read answers 500 (R2).
+ * - `router-budgets-empty` / `router-budgets-fail`: aliases of `budgets-empty` / `budgets-fail` (plans/feat-budget-burn.md
+ *   eng D2), kept so the documented router variants still work.
  */
 export const ROUTER_PAGE_VARIANTS = [
   'router-empty',
@@ -186,8 +193,17 @@ export const ROUTER_PAGE_VARIANTS = [
   'router-budgets-empty',
   'router-budgets-fail',
 ] as const
+/**
+ * Budget states (plans/feat-budget-burn.md). They combine like the router's.
+ * - `budgets-empty`: no budgets; `budgets-fail`: every /api/budgets read answers 500.
+ */
+export const BUDGETS_PAGE_VARIANTS = ['budgets-empty', 'budgets-fail'] as const
 /** Page variants combine (read through hasVariant) instead of taking the single degraded-state slot. */
-const PAGE_VARIANTS: readonly string[] = [...CHAT_PAGE_VARIANTS, ...ROUTER_PAGE_VARIANTS]
+const PAGE_VARIANTS: readonly string[] = [
+  ...CHAT_PAGE_VARIANTS,
+  ...ROUTER_PAGE_VARIANTS,
+  ...BUDGETS_PAGE_VARIANTS,
+]
 
 /**
  * Degraded states for manual QA and tests (mock mode only). The browser reads `?mock=`
@@ -251,8 +267,24 @@ export const MOCK_VARIANTS = [
   // Flows (plans/feat-flows.md §2a): no flows yet (first run), or a server without /api/flows (bare 404).
   'flows-empty',
   'flows-absent',
+  // Agent hub (plans/feat-agent-centric.md DX mocks): the gate's dashboard read for one agent answers 404 "agent not
+  // found" (not visible), 500, or 400 (unknown or deleted); every marker read fails; this agent has no savings row;
+  // an agent with more builds in the window than the read returns; a server without the proposed event log.
+  'hub-not-visible',
+  'hub-gate-error',
+  'hub-deleted',
+  'hub-markers-fail',
+  'hub-no-savings-row',
+  'hub-many-builds',
+  'events-absent',
+  // The harness session ledger (plans/feat-agent-centric.md PR1b): a recorded chat's observability session read fails,
+  // so the ledger renders from its messages alone.
+  'ledger-no-trace',
+  // The scoped home (plans/feat-agent-centric.md DX mocks): a server without budgets (bare 404 on /api/budgets).
+  'home-budgets-absent',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
+  ...BUDGETS_PAGE_VARIANTS,
 ] as const
 export type MockVariant = (typeof MOCK_VARIANTS)[number]
 let fixedVariant: MockVariant | null = null
@@ -288,6 +320,9 @@ function variant(): MockVariant | null {
 function hasVariant(v: MockVariant): boolean {
   return fixedVariant === v || fixedPageVariants.has(v) || mockEntries().includes(v)
 }
+/** A budgets state is on under its own name or its router alias (eng D2). */
+const budgetVariant = (v: 'empty' | 'fail') =>
+  hasVariant(`budgets-${v}`) || hasVariant(`router-budgets-${v}`)
 /** Tests: page variants that combine (`configureMocks({ chatVariants, routerVariants })`). */
 let fixedPageVariants = new Set<string>()
 
@@ -449,10 +484,10 @@ const SETTINGS_DEFAULTS = {
 let budgetState: BudgetMockStore | null = null
 let budgetKey = ''
 function getBudgets(): BudgetMockStore {
-  const key = String(hasVariant('router-budgets-empty'))
+  const key = String(budgetVariant('empty'))
   if (!budgetState || budgetKey !== key) {
     budgetState = buildBudgetState(getSeed(), getAgents().agents, ADMIN_ID, nowFn(), {
-      empty: hasVariant('router-budgets-empty'),
+      empty: budgetVariant('empty'),
     })
     budgetKey = key
   }
@@ -534,6 +569,8 @@ export function configureMocks(
     chatVariants?: readonly (typeof CHAT_PAGE_VARIANTS)[number][]
     /** Router page variants that combine, e.g. `['router-legacy']` (plan §6). */
     routerVariants?: readonly (typeof ROUTER_PAGE_VARIANTS)[number][]
+    /** Budget page variants that combine, e.g. `['budgets-empty']` (plans/feat-budget-burn.md). */
+    budgetVariants?: readonly (typeof BUDGETS_PAGE_VARIANTS)[number][]
     /** An edition's session (EE: the seed admin whatever the persona); null returns to the viewer. */
     session?: (() => SessionUser) | null
     /** The caller's onboarding row, e.g. `{ persona: null, completed: false }` for a first-time user. */
@@ -546,21 +583,21 @@ export function configureMocks(
   if (opts.persistOnboarding !== undefined) persistOnboarding = opts.persistOnboarding
   if (opts.session !== undefined) editionSession = opts.session
   if (opts.superuser !== undefined) fixedSuperuser = opts.superuser
-  if (opts.chatVariants !== undefined)
+  // Each family replaces only its own variants, so chat, router and budget variants combine.
+  const setFamily = (family: readonly string[], next: readonly string[]) => {
     fixedPageVariants = new Set([
-      ...opts.chatVariants,
-      ...[...fixedPageVariants].filter((v) =>
-        (ROUTER_PAGE_VARIANTS as readonly string[]).includes(v),
-      ),
+      ...[...fixedPageVariants].filter((v) => !family.includes(v)),
+      ...next,
     ])
+  }
+  if (opts.chatVariants !== undefined) setFamily(CHAT_PAGE_VARIANTS, opts.chatVariants)
   if (opts.routerVariants !== undefined) {
-    fixedPageVariants = new Set([
-      ...[...fixedPageVariants].filter((v) =>
-        (CHAT_PAGE_VARIANTS as readonly string[]).includes(v),
-      ),
-      ...opts.routerVariants,
-    ])
+    setFamily(ROUTER_PAGE_VARIANTS, opts.routerVariants)
     routerState = null
+    budgetState = null
+  }
+  if (opts.budgetVariants !== undefined) {
+    setFamily(BUDGETS_PAGE_VARIANTS, opts.budgetVariants)
     budgetState = null
   }
   if (opts.seed) seed = opts.seed
@@ -627,6 +664,27 @@ const text = (body: string, status: number) =>
 /** No cookie: `require_auth` → `validate_bearer`'s reason. */
 const unauthorized = () => authRejection('missing or invalid token')
 
+/** A recorded chat as a `session/list` row: the DB-only fallback (no harness traces in the mock), raw agent name. */
+function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummary {
+  return {
+    id: r.session_id,
+    session_id: r.session_id,
+    agent_id: agentName,
+    session_annotations: [],
+    session_annotation_summaries: [],
+    num_traces: null,
+    start_time: r.created_at,
+    end_time: r.updated_at ?? r.created_at,
+    duration_ms: null,
+    first_input: null,
+    last_output: null,
+    token_usage: { total: null },
+    trace_latency_ms_p50: null,
+    trace_latency_ms_p99: null,
+    cost_summary: { total: { cost: null } },
+  }
+}
+
 /** Session/trace/span answers are `{data: …}` (no status_code/message) and plain-text errors. */
 function traceStore(fn: () => Response): Response {
   if (!loggedIn) return unauthorized()
@@ -649,6 +707,15 @@ function sseStream(lines: string[], closeMessage: string): ReadableStream<Uint8A
 }
 
 export const handlerGroups: Record<Mockable, HttpHandler[]> = {
+  // The proposed agent event log (mocks/events.ts), before the agents routes it sits under.
+  events: eventHandlers({
+    loggedIn: () => loggedIn,
+    now: () => nowFn(),
+    agents: () => getAgents().agents,
+    hasVariant: (v) => hasVariant(v),
+    unauthorized: () => unauthorized(),
+    text: (body, status) => text(body, status),
+  }),
   // Flows (plans/feat-flows.md): before observability and chat, which answer the trace and flow ids it doesn't own.
   flows: flowHandlers({
     loggedIn: () => loggedIn,
@@ -1210,6 +1277,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       // `my_agent=true` (Harnesses live fallback, handler.rs:497) answers from the harness seed for
       // the viewer's own agents; TokenOps never sends it, so its numbers are untouched.
       if (p.my_agent === 'true') return respond(() => myAgentDashboard(p))
+      // The agent hub's gate (one agent's dashboard): handler.rs answers an inaccessible agent 404 "agent not found",
+      // an unknown or deleted one 400 (resolve_agent_filter).
+      if (p.agent_id && loggedIn) {
+        const v = variant()
+        if (v === 'hub-not-visible') return text('agent not found', 404)
+        if (v === 'hub-gate-error') return text('internal error', 500)
+        if (v === 'hub-deleted') return text(`unknown agent '${p.agent_id}'`, 400)
+      }
       return respond(() => dashboard(getFinopsSeed(), p, nowFn()))
     }),
   ],
@@ -1273,7 +1348,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     ),
   ],
   savings: [
-    http.get(`${FINOPS}/savings`, () =>
+    http.get(`${FINOPS}/savings`, ({ request }) =>
       respond(() => {
         // savings.rs `coverage`: counted over every live agent (no ACL), from the agents mock, so the Optimization
         // page's Mechanisms counts follow the same switches as its other blocks. The rest is the fixed sample.
@@ -1285,6 +1360,10 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
         const minimal = (a: (typeof live)[number]) => a.minimal_code_enabled === true
         return {
           ...s,
+          by_agent: savingsByAgent(
+            [...s.by_agent, ...seedSavingsRows(params(request))],
+            params(request),
+          ),
           coverage: {
             ...s.coverage,
             agents_total: live.length,
@@ -1311,7 +1390,14 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       const p = params(request)
       const v = variant()
       if (v === 'scan-fail' && Number(p.offset ?? 0) >= 100) return text('internal error', 500)
-      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down')
+      // session/list reads chat_sessions, so a recorded harness chat is a session too (service.rs): the viewer's own,
+      // or everyone's for a superuser. Without harness traces in the mock it is the DB-only row.
+      ensureChatSeed(chatCtx)
+      const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
+      const recorded = chatMockRows()
+        .filter((r) => r.is_coding_agent && (superuser() || r.user_id === ADMIN_ID))
+        .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
+      const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down', recorded)
       if (v === 'empty')
         body.data = {
           ...body.data,
@@ -1324,6 +1410,9 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     http.get(`${OBS}/session/:sessionId`, ({ params: p }) =>
       traceStore(() => {
         const id = String(p.sessionId)
+        ensureChatSeed(chatCtx)
+        if (hasVariant('ledger-no-trace') && chatMockRows().some((r) => r.session_id === id))
+          return text('trace store unavailable', 502)
         const data = observabilityData(getSeed())
         // A chat from the chat mock is a session too (live, a chat's id IS its session id): answer
         // with the seeded showcase session, re-keyed, so View session / Open full trace resolve.
@@ -1333,8 +1422,20 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
           data.byId.get(id) ??
           (showcase ? { ...showcase, session_id: id, title: chat!.title } : undefined)
         // The server answers 404 for unknown AND inaccessible sessions (reveal no existence).
+        // A recorded harness chat names its own (harness) agent, not the showcase's.
+        const harness =
+          chat?.is_coding_agent && chat.agent_id
+            ? getAgents().agents.find((a) => a.id === chat.agent_id)?.name
+            : undefined
         return s
-          ? HttpResponse.json({ data: { session: sessionDetail(getSeed(), s) } })
+          ? HttpResponse.json({
+              data: {
+                session: {
+                  ...sessionDetail(getSeed(), s),
+                  ...(harness ? { agent_name: harness } : {}),
+                },
+              },
+            })
           : text(`session '${id}' not found`, 404)
       }),
     ),
@@ -1402,6 +1503,30 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       if (!getHarnessSeed().agents.some((a) => a.id === p.agent_id)) return undefined
       const limit = Math.min(100, Math.max(1, Number(p.limit) || 50))
       return HttpResponse.json(chatSessions(limit, p.agent_id ?? undefined))
+    }),
+    // GET /api/chat/sessions/:id/messages for those sessions (the ledger, PR1b): newest page first, ascending, paged
+    // back with ?prev_cursor= as the chat routes; any other id is the chat group's.
+    http.get('/api/chat/sessions/:id/messages', ({ params: prm, request }) => {
+      if (!loggedIn) return unauthorized()
+      const all = harnessMessages(String(prm.id))
+      if (!all) return undefined
+      const p = params(request)
+      const limit = Math.min(500, Math.max(1, Number(p.limit) || 100))
+      const end = p.prev_cursor
+        ? Math.max(
+            0,
+            all.findIndex((m) => m.id === p.prev_cursor),
+          )
+        : all.length
+      const page = all.slice(Math.max(0, end - limit), end)
+      const has_more = end - limit > 0
+      return HttpResponse.json({
+        data: page,
+        has_more,
+        next_cursor: has_more ? (page.at(-1)?.id ?? null) : null,
+        prev_cursor: page[0]?.id ?? null,
+        hitl: [],
+      })
     }),
     http.get(`${OBS}/coding-agents/usage`, ({ request }) => {
       if (!loggedIn) return unauthorized()
@@ -1574,63 +1699,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       }),
     ),
     http.get('/api/model-registry', () => routed(() => envelope(getRouter().registry))),
-    // R2 budgets: the proposed R-L10 contract (docs/designs/openruntime-llm-router-recommendations.md). No server yet.
-    http.get('/api/budgets', () =>
-      routed(() => {
-        if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
-        return envelope(listBudgets(getBudgets(), ADMIN_ID))
-      }),
-    ),
-    http.get('/api/budgets/status', () =>
-      routed(() => {
-        if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
-        return HttpResponse.json(
-          budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
-        )
-      }),
-    ),
-    http.get('/api/budgets/alerts', () =>
-      routed(() => {
-        if (hasVariant('router-budgets-fail')) throw new MockHttpError(500, 'internal error')
-        return envelope(
-          budgetAlerts(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
-        )
-      }),
-    ),
-    http.post('/api/budgets', async ({ request }) => {
-      const body = await request.json().catch(() => ({}))
-      const agentOwner = (id: string) =>
-        getAgents().agents.find((a) => !a.deleted && a.id === id)?.owner_id
-      return routed(() =>
-        HttpResponse.json(
-          {
-            data: createBudget(
-              getBudgets(),
-              ADMIN_ID,
-              body as never,
-              agentOwner,
-              superuser(),
-              nowFn(),
-            ),
-            status_code: 201,
-            message: 'Budget created',
-          },
-          { status: 201 },
-        ),
-      )
-    }),
-    http.put('/api/budgets/:id', async ({ params: prm, request }) => {
-      const body = await request.json().catch(() => ({}))
-      return routed(() =>
-        envelope(updateBudget(getBudgets(), String(prm.id), ADMIN_ID, body as never, nowFn())),
-      )
-    }),
-    http.delete('/api/budgets/:id', ({ params: prm }) =>
-      routed(() => {
-        deleteBudget(getBudgets(), String(prm.id), ADMIN_ID)
-        return HttpResponse.json({ data: null, status_code: 200, message: 'Budget deleted' })
-      }),
-    ),
     // usage/routes.rs by_agent: `crate::Paginated` is `{data, total}` with total = the page length.
     http.get('/api/usage/by-agent', ({ request }) =>
       routed(() => {
@@ -1744,6 +1812,104 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     hasVariant: (v) => hasVariant(v as MockVariant),
     state: getWorkflows,
   }),
+  // Budgets (plans/feat-budget-burn.md eng D1): R-L10, moved out of the router group; `router` brings it along.
+  budgets: [
+    // R-L10 (docs/requirements/budgets.md, which extends it). No server yet.
+    http.get('/api/budgets', () =>
+      routed(() => {
+        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
+        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
+        return envelope(listBudgets(getBudgets(), ADMIN_ID))
+      }),
+    ),
+    http.get('/api/budgets/status', () =>
+      routed(() => {
+        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
+        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
+        return HttpResponse.json(
+          budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
+        )
+      }),
+    ),
+    // The ledger's per-session budgets (proposed AH-8, plans/feat-agent-centric.md PR1b): the caller's own sessions
+    // only (the messages route's rule); the recorded demo chat has a $1 session budget.
+    http.get('/api/budgets/session/:id', ({ params: p }) =>
+      routed(() => {
+        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
+        ensureChatSeed(chatCtx)
+        const id = String(p.id)
+        const row = chatMockRows().find((r) => r.session_id === id && r.user_id === ADMIN_ID)
+        const recorded = row ? chatMockMessages(id) : harnessMessages(id)
+        const hs = getHarnessSeed().sessions.find((x) => x.session_id === id)
+        if (!recorded || (!row && !hs)) throw new MockHttpError(404, `session '${id}' not found`)
+        const turns = new Map<string, number>()
+        for (const m of recorded)
+          if (m.role === 'assistant') {
+            const key = m.external_turn_id ?? m.id
+            turns.set(key, (turns.get(key) ?? 0) + Number(m.cost_usd ?? 0))
+          }
+        return envelope(
+          sessionBudgets(
+            getBudgets(),
+            getSeed(),
+            getAgents().agents,
+            ADMIN_ID,
+            {
+              agentId: row ? row.agent_id : (hs?.agent_id ?? null),
+              start: Date.parse(row ? row.created_at : (hs?.started_at ?? '')),
+              turns: [...turns].map(([turn_id, used]) => ({
+                turn_id,
+                used_usd: Math.round(used * 1e6) / 1e6,
+              })),
+            },
+            id.endsWith('c004') ? 1 : undefined,
+          ),
+        )
+      }),
+    ),
+    http.get('/api/budgets/alerts', () =>
+      routed(() => {
+        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
+        return envelope(
+          budgetAlerts(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
+        )
+      }),
+    ),
+    http.post('/api/budgets', async ({ request }) => {
+      const body = await request.json().catch(() => ({}))
+      const agentOwner = (id: string) =>
+        getAgents().agents.find((a) => !a.deleted && a.id === id)?.owner_id
+      return routed(() =>
+        HttpResponse.json(
+          {
+            data: createBudget(
+              getBudgets(),
+              ADMIN_ID,
+              body as never,
+              agentOwner,
+              superuser(),
+              nowFn(),
+            ),
+            status_code: 201,
+            message: 'Budget created',
+          },
+          { status: 201 },
+        ),
+      )
+    }),
+    http.put('/api/budgets/:id', async ({ params: prm, request }) => {
+      const body = await request.json().catch(() => ({}))
+      return routed(() =>
+        envelope(updateBudget(getBudgets(), String(prm.id), ADMIN_ID, body as never, nowFn())),
+      )
+    }),
+    http.delete('/api/budgets/:id', ({ params: prm }) =>
+      routed(() => {
+        deleteBudget(getBudgets(), String(prm.id), ADMIN_ID)
+        return HttpResponse.json({ data: null, status_code: 200, message: 'Budget deleted' })
+      }),
+    ),
+  ],
   chat: [],
   // Settings (plans/feat-settings.md); EE stacks /api/settings/oidc and the SCIM tokens on top.
   settings: [
@@ -1923,6 +2089,82 @@ function harnessAgentDetail(a: HarnessSeed['agents'][number]) {
   }
 }
 
+/**
+ * A harness session's recorded messages (the ledger, plans/feat-agent-centric.md PR1b): a recorded chat stores a user and
+ * an assistant message per turn with the CLI's usage, so the viewer's own seed sessions answer `/messages` as the chat
+ * routes would (owner-only: anyone else's is null, a 404). One tool call per turn (the trace writers' constant); the
+ * context report is the proposed per-turn record (AH-7), which the ledger reads only in preview mode.
+ */
+const HARNESS_PROMPTS = [
+  'Fix the failing test in the billing module',
+  'Explain what this function does',
+  'Refactor the retry logic',
+  'Add structured logging to the worker',
+  'Write the migration for the new column',
+]
+const HARNESS_TOOLS = ['read_file', 'grep', 'edit_file', 'run_tests', 'bash']
+function harnessMessages(sessionId: string): ChatMessage[] | null {
+  const hs = harnessData()
+  const s = hs.sessions.find((x) => x.session_id === sessionId && x.user_id === viewer().id)
+  const agent = s && hs.agents.find((a) => a.id === s.agent_id)
+  if (!s || !agent) return null
+  return harnessTurns(hs, [agent])
+    .filter((t) => t.session_id === sessionId)
+    .flatMap((t, i): ChatMessage[] => {
+      const base = { session_id: sessionId, external_turn_id: t.trace_id }
+      const replyAt = t.ts + 30_000
+      const pool = 30 + i * 2
+      return [
+        {
+          ...base,
+          id: `${t.trace_id}-u`,
+          role: 'user',
+          content: HARNESS_PROMPTS[i % HARNESS_PROMPTS.length]!,
+          timestamp: new Date(t.ts).toISOString(),
+        },
+        {
+          ...base,
+          id: `${t.trace_id}-a`,
+          role: 'assistant',
+          content: 'Done.',
+          timestamp: new Date(replyAt).toISOString(),
+          model: t.model,
+          input_tokens: t.input_tokens,
+          output_tokens: t.output_tokens,
+          // An unpriced turn has no cost (NULL), never $0.
+          cost_usd: t.cost_usd ? t.cost_usd.toFixed(6) : null,
+          usage_estimated: true,
+          metadata: {
+            coding_agent: {
+              capture_policy: 'content',
+              tool_calls: [
+                {
+                  id: `${t.trace_id}-call`,
+                  name: HARNESS_TOOLS[i % HARNESS_TOOLS.length],
+                  kind: 'tool',
+                  status: 'succeeded',
+                  started_at: new Date(t.ts + 5_000).toISOString(),
+                  ended_at: new Date(t.ts + 6_200).toISOString(),
+                  duration_ms: 1_200,
+                  association: 'exact',
+                  timestamp_quality: 'exact',
+                },
+              ],
+              context: {
+                'nasiko.context.strategy': 'pacms',
+                'nasiko.context.level': 'medium',
+                'nasiko.context.pool': pool,
+                'nasiko.context.pool_tokens': Math.round(t.input_tokens * 1.6),
+                'nasiko.context.kept': Math.round(pool / 3),
+                'nasiko.context.kept_tokens_est': t.input_tokens,
+              },
+            },
+          },
+        },
+      ]
+    })
+}
+
 /** Own-only, newest first (ORDER BY updated_at DESC), optionally one agent (`?agent_id=`), as chat/routes.rs. */
 function chatSessions(limit: number, agentId?: string) {
   const hs = harnessData()
@@ -1944,7 +2186,8 @@ function chatSessions(limit: number, agentId?: string) {
       user_id: x.user_id,
       agent_id: x.agent_id,
       agent_url: `/api/agents/${x.agent_id}`,
-      title: `${agent(x.agent_id)?.display_name ?? 'Session'}`,
+      // The server titles every recorded harness session the same (coding_agent_telemetry.rs, observability/service.rs).
+      title: CODING_SESSION_TITLE,
       created_at: x.started_at,
       updated_at: updated,
       agent_name: agent(x.agent_id)?.name ?? null,
@@ -2274,7 +2517,10 @@ function deployHandlers(): HttpHandler[] {
     http.get('/api/builds/agent/:agentId', ({ params: p }) => {
       if (!loggedIn) return unauthorized()
       if (variant() === 'deploy-no-rights') return noRights()
+      if (variant() === 'hub-markers-fail') return text('internal error', 500)
       const now = nowFn()
+      if (variant() === 'hub-many-builds')
+        return HttpResponse.json(manyBuilds(String(p.agentId), now))
       // list_builds: the agent's owner or a superuser, whether or not it has builds.
       const agent = getAgents().agents.find((a) => a.id === String(p.agentId))
       if (!superuser() && agent && agent.owner_id !== ADMIN_ID) return noRights()
@@ -2404,8 +2650,6 @@ function usageResponse(fn: () => unknown): Response {
 /** What an edition's mocks build on: the core mock's live state and response helpers (never copies of them). */
 export const mockCtx = {
   loggedIn: () => loggedIn,
-  seed: getSeed,
-  finopsSeed: getFinopsSeed,
   now: () => nowFn(),
   variant,
   superuser,
@@ -2423,4 +2667,80 @@ export const mockCtx = {
   envelope,
   unauthorized,
   usageResponse,
+}
+
+/**
+ * The agent hub's savings rows (plans/feat-agent-centric.md PR1 lanes): `/finops/savings` `by_agent` gains a row per seed
+ * agent that saved tokens in the window, from the same context-savings reports the Optimization page reads, so the hub's
+ * "Tokens saved" total has a row to find. `?mock=hub-no-savings-row` leaves them out ("not reported").
+ */
+function seedSavingsRows(p: Record<string, string | null>) {
+  if (p.scope !== 'agent' || variant() === 'hub-no-savings-row') return []
+  const agents = getAgents().agents
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  const rows = contextSavingsAgents(
+    getFinopsSeed(),
+    { ...p, agent_id: null },
+    {
+      now: nowFn(),
+      compressOf: (id) => byId.get(id)?.compress ?? false,
+      compressedOf: (id) => byId.get(id)?.compressSeeded ?? false,
+      nameOf: (id, raw) => byId.get(id)?.display_name ?? raw,
+    },
+  )
+  return rows
+    .filter((r) => r.pool_tokens > r.sent_tokens)
+    .map((r) => {
+      const saved = r.pool_tokens - r.sent_tokens
+      return {
+        saved_tokens: saved,
+        saved_input_tokens: saved,
+        saved_output_tokens: 0,
+        saved_cost_usd: 0,
+        actual_tokens: r.sent_tokens,
+        actual_cost_usd: 0,
+        baseline_tokens: r.pool_tokens,
+        baseline_cost_usd: 0,
+        token_reduction_pct: Math.round((saved / r.pool_tokens) * 1000) / 10,
+        cost_reduction_pct: null,
+        basis: 'measured' as const,
+        agent_id: r.agent_id,
+        agent_name: r.name,
+        calls: r.reports,
+        input_tokens_before: r.pool_tokens,
+        input_tokens_after: r.sent_tokens,
+      }
+    })
+}
+
+/**
+ * handler.rs `get_finops_savings` (b2a966332): `agent_id` narrows the rows to that agent, and `by_agent` is capped at
+ * `limit` (default `SAVINGS_DEFAULT_LIMIT` = 25), so an agent outside the top 25 is only found with the filter.
+ */
+function savingsByAgent<T extends { agent_id: string }>(
+  rows: T[],
+  p: Record<string, string | null>,
+): T[] {
+  const filtered = p.agent_id ? rows.filter((r) => r.agent_id === p.agent_id) : rows
+  return filtered.slice(0, Math.max(1, Number(p.limit) || 25))
+}
+
+/** `?mock=hub-many-builds`: the newest 20 of 25 successful builds over the last 10 days (the read's cap, D-6). */
+function manyBuilds(agentId: string, now: number) {
+  const DAY_MS = 86_400_000
+  return Array.from({ length: 20 }, (_, i) => {
+    const at = now - Math.round(((i + 1) * 10 * DAY_MS) / 25)
+    return {
+      id: `5eed000b-0000-4000-9000-${String(900 + i).padStart(12, '0')}`,
+      agent_id: agentId,
+      github_url: null,
+      commit_hash: null,
+      version_tag: `1.${30 - i}.0`,
+      image_reference: `registry.local/agent:1.${30 - i}.0`,
+      status: 'success',
+      logs_url: null,
+      created_at: new Date(at - 150_000).toISOString(),
+      updated_at: new Date(at).toISOString(),
+    }
+  })
 }

@@ -13,7 +13,7 @@
  * Seeded limits are set from this month's spend, so the three states show on any date: the owner budget sits past
  * 80% (warning), the busiest agent is over its limit with Stop calls (exceeded, stopped), the next one is well under.
  */
-import { DEFAULT_THRESHOLDS } from '@/features/router/tuning'
+import { DEFAULT_THRESHOLDS } from '@/features/budgets/tuning'
 import type {
   Budget,
   BudgetAlert,
@@ -21,7 +21,7 @@ import type {
   BudgetStatusResponse,
   CreateBudgetBody,
   UpdateBudgetBody,
-} from '@/features/router/types'
+} from '@/features/budgets/types'
 import type { MockAgent } from './agents'
 import { MockHttpError } from './aggregate'
 import type { Seed } from './seed'

@@ -19,7 +19,8 @@ import type { AgentView } from '@/features/agents/normalize'
 import { useAgentBlockedTools, useAgentConnectors } from '@/features/mcp/api'
 import { strategyQuery } from '@/features/optimization/api'
 import { copy as optCopy } from '@/features/optimization/copy'
-import { useAgentRouting, useBudgets, useBudgetStatus } from '@/features/router/api'
+import { useBudgets, useBudgetStatus } from '@/features/budgets/api'
+import { useAgentRouting } from '@/features/router/api'
 import { configPin, routingSentence } from '@/features/router/routing'
 import { meQuery } from '@/lib/api/auth'
 import { isPreview } from '@/lib/env'
@@ -55,7 +56,7 @@ export function LayerCards({
       {reader && !agent.isHarness ? <RoutingSlot id={agent.id} /> : null}
       {agent.canManage ? <ToolsSlot id={agent.id} /> : null}
       <OptimizationSlot agent={agent} owner={owner} saved={saved} extra={optimizationExtra} />
-      {reader && !agent.isHarness && isPreview('router') ? <BudgetSlot id={agent.id} /> : null}
+      {reader && !agent.isHarness && isPreview('budgets') ? <BudgetSlot id={agent.id} /> : null}
     </section>
   )
 }

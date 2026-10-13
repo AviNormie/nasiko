@@ -20,6 +20,7 @@ import {
   useVersions,
 } from '@/features/agents/api'
 import { displayStatus } from '@/features/agents/status'
+import { budgetKeys } from '@/features/budgets/api'
 import {
   historyPages,
   useChatHistory,
@@ -598,11 +599,11 @@ export function useLedgerHistory(sessionId: string) {
 export function useSessionBudgets(sessionId: string, enabled: boolean) {
   const path = `/api/budgets/session/${encodeURIComponent(sessionId)}`
   return useQuery({
-    queryKey: ['router', 'budgets', 'session', sessionId],
+    queryKey: budgetKeys.session(sessionId),
     queryFn: ({ signal }) =>
       apiData<SessionBudget[]>(path, { signal, schema: sessionBudgetsSchema }),
     // Both previews: the budgets are mock seed data, so they never sit beside live messages.
-    enabled: enabled && isPreview('router') && isPreview('chat'),
+    enabled: enabled && isPreview('budgets') && isPreview('chat'),
     meta: { path: '/api/budgets/session/:id' },
   })
 }
