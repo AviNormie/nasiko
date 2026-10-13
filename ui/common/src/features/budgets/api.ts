@@ -11,7 +11,7 @@ import type {
   CreateBudgetBody,
   UpdateBudgetBody,
 } from './types'
-import { LIST_STALE_MS } from './tuning'
+import { LIST_STALE_MS, MAX_PAGES } from './tuning'
 
 export const budgetKeys = {
   all: ['budgets'] as const,
@@ -22,13 +22,38 @@ export const budgetKeys = {
 }
 
 const json = { 'Content-Type': 'application/json' }
+
+/**
+ * Every page of a budgets list (API_CONVENTIONS' cursor envelope; budgets.md §2): R-L10 callers expect the whole list,
+ * and 1.0 pages it. A server without paging fields answers once. Capped, so a looping cursor can't spin.
+ */
+async function allPages<
+  B extends { data: unknown[]; has_more?: boolean; next_cursor?: string | null },
+>(path: string, signal: AbortSignal): Promise<B> {
+  const sep = path.includes('?') ? '&' : '?'
+  const first = await apiFetch<B>(`${path}${sep}limit=100`, { signal })
+  if (!first || !Array.isArray(first.data))
+    throw new ApiError(200, first, path, `GET ${path} → unexpected response (no data array)`)
+  let page = first
+  for (let i = 0; i < MAX_PAGES && page.has_more && page.next_cursor; i++) {
+    page = await apiFetch<B>(
+      `${path}${sep}limit=100&cursor=${encodeURIComponent(page.next_cursor)}`,
+      { signal },
+    )
+    if (!page || !Array.isArray(page.data))
+      throw new ApiError(200, page, path, `GET ${path} → unexpected response (no data array)`)
+    first.data.push(...page.data)
+  }
+  return first
+}
 const list = { staleTime: LIST_STALE_MS, refetchOnWindowFocus: true } as const
 
 /** The caller's budgets; `['budgets']` prefixes every budget read, so one invalidation re-reads them all. */
 export function useBudgets(enabled = true, pollMs?: number) {
   return useQuery({
     queryKey: budgetKeys.list,
-    queryFn: ({ signal }) => apiData<Budget[]>('/api/budgets', { signal }),
+    queryFn: async ({ signal }) =>
+      (await allPages<{ data: Budget[] }>('/api/budgets', signal)).data,
     enabled,
     ...list,
     ...budgetPoll(pollMs),
@@ -61,10 +86,7 @@ export function useBudgetStatus(enabled: boolean, pollMs?: number) {
   return useQuery({
     queryKey: budgetKeys.status,
     queryFn: async ({ signal }) => {
-      const body = await apiFetch<BudgetStatusResponse>(path, { signal })
-      if (!body || !Array.isArray(body.data))
-        throw new ApiError(200, body, path, `GET ${path} → unexpected response (no data array)`)
-      return body
+      return allPages<BudgetStatusResponse>(path, signal)
     },
     enabled,
     ...list,
@@ -76,7 +98,8 @@ export function useBudgetStatus(enabled: boolean, pollMs?: number) {
 export function useBudgetAlerts(enabled: boolean) {
   return useQuery({
     queryKey: budgetKeys.alerts,
-    queryFn: ({ signal }) => apiData<BudgetAlert[]>('/api/budgets/alerts', { signal }),
+    queryFn: async ({ signal }) =>
+      (await allPages<{ data: BudgetAlert[] }>('/api/budgets/alerts', signal)).data,
     enabled,
     ...list,
   })

@@ -16,7 +16,7 @@ describe('budgetFeatureOf', () => {
     ['GET', '/api/budgets/status', 'budgets'],
     ['GET', '/api/budgets/status?scope=org', 'scope_status'],
     ['GET', '/api/budgets/alerts?kind=all', 'forecast_alerts'],
-    ['GET', '/api/budgets/abc', 'versions'],
+    ['GET', '/api/budgets/abc', 'budgets'],
     ['PUT', '/api/budgets/abc', 'budgets'],
     ['GET', '/api/budgets/abc/versions', 'versions'],
     ['GET', '/api/budgets/burn?scope=org', 'burn'],
@@ -25,9 +25,16 @@ describe('budgetFeatureOf', () => {
     ['GET', '/api/budgets/burn/breakdown?scope=org&by=unit', 'unit_budgets'],
     ['GET', '/api/budgets/burn/breakdown?scope=org&by=agent', 'breakdown'],
     ['GET', '/api/budgets/at-risk?scope=org', 'at_risk'],
-  ])('%s %s → %s', (method, path, feature) => {
-    expect(budgetFeatureOf(method, new URL(path, ORIGIN))).toBe(feature)
+  ])('%s %s → %s', (_method, path, feature) => {
+    expect(budgetFeatureOf(new URL(path, ORIGIN))).toEqual([feature])
   })
+})
+
+it('settings go live when either of their capabilities is listed', () => {
+  expect(budgetFeatureOf(new URL('/api/budgets/settings', ORIGIN))).toEqual([
+    'team_identity',
+    'fiscal_year',
+  ])
 })
 
 describe('liveFirst', () => {

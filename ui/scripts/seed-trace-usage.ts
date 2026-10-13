@@ -32,8 +32,9 @@
  *   superuser's credential-free connections, and agent access on the first seed agents. A server whose name the
  *   superuser (or the platform) already uses is skipped, and its rows with it, never an error that rolls back the seed.
  * - Budgets (plans/feat-budget-burn.md #45, docs/requirements/budgets.md §14.8): the golden scenario
- *   (`common/src/mocks/seed-budgets.ts`, ids 5eed0017-*) anchored at the seed's hour, written only when the server has
- *   the budget tables (`scripts/lib/budgetSeed.ts`); today's servers skip it with a notice.
+ *   (`common/src/mocks/seed-budgets.ts`, ids 5eed0017-*) anchored at the seed's hour, on seed-only databases
+ *   (`--marker`) whose server has the budget tables (`scripts/lib/budgetSeed.ts`); today's servers skip it with a
+ *   notice, and `nasiko_dev` never gets it.
  * - Live contract (plans/feat-live-contract.md §6): `--marker` adds the seed marker, an llm_config named
  *   `seed-marker-<ISO anchor>` (id 5eed0007-…-000000000099), which the recorder reads back; only for the throwaway
  *   contract and EE databases (scripts/seed-live.ts decides). The seed then asserts no seed agent has an `image` or
@@ -152,7 +153,8 @@ const DELETE_SEED = [
 const out: string[] = ['BEGIN;']
 
 if (values.reset) {
-  out.push(...BUDGET_RESET, ...DELETE_SEED)
+  // The budgets scenario is only ever written on seed-only databases (--marker); so is its reset.
+  out.push(...(values.marker ? BUDGET_RESET : []), ...DELETE_SEED)
 } else {
   let anchor: Date | undefined
   if (values.anchor !== undefined) {
@@ -322,9 +324,10 @@ END $$;`)
   out.push(
     `-- harnesses: ${adminAgents.length} coding agents (skipped if the superuser already has them), ${hsessions.length} sessions, ${turnRows.length} turns, ${messageRows.length} messages`,
   )
-  // Budgets (plans/feat-budget-burn.md #45): the golden scenario at the seeding hour, only on a server with the
-  // budget tables (docs/requirements/budgets.md §14.8).
-  out.push(...budgetSeedSql(Math.floor(Date.parse(seed.anchor) / 3_600_000) * 3_600_000))
+  // Budgets (plans/feat-budget-burn.md #45): the golden scenario at the seeding hour, only on seed-only databases
+  // (--marker) whose server has the budget tables (docs/requirements/budgets.md §14.8).
+  if (values.marker)
+    out.push(...budgetSeedSql(Math.floor(Date.parse(seed.anchor) / 3_600_000) * 3_600_000))
 }
 
 out.push('COMMIT;')

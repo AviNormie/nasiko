@@ -14,7 +14,7 @@ import { mockEntries as parseMockList } from '@/features/chat/search'
 import { SPEND_LIMIT } from '@/features/router/tuning'
 import { secretNameProblem } from '@/features/settings/logic'
 import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
-import { sessionBudgets, buildBudgetState, type BudgetMockStore } from './budgets'
+import { sessionBudgets, buildBudgetState, syncAgents, type BudgetMockStore } from './budgets'
 import { budgetView, worldFromScenario, type World } from './budgetEngine'
 import { budgetHandlers } from './budgetHandlers'
 import { liveFirst } from './budgetFill'
@@ -502,6 +502,7 @@ function getBudgets(): BudgetMockStore {
         })
     budgetKey = key
   }
+  if (!golden) syncAgents(budgetState, getAgents().agents)
   return budgetState
 }
 /** Partial-live mode: the live user's id, learned from their `owner=` agent list (the mock has no session). */
@@ -1844,6 +1845,8 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     // only (the messages route's rule); the recorded demo chat has a $1 session budget.
     http.get('/api/budgets/session/:id', ({ params: p }) =>
       routed(() => {
+        if (hasVariant('budgets-absent') || hasVariant('home-budgets-absent'))
+          return new HttpResponse(null, { status: 404 })
         if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
         ensureChatSeed(chatCtx)
         const id = String(p.id)

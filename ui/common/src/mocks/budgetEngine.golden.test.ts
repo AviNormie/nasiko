@@ -38,7 +38,7 @@ describe('§14.4 figures at as_of', () => {
     ['session', I.s1, 'routed_calls', 10, 0, 'exceeded', 100, true],
   ] as const)('%s %s', (scope, id, covers, used, unpriced, state, crossed, stopped) => {
     const b = burn(fresh(), admin, q(scope, id), NOW)
-    expect(b.as_of).toBe('2026-10-14T12:00:00.000Z')
+    expect(b.as_of).toBe('2026-10-14T12:00:00Z')
     expect(b.covers).toBe(covers)
     expect(b.used_usd).toBe(used)
     expect(b.unpriced_calls).toBe(unpriced)
@@ -70,8 +70,8 @@ describe('§14.4 figures at as_of', () => {
   it('B-growth is a quarter; Platform says its membership history starts Oct 6', () => {
     expect(burn(fresh(), admin, q('unit', I.growth), NOW)).toMatchObject({
       period: 'quarter',
-      period_start: '2026-10-01T00:00:00.000Z',
-      resets_at: '2027-01-01T00:00:00.000Z',
+      period_start: '2026-10-01T00:00:00Z',
+      resets_at: '2027-01-01T00:00:00Z',
     })
     expect(burn(fresh(), admin, q('unit', I.platform), NOW).membership).toEqual({
       history_from: '2026-10-06',
@@ -93,15 +93,15 @@ describe('§14.4 figures at as_of', () => {
     expect(b.calls).toBe(15)
     expect(b.budget!.limits).toEqual([
       {
-        from: '2026-10-01T00:00:00.000Z',
-        to: '2026-10-10T09:00:00.000Z',
+        from: '2026-10-01T00:00:00Z',
+        to: '2026-10-10T09:00:00Z',
         version: 1,
         limit_usd: 40,
         thresholds: [50, 80, 100],
         action: 'stop',
       },
       {
-        from: '2026-10-10T09:00:00.000Z',
+        from: '2026-10-10T09:00:00Z',
         to: null,
         version: 2,
         limit_usd: 50,
@@ -255,7 +255,7 @@ describe('§14.6 reads', () => {
       used_usd: 10,
       daily: [],
       resets_at: null,
-      session: { ended_at: '2026-10-09T16:20:00.000Z' },
+      session: { ended_at: '2026-10-09T16:20:00Z' },
     })
     for (const viewer of [dev, fin])
       expect(() => burn(fresh(), viewer, q('session', I.s1), NOW)).toThrow('not found')

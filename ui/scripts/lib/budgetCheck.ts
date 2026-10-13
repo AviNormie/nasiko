@@ -102,13 +102,13 @@ const BUDGET_CHECKS: BudgetCheck[] = [
   {
     feature: 'changes',
     path: (t) => {
-      const from = monday(t)
-      const q = (s: number, e: number) =>
-        `from=${new Date(s).toISOString()}&to=${new Date(e).toISOString()}`
-      const cmp = q(from - 7 * DAY, t - 7 * DAY)
-        .replace('from=', 'compare_from=')
-        .replace('&to=', '&compare_to=')
-      return `/api/budgets/burn/changes?scope=org&by=agent&${q(from, t)}&${cmp}`
+      // This week so far vs the same hours last week; at Monday 00:00 (an hour-floored anchor), last week vs the one
+      // before, so the range is never empty.
+      const fresh = t - monday(t) < 3_600_000
+      const from = fresh ? monday(t) - 7 * DAY : monday(t)
+      const to = fresh ? monday(t) : t
+      const iso = (x: number) => new Date(x).toISOString()
+      return `/api/budgets/burn/changes?scope=org&by=agent&from=${iso(from)}&to=${iso(to)}&compare_from=${iso(from - 7 * DAY)}&compare_to=${iso(to - 7 * DAY)}`
     },
     schema: changesResponseSchema,
   },
@@ -140,6 +140,8 @@ const BUDGET_CHECKS: BudgetCheck[] = [
   },
   { feature: 'prices', path: () => '/api/budgets/prices', schema: priceListSchema },
   { feature: 'team_identity', path: () => '/api/budgets/settings', schema: budgetSettingsSchema },
+  // One route serves both settings capabilities: a server listing either must answer it.
+  { feature: 'fiscal_year', path: () => '/api/budgets/settings', schema: budgetSettingsSchema },
 ]
 
 export interface Verdict {
@@ -194,11 +196,10 @@ export async function checkBudgets(get: Get, now = Date.now()) {
   ]
   // The server's own clock, when it answers a burn read, so the week and day paths match its data.
   const probe = await get('/api/budgets/burn?scope=org')
-  const asOf =
-    probe.status === 200 &&
-    typeof (probe.body as { data?: { as_of?: unknown } })?.data?.as_of === 'string'
-      ? Date.parse((probe.body as { data: { as_of: string } }).data.as_of)
-      : now
+  // A malformed as_of is the burn check's failure to report, not a reason to stop: fall back to our own clock.
+  const raw = (probe.body as { data?: { as_of?: unknown } } | null)?.data?.as_of
+  const parsed = probe.status === 200 && typeof raw === 'string' ? Date.parse(raw) : NaN
+  const asOf = Number.isFinite(parsed) ? parsed : now
   for (const c of BUDGET_CHECKS) {
     const path = c.path(asOf)
     const r = await get(path)

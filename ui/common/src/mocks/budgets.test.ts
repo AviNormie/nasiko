@@ -53,7 +53,7 @@ describe('seeded budgets', () => {
       expect(s.daily).toHaveLength(20)
       expect(s.daily[0]!.date).toBe('2026-03-01')
       expect(s.daily.reduce((t, d) => t + d.cost_usd, 0)).toBeCloseTo(s.used_usd, 1)
-      expect(s.resets_at).toBe('2026-04-01T00:00:00.000Z')
+      expect(s.resets_at).toBe('2026-04-01T00:00:00Z')
     }
     const midnight = Date.UTC(2026, 2, 20)
     expect(

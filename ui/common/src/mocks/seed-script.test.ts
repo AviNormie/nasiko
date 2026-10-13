@@ -85,13 +85,21 @@ describe('scripts/seed-trace-usage.ts', () => {
     expect(traced(run(...small).statements)).toEqual([])
   })
 
+  it('the budgets scenario and its reset are written only on seed-only databases (--marker)', () => {
+    const plain = run('--anchor', ANCHOR, '--days', '5', '--agents', '6')
+    expect(plain.statements.join('\n')).not.toMatch(/5eed0017|budget_calls/)
+    const marked = run('--anchor', ANCHOR, '--days', '5', '--agents', '6', '--marker')
+    expect(marked.statements.join('\n')).toMatch(/INSERT INTO budget_calls/)
+    expect(run('--reset').statements.join('\n')).not.toMatch(/5eed0017/)
+  })
+
   it('--reset emits only BEGIN, the seed-scoped DELETEs and COMMIT', () => {
     const { status, statements } = run('--reset')
     expect(status).toBe(0)
     expect(statements[0]).toBe('BEGIN;')
     expect(statements.at(-1)).toBe('COMMIT;')
-    // + the budgets scenario's guarded reset block (scripts/lib/budgetSeed.ts).
-    expect(statements).toHaveLength(15)
+    // The budgets scenario's reset runs only with --marker (scripts/lib/budgetSeed.ts).
+    expect(statements).toHaveLength(14)
     expectSeedScopedDeletes(statements)
     expect(statements.join('\n')).not.toMatch(/\bINSERT\b/)
   })
