@@ -76,6 +76,8 @@ export type BudgetWho =
   | { kind: 'you' }
   | { kind: 'user'; id: string; name: string }
   | { kind: 'agent'; id: string; name: string }
+  /** An org unit (EE, B6): all priced spend of its members, alert only (§7 Q1). */
+  | { kind: 'unit'; id: string; name: string }
   /** A chat session (BG-10, plan F9): set from its ledger; it lasts until the session ends. */
   | { kind: 'session'; id: string; name: string }
 
@@ -249,9 +251,11 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
             ? copy.budgetStatusLine(fmtMoney(status.used_usd), fmtMoney(src.limit_usd), reset)
             : who.kind === 'fleet'
               ? copy.budgetDescriptionFleet
-              : who.kind === 'session'
-                ? copy.budgetDescriptionSession
-                : copy.budgetDescription}
+              : who.kind === 'unit'
+                ? copy.budgetDescriptionUnit
+                : who.kind === 'session'
+                  ? copy.budgetDescriptionSession
+                  : copy.budgetDescription}
         </SheetDescription>
       </SheetHeader>
       <form
@@ -404,36 +408,37 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
               onValueChange={(a) => chooseAction(a as BudgetAction)}
               className="gap-2"
             >
-              {(who.kind === 'fleet' ? (['alert'] as const) : (['alert', 'stop'] as const)).map(
-                (a) => (
-                  <div key={a} className="flex items-start gap-2">
-                    <RadioGroupItem
-                      id={`${ids}-action-${a}`}
-                      value={a}
-                      className="mt-0.5"
-                      aria-describedby={
-                        a === 'stop' && action === 'stop' ? `${ids}-stop` : undefined
-                      }
-                    />
-                    <Label
-                      htmlFor={`${ids}-action-${a}`}
-                      className="block leading-normal font-normal"
-                    >
-                      {a === 'alert' ? copy.actionAlert : copy.actionStop}
-                      <span className="block text-xs text-muted-foreground">
-                        {a === 'alert'
-                          ? copy.alertOnlyHint
-                          : who.kind === 'session'
-                            ? copy.stopHintSession
-                            : copy.stopHint}
-                      </span>
-                    </Label>
-                  </div>
-                ),
-              )}
+              {(who.kind === 'fleet' || who.kind === 'unit'
+                ? (['alert'] as const)
+                : (['alert', 'stop'] as const)
+              ).map((a) => (
+                <div key={a} className="flex items-start gap-2">
+                  <RadioGroupItem
+                    id={`${ids}-action-${a}`}
+                    value={a}
+                    className="mt-0.5"
+                    aria-describedby={a === 'stop' && action === 'stop' ? `${ids}-stop` : undefined}
+                  />
+                  <Label
+                    htmlFor={`${ids}-action-${a}`}
+                    className="block leading-normal font-normal"
+                  >
+                    {a === 'alert' ? copy.actionAlert : copy.actionStop}
+                    <span className="block text-xs text-muted-foreground">
+                      {a === 'alert'
+                        ? copy.alertOnlyHint
+                        : who.kind === 'session'
+                          ? copy.stopHintSession
+                          : copy.stopHint}
+                    </span>
+                  </Label>
+                </div>
+              ))}
             </RadioGroup>
-            {who.kind === 'fleet' ? (
-              <p className="text-xs text-muted-foreground">{copy.budgetFleetAlertOnly}</p>
+            {who.kind === 'fleet' || who.kind === 'unit' ? (
+              <p className="text-xs text-muted-foreground">
+                {who.kind === 'unit' ? copy.budgetUnitAlertOnly : copy.budgetFleetAlertOnly}
+              </p>
             ) : null}
             {action === 'stop' ? (
               <Warn id={`${ids}-stop`} className="ml-6" testId="stop-consequence">
@@ -529,16 +534,17 @@ function targetScope(t: BudgetWho): string {
     ? t.id
     : t.kind === 'fleet'
       ? 'org'
-      : t.kind === 'session'
-        ? 'session'
+      : t.kind === 'session' || t.kind === 'unit'
+        ? t.kind
         : 'owner'
 }
 
 /** POST's target fields (budgets.md §6.4): `user_id` only for someone else's owner budget. */
 function createTarget(
   w: BudgetWho,
-): Pick<CreateBudgetBody, 'scope' | 'agent_id' | 'user_id' | 'session_id' | 'period'> {
+): Pick<CreateBudgetBody, 'scope' | 'agent_id' | 'user_id' | 'session_id' | 'unit_id' | 'period'> {
   if (w.kind === 'fleet') return { scope: 'org', agent_id: null }
+  if (w.kind === 'unit') return { scope: 'unit', agent_id: null, unit_id: w.id }
   if (w.kind === 'session')
     return { scope: 'session', agent_id: null, session_id: w.id, period: 'session' }
   if (w.kind === 'agent') return { scope: 'agent', agent_id: w.id }

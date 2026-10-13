@@ -31,10 +31,12 @@ export interface Budget {
 
 export interface CreateBudgetBody {
   /** 1.0 adds `session` (BG-10): a limit on one chat session, until it ends. */
-  scope: BudgetScope | 'session'
+  scope: BudgetScope | 'session' | 'unit'
   agent_id?: string | null
   /** 1.0: the chat session, for a session budget. */
   session_id?: string
+  /** 1.0 (EE): the org unit, for a unit budget. */
+  unit_id?: string
   /** 1.0: `session` for a session budget (its one period); month otherwise (the default). */
   period?: 'session'
   /** 1.0: whose owner budget, when not the caller's (superuser, §6.4). */
@@ -199,6 +201,7 @@ export const budgetSettingsSchema = one(
     updated_at: iso,
   }),
 )
+export type BudgetSettings = z.infer<typeof budgetSettingsSchema>['data']
 
 const sourcesSchema = z.looseObject({
   routed_usd: usd,

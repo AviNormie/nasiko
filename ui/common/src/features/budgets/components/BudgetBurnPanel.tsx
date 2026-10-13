@@ -5,7 +5,7 @@
  * day that keeps it within budget. On Yours the budget's population is named: "Calls billed to you", beside "Your
  * agents' spend" (they differ when you use others' agents or they use yours), then what's outside the budget. The
  * Burndown/Burn-up choice is the one /budgets remembers. Home renders it only once the burn read answered (D13). A unit
- * has no Open budgets link until /budgets has unit scopes (B6).
+ * opens `/budgets?scope=unit:<id>` (B6); a panel given no scope to open has no link.
  */
 import { Link } from '@tanstack/react-router'
 import { useId, useState } from 'react'
@@ -40,7 +40,7 @@ export default function BudgetBurnPanel({
   scopeRef: ScopeRef
   /** "Fleet", "Yours" or a unit's name. */
   scopeName: string
-  /** The /budgets `?scope=` that opens the same scope; none (a unit) hides the link. */
+  /** The /budgets `?scope=` that opens the same scope (`fleet`, `yours`, `unit:<id>`); none hides the link. */
   scopeParam: string | undefined
   yours: boolean
   viewerId: string
