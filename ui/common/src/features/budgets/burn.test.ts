@@ -16,6 +16,7 @@ import {
   quarterProjection,
   raiseTo,
   runOut,
+  sessionTurnModel,
   spikes,
   stopEstimate,
   tableRows,
@@ -405,5 +406,35 @@ describe('the expected line after a change (F13, ledger #84)', () => {
     expect(expectedLine(b, 'up', NOW + DAY)).toBeNull()
     // A stopped budget is projected nowhere (#68), the expected line included.
     expect(expectedLine(read('agent', I.reviewer), 'up', at)).toBeNull()
+  })
+})
+
+describe('a session on its turns (F9, ledger #85)', () => {
+  // S1: Ana with Code Reviewer, turns $3, $3, $4; an $8 session limit that stops calls (budgets.md §14.6).
+  const s1 = () => read('session', I.s1)
+
+  it('x is the turns: the start at 0, each turn at its number; the limit runs across them', () => {
+    const m = sessionTurnModel(s1(), 'up')!
+    expect([m.start, m.end]).toEqual([0, 3])
+    expect(m.actual).toEqual([
+      { t: 0, v: 0 },
+      { t: 1, v: 3 },
+      { t: 2, v: 6 },
+      { t: 3, v: 10 },
+    ])
+    expect(m.limits).toEqual([{ from: 0, to: 3, v: 8, stops: true }])
+    expect(m.thresholds.every((x) => x.from === 0 && x.to === 3)).toBe(true)
+    // No even pace, band, run-out or daily bars for a session.
+    expect([m.pace, m.band, m.bars, m.runOut]).toEqual([[], [], [], null])
+  })
+
+  it('Burndown is what is left of the session limit; events sit at the turn they followed', () => {
+    const m = sessionTurnModel(s1(), 'down')!
+    expect(m.actual.map((p) => p.v)).toEqual([8, 5, 2, -2])
+    expect(m.markers.every((x) => x.t >= 0 && x.t <= 3 && Number.isInteger(x.t))).toBe(true)
+  })
+
+  it('a read that isn’t a session’s has no turn model', () => {
+    expect(sessionTurnModel(price(), 'up')).toBeNull()
   })
 })

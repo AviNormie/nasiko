@@ -687,6 +687,43 @@ export function expectedLine(b: Burn, mode: BurnMode, at: number): ChartPoint[] 
   ]
 }
 
+/**
+ * A session's chart on its turns (F9; ledger #85): `chartModel`'s session model with time mapped onto turns. 0 is the
+ * session's start and turn n's point sits at n; the limit and threshold lines run across the turns they were in force
+ * for; the budget's events sit at the turn they followed. A session has no even pace, band, run-out or daily bars.
+ * null for a read that isn't a session's.
+ */
+export function sessionTurnModel(b: Burn, mode: BurnMode): ChartModel | null {
+  if (!b.session || !b.turns) return null
+  const m = chartModel(b, mode)
+  const times = b.turns.map((t) => Date.parse(t.at))
+  const n = Math.max(1, times.length)
+  // The turns at or before `t`: an event after turn 3 sits at 3; a limit set before the first turn starts at 0.
+  const turnOf = (t: number) => times.filter((x) => x <= t).length
+  const span = <T extends { from: number; to: number }>(s: T) => ({
+    ...s,
+    from: turnOf(s.from),
+    to: s.to >= m.end ? n : Math.max(turnOf(s.from), turnOf(s.to)),
+  })
+  return {
+    ...m,
+    start: 0,
+    end: n,
+    actual: m.actual.map((p, i) => ({ t: i, v: p.v })),
+    pace: [],
+    band: [],
+    runOut: null,
+    bars: [],
+    // A step that ended before the first turn spans no turn: nothing to draw.
+    limits: m.limits.map(span).filter((x) => x.to > x.from),
+    thresholds: m.thresholds.map(span).filter((x) => x.to > x.from),
+    markers: m.markers.map((x) => ({
+      ...x,
+      t: Math.min(n, turnOf(Math.max(...x.events.map((e) => Date.parse(e.at))))),
+    })),
+  }
+}
+
 // ─── the Table view and its CSV (F1) ────────────────────────────────────────
 
 export interface TableRow {

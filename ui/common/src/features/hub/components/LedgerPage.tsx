@@ -34,6 +34,7 @@ import { isEndpointAbsent } from '@/lib/api/detect'
 import { isPreview } from '@/lib/env'
 import { fmtMoney, fmtMoneyFloor, fmtTokens, fmtUtcDayTime, fmtUtcTime } from '@/lib/format'
 import { useLedgerHistory, useSessionBudgets } from '../api'
+import { LedgerBudget } from './LedgerBudget'
 import { copy } from '../copy'
 import {
   budgetLines,
@@ -164,6 +165,8 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
           agentId={agent?.id ?? row?.agent_id ?? null}
         />
       ) : null}
+      {/* The session's own budget (plans/feat-budget-burn.md F9, B5): its burn on its turns and its limit. */}
+      <LedgerBudget sessionId={sessionId} title={title} ownSession={!!row} />
     </div>
   )
 }

@@ -15,6 +15,7 @@ import {
   expectedLine,
   previewLine,
   projection,
+  sessionTurnModel,
   tableRows,
   type BurnMode,
 } from '../burn'
@@ -149,6 +150,28 @@ export const ExpectedAfterChange: StoryObj = {
       expected={(b) => expectedLine(b, 'up', Date.parse('2026-10-12T10:00:00Z'))}
     />
   ),
+}
+
+/** A session on its turns (F9): the actual line against its stop limit, no pace, band or run-out. */
+export const SessionTurns: StoryObj = {
+  render: () => {
+    const b = read('session', I.s1)
+    const m = sessionTurnModel(b, 'up')
+    if (!m) return <p>Not a session read.</p>
+    const summary = 'Reached its $8.00 session limit; calls are stopped for this session.'
+    return (
+      <div className="max-w-3xl rounded-lg border border-border bg-card p-4">
+        <BurnChart
+          compact
+          axis="turns"
+          data={burnChartData(m)}
+          labels={burnChartLabels(m, { stops: true, summary })}
+          formatMoney={burnAxisMoney}
+          formatDay={(t) => (t === 0 ? 'Start' : `Turn ${t}`)}
+        />
+      </div>
+    )
+  },
 }
 
 export const TooEarly: StoryObj = {

@@ -76,6 +76,8 @@ export type BudgetWho =
   | { kind: 'you' }
   | { kind: 'user'; id: string; name: string }
   | { kind: 'agent'; id: string; name: string }
+  /** A chat session (BG-10, plan F9): set from its ledger; it lasts until the session ends. */
+  | { kind: 'session'; id: string; name: string }
 
 /**
  * Create picks a scope from the caller's open ones, or takes a fixed `target` (/budgets: Set a budget on a scope, an
@@ -247,7 +249,9 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
             ? copy.budgetStatusLine(fmtMoney(status.used_usd), fmtMoney(src.limit_usd), reset)
             : who.kind === 'fleet'
               ? copy.budgetDescriptionFleet
-              : copy.budgetDescription}
+              : who.kind === 'session'
+                ? copy.budgetDescriptionSession
+                : copy.budgetDescription}
         </SheetDescription>
       </SheetHeader>
       <form
@@ -300,7 +304,9 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
           ) : null}
 
           <Field className="gap-1">
-            <FieldLabel htmlFor={`${ids}-limit`}>{copy.monthlyLimit}</FieldLabel>
+            <FieldLabel htmlFor={`${ids}-limit`}>
+              {who.kind === 'session' ? copy.sessionLimit : copy.monthlyLimit}
+            </FieldLabel>
             <Input
               id={`${ids}-limit`}
               inputMode="decimal"
@@ -415,7 +421,11 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
                     >
                       {a === 'alert' ? copy.actionAlert : copy.actionStop}
                       <span className="block text-xs text-muted-foreground">
-                        {a === 'alert' ? copy.alertOnlyHint : copy.stopHint}
+                        {a === 'alert'
+                          ? copy.alertOnlyHint
+                          : who.kind === 'session'
+                            ? copy.stopHintSession
+                            : copy.stopHint}
                       </span>
                     </Label>
                   </div>
@@ -427,11 +437,13 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
             ) : null}
             {action === 'stop' ? (
               <Warn id={`${ids}-stop`} className="ml-6" testId="stop-consequence">
-                {who.kind === 'you'
-                  ? copy.stopConsequenceOwner(reset)
-                  : who.kind === 'user'
-                    ? copy.stopConsequenceUser(who.name, reset)
-                    : copy.stopConsequenceAgent(label, reset)}
+                {who.kind === 'session'
+                  ? copy.stopConsequenceSession
+                  : who.kind === 'you'
+                    ? copy.stopConsequenceOwner(reset)
+                    : who.kind === 'user'
+                      ? copy.stopConsequenceUser(who.name, reset)
+                      : copy.stopConsequenceAgent(label, reset)}
               </Warn>
             ) : null}
           </FieldSet>
@@ -513,12 +525,22 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
 
 /** The scope value a fixed target takes in the form. */
 function targetScope(t: BudgetWho): string {
-  return t.kind === 'agent' ? t.id : t.kind === 'fleet' ? 'org' : 'owner'
+  return t.kind === 'agent'
+    ? t.id
+    : t.kind === 'fleet'
+      ? 'org'
+      : t.kind === 'session'
+        ? 'session'
+        : 'owner'
 }
 
 /** POST's target fields (budgets.md §6.4): `user_id` only for someone else's owner budget. */
-function createTarget(w: BudgetWho): Pick<CreateBudgetBody, 'scope' | 'agent_id' | 'user_id'> {
+function createTarget(
+  w: BudgetWho,
+): Pick<CreateBudgetBody, 'scope' | 'agent_id' | 'user_id' | 'session_id' | 'period'> {
   if (w.kind === 'fleet') return { scope: 'org', agent_id: null }
+  if (w.kind === 'session')
+    return { scope: 'session', agent_id: null, session_id: w.id, period: 'session' }
   if (w.kind === 'agent') return { scope: 'agent', agent_id: w.id }
   if (w.kind === 'user') return { scope: 'owner', agent_id: null, user_id: w.id }
   return { scope: 'owner', agent_id: null }
