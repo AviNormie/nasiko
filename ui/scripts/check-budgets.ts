@@ -16,6 +16,10 @@ const KB = 1024
 export const BUDGET = { shellJs: 200 * KB, shellCss: 40 * KB, lazy: 120 * KB }
 /** Chunks that never load in a live build (mock mode only). */
 const MOCK_ONLY = /src\/mocks\/|node_modules\/msw\//
+const SINGLETONS = [
+  ['react', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE='],
+  ['react-dom', '__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE='],
+] as const
 
 export function check(dist: string, log: (line: string) => void = console.log): boolean {
   const manifest = JSON.parse(readFileSync(join(dist, '.vite/manifest.json'), 'utf8')) as Record<
@@ -78,6 +82,16 @@ export function check(dist: string, log: (line: string) => void = console.log): 
   if (cycle) {
     ok = false
     log(`FAIL chunk import cycle: ${cycle.map((k) => manifest[k]?.file ?? k).join(' → ')}`)
+  }
+  const files = [...new Set(Object.values(manifest).map((c) => c.file))].filter((f) =>
+    f.endsWith('.js'),
+  )
+  for (const [name, marker] of SINGLETONS) {
+    const copies = files.filter((f) => readFileSync(join(dist, f), 'utf8').includes(marker)).length
+    if (copies > 1) {
+      ok = false
+      log(`FAIL ${copies} copies of ${name} in the bundle`)
+    }
   }
   for (const [dir, kb] of Object.entries(builds)) {
     const files = existsSync(join(dist, dir))

@@ -19,7 +19,7 @@ const REPAIR = /^Fix these issues/
 const SETTLE_MS = 6000
 const TURN_DEADLINE_MS = 240_000
 const BUSY = [
-  'Building the screen…',
+  'Building your view…',
   'Improving the layout…',
   'Building a custom view',
   'Checking this view…',
@@ -207,8 +207,9 @@ async function runRequest(browser: Browser, id: string, turns: string[]): Promis
     lastActivity = Date.now()
   })
 
-  const composer = page.getByRole('textbox', { name: 'Ask Studio' })
-  await page.goto(`${BASE}/studio`)
+  const composer = page.getByRole('textbox', { name: 'Ask Weave' })
+  await page.goto(`${BASE}/tokenops`)
+  await page.getByRole('button', { name: /^Open Weave/ }).click()
   const t0 = Date.now()
   for (const turn of turns) {
     await composer.fill(turn)
@@ -224,7 +225,7 @@ async function runRequest(browser: Browser, id: string, turns: string[]): Promis
   }
   const totalSeconds = Math.round((Date.now() - t0) / 1000)
 
-  const canvas = page.getByRole('region', { name: 'Generated screen' })
+  const canvas = page.getByRole('region', { name: 'Generated view' })
   const grid = canvas.locator('[data-genui-canvas]')
   const capture = async (file: string) => {
     const height = await page.evaluate(() => document.body.scrollHeight)
@@ -365,7 +366,7 @@ writeFileSync(
   `${JSON.stringify(
     {
       recordedAt: new Date().toISOString(),
-      source: `Studio at ${BASE} via scripts/genui-eval.ts`,
+      source: `Weave workspace at ${BASE} via scripts/genui-eval.ts`,
       promptTokens: {
         catalog: promptTokens(requests, 'generate-openui'),
         react: promptTokens(requests, 'generate-react'),

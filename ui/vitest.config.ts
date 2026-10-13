@@ -39,7 +39,6 @@ export default defineConfig({
         '**/*.gen.ts',
         // Vendored, framework-free, and not ours to cover. Matched by shape
         // rather than by edition path: a published config names no edition.
-        '**/src/weave/core/**',
         '**/src/genui/lang/**',
         '**/main.tsx',
       ],
