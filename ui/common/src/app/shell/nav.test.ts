@@ -18,7 +18,7 @@ describe('nav items', () => {
     for (const old of OLD_NAV) expect(now).toContainEqual(old)
     // Added since: Home (plans/feat-overview.md §3, renamed by plans/feat-agent-centric.md PR3), Workflows (plans/feat-workflows.md §1), the LLM router
     // (plans/feat-llm-router.md §4), MCP servers (plans/feat-mcp.md §1), Flows (plans/feat-flows.md F1) and Optimization
-    // (plans/feat-optimization-page.md P7). Deploy and Builds are Agents' sub-pages. The workspace's Settings is the
+    // (plans/feat-optimization-page.md P7), Budgets (plans/feat-budget-burn.md F10). Deploy and Builds are Agents' sub-pages. The workspace's Settings is the
     // Organization group's item; the account's own settings (/account) open from the account menu.
     expect(now.filter((n) => !OLD_NAV.some((o) => o.to === n.to))).toEqual([
       { to: '/', label: 'Home', shared: false },
@@ -26,6 +26,7 @@ describe('nav items', () => {
       { to: '/router', label: 'LLM router', shared: false },
       { to: '/mcp', label: 'MCP servers', shared: false },
       { to: '/flows', label: 'Flows', shared: false },
+      { to: '/budgets', label: 'Budgets', shared: false },
       { to: '/optimization', label: 'Optimization', shared: true },
       { to: '/settings', label: 'Settings', shared: false },
     ])
@@ -50,6 +51,7 @@ describe('nav items', () => {
       'Sessions',
       'Flows',
       'TokenOps',
+      'Budgets',
       'Optimization',
       'Harnesses',
       'Settings',

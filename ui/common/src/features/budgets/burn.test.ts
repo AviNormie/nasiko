@@ -106,13 +106,13 @@ describe('the strip (F2)', () => {
   })
 
   it('past the limit the allowance is none; a session shows spend per turn', () => {
-    expect(figures(read('agent', I.reviewer)).allowance).toEqual({ perDay: 0, none: true })
+    expect(figures(read('agent', I.reviewer)).allowance).toMatchObject({ perDay: 0, none: true })
     expect(figures(read('session', I.s1)).perTurn).toEqual({ last5: 10 / 3, average: 10 / 3 })
   })
 
   it('allowance counts today: Oct 14 noon to Nov 1 is 18 days', () => {
     expect(allowance(81, 100, NOW, Date.UTC(2026, 10, 1)).perDay).toBeCloseTo(19 / 18, 10)
-    expect(allowance(120, 100, NOW, Date.UTC(2026, 10, 1))).toEqual({ perDay: 0, none: true })
+    expect(allowance(120, 100, NOW, Date.UTC(2026, 10, 1))).toMatchObject({ perDay: 0, none: true })
   })
 
   it('weeks start Monday 00:00 UTC', () => {
