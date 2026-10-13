@@ -534,7 +534,12 @@ const getFillWorld = (): World =>
  */
 export const budgetMockState = (): { world: World; budgets: Budget[] } => {
   const w = getBudgets()
-  return { world: w, budgets: w.budgets.map((b) => budgetView(w, b, nowFn()) as unknown as Budget) }
+  return {
+    world: w,
+    budgets: w.budgets
+      .filter((b) => b.deleted_at === null)
+      .map((b) => budgetView(w, b, nowFn()) as unknown as Budget),
+  }
 }
 
 /** The router mock's live state, for tests that change it under the page (plan §8 ordering test). */

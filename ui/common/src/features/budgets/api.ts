@@ -346,18 +346,19 @@ export function useScopeAlerts(ref: ScopeRef, enabled: boolean) {
   })
 }
 
-/** One 1.0 budget record (§6.3): the editor's source, and "Limits inside it" (D15). */
+/** One 1.0 budget record (§6.3), as query options: the editor fetches it on a click, "Limits inside it" reads it. */
+export const budgetV1Query = (id: string) => ({
+  queryKey: budgetKeys.read('budget', id),
+  queryFn: async ({ signal }: { signal: AbortSignal }) =>
+    (
+      await apiFetch<{ data: BudgetV1 }>(`/api/budgets/${id}`, {
+        signal,
+        schema: budgetResponseSchema,
+      })
+    ).data,
+  ...read,
+})
+
 export function useBudgetV1(id: string | null, enabled: boolean) {
-  return useQuery({
-    queryKey: budgetKeys.read('budget', id ?? ''),
-    queryFn: async ({ signal }) =>
-      (
-        await apiFetch<{ data: BudgetV1 }>(`/api/budgets/${id}`, {
-          signal,
-          schema: budgetResponseSchema,
-        })
-      ).data,
-    enabled: enabled && !!id,
-    ...read,
-  })
+  return useQuery({ ...budgetV1Query(id ?? ''), enabled: enabled && !!id })
 }

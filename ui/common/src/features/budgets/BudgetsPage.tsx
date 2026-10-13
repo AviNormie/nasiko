@@ -9,6 +9,9 @@ import { Announcer } from '@/components/shared/announcer'
 import { useAnnounce } from '@/components/shared/announce'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { Button } from '@/components/ui/button'
+import { LinkButton } from '@/features/router/components/bits'
+import { toast } from 'sonner'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { useUsers } from '@/features/agents/api'
@@ -19,6 +22,7 @@ import { useReturnTick } from '@/lib/useReturnTick'
 import {
   useAtRisk,
   useBreakdown,
+  budgetV1Query,
   useBudgetV1,
   useBurn,
   useChanges,
@@ -32,7 +36,9 @@ import { rememberBurnMode, storedBurnMode } from './burnMode'
 import { BurnCard } from './components/BurnCard'
 import { BurnStrip } from './components/BurnStrip'
 import { AtRisk } from './components/AtRisk'
+import { BudgetSheet, type BudgetMode } from './components/BudgetSheet'
 import { Contributors } from './components/Contributors'
+import { RowActions } from './components/RowActions'
 import { DayPanel } from './components/DayPanel'
 import { ScopeAlerts } from './components/ScopeAlerts'
 import { ShareStrip } from './components/ShareStrip'
@@ -41,12 +47,13 @@ import { WhatChanged } from './components/WhatChanged'
 import { WhatIfPanel } from './components/WhatIf'
 import { ScopeSwitch } from './components/ScopeSwitch'
 import { copy } from './copy'
-import { resolveScope, scopeParam, scopeRef, type PageScope } from './scope'
+import { canWrite, scopeWho, toSheetBudget, whoForBudget } from './editing'
+import { resolveScope, scopeParam, scopeRef, type PageScope, type Viewer } from './scope'
 import type { BudgetsSearch } from './search'
 import { changesWindow, dimensionsFor, keyLabel, pickDimension, shareLine } from './causes'
 import { burnSentence } from './sentence'
 import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
-import type { Burn } from './types'
+import type { Budget, Burn } from './types'
 
 export function BudgetsPage({ search }: { search: BudgetsSearch }) {
   const me = useQuery(meQuery)
@@ -162,6 +169,8 @@ function Page({
           search={search}
           setSearch={setSearch}
           caps={caps}
+          viewer={viewer}
+          pageScope={scope}
           onOwner={viewer.superuser ? (id) => setScope({ kind: 'owner', id }) : null}
         />
       )}
@@ -179,6 +188,8 @@ function Body({
   search,
   setSearch,
   caps,
+  viewer,
+  pageScope,
   onOwner,
 }: {
   burn: Burn
@@ -190,6 +201,8 @@ function Body({
   search: BudgetsSearch
   setSearch: (patch: Partial<BudgetsSearch>, opts?: { replace?: boolean }) => void
   caps: Availability
+  viewer: Viewer
+  pageScope: PageScope
   onOwner: ((id: string) => void) | null
 }) {
   const sentence = burnSentence(burn, kind)
@@ -254,6 +267,30 @@ function Body({
       : null
   const pending = (q: { isPending: boolean; fetchStatus: string }) =>
     q.isPending && q.fetchStatus !== 'idle'
+
+  // Editing in place (F10): the router's sheet, opened on this page and closing back to it.
+  const qc = useQueryClient()
+  const [editor, setEditor] = useState<BudgetMode | null>(null)
+  // The record is read fresh on the click (its `updated_at` guards the PUT), never from a stale list.
+  const openEdit = async (budgetId: string, label: string, limit?: number) => {
+    try {
+      const b = await qc.fetchQuery({ ...budgetV1Query(budgetId), staleTime: 0 })
+      setEditor({
+        kind: 'edit',
+        budget: toSheetBudget(b),
+        who: whoForBudget(b, label, viewer) ?? undefined,
+        limit,
+      })
+    } catch {
+      toast.error(copy.editLoadFailed)
+    }
+  }
+  const scopeOwner = pageScope.kind === 'fleet' ? null : ref.id
+  const writable = canWrite(ref.scope, scopeOwner, viewer)
+  const editOwn = (limit?: number) =>
+    burn.budget
+      ? void openEdit(burn.budget.id, burn.label, limit)
+      : setEditor({ kind: 'create', target: scopeWho(pageScope, burn.label), limit })
   const week = changesWindow(burn)
   const changes = useChanges(ref, week ? { by, ...week } : null, mayHave(caps, 'changes'))
   const noWeek = !week || figures(burn).week.sameDaysLastWeek === null
@@ -263,7 +300,20 @@ function Body({
   return (
     <>
       <p className="-mt-3 text-xs text-muted-foreground">{coverage}</p>
-      <h2 className="text-lead">{sentence}</h2>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 className="text-lead">{sentence}</h2>
+        {writable ? (
+          <Button size="sm" variant={burn.budget ? 'outline' : 'default'} onClick={() => editOwn()}>
+            {burn.budget
+              ? copy.editBudget
+              : pageScope.kind === 'fleet'
+                ? copy.setFleetBudget
+                : pageScope.kind === 'yours'
+                  ? copy.setYourBudget
+                  : copy.setBudget}
+          </Button>
+        ) : null}
+      </div>
       <BurnCard
         burn={burn}
         mode={mode}
@@ -284,7 +334,22 @@ function Body({
         }
         onClearShare={() => setSearch({ contributor: undefined }, { replace: true })}
         preview={previewPoints}
-        whatIf={<WhatIfPanel burn={burn} state={whatIfState} onChange={onWhatIf} />}
+        whatIf={
+          <WhatIfPanel
+            burn={burn}
+            state={whatIfState}
+            onChange={onWhatIf}
+            footer={
+              writable
+                ? (limit) => (
+                    <Button size="sm" variant="outline" onClick={() => editOwn(limit)}>
+                      {copy.useThisLimit}
+                    </Button>
+                  )
+                : undefined
+            }
+          />
+        }
         footer={
           <Contributors
             breakdown={breakdown.data}
@@ -327,6 +392,15 @@ function Body({
         resetsAt={burn.resets_at}
         limitsInside={limitsInside}
         onOwner={onOwner}
+        actions={(r) =>
+          canWrite(r.scope, r.scope === 'owner' ? r.target_id : r.owner_id, viewer) ? (
+            <RowActions
+              name={r.label}
+              agentId={r.scope === 'agent' ? r.target_id : null}
+              onEdit={() => void openEdit(r.budget_id, r.label)}
+            />
+          ) : null
+        }
       />
       <Unbudgeted
         rows={unbudgeted.data}
@@ -334,12 +408,49 @@ function Body({
         pending={pending(unbudgeted)}
         onRetry={() => void unbudgeted.refetch()}
         onOwner={onOwner}
+        actions={(r) =>
+          canWrite('agent', r.owner_id, viewer) ? (
+            <LinkButton
+              aria-label={copy.setBudgetFor(r.label)}
+              onClick={() =>
+                setEditor({
+                  kind: 'create',
+                  target: { kind: 'agent', id: r.agent_id, name: r.label },
+                })
+              }
+            >
+              {copy.setBudget}
+            </LinkButton>
+          ) : null
+        }
       />
       <ScopeAlerts
         alerts={alerts.data}
         error={alerts.error}
         pending={pending(alerts)}
         onRetry={() => void alerts.refetch()}
+        actions={(a) =>
+          // Units and sessions aren't edited here (B5, B6).
+          (viewer.superuser || pageScope.kind === 'yours') &&
+          a.scope !== 'unit' &&
+          a.scope !== 'session' ? (
+            <LinkButton
+              className="text-xs"
+              aria-label={copy.viewBudgetFor(a.label)}
+              onClick={() => void openEdit(a.budget_id, a.label)}
+            >
+              {copy.viewBudget}
+            </LinkButton>
+          ) : null
+        }
+      />
+      <BudgetSheet
+        mode={editor}
+        budgets={NO_BUDGETS}
+        agents={NO_AGENTS}
+        agentName={noName}
+        resetsAt={burn.resets_at ?? burn.as_of}
+        onClose={() => setEditor(null)}
       />
       <DayPanel
         day={search.day ?? null}
@@ -374,3 +485,7 @@ function ownerOptions(
     out.unshift({ id: scope.id, name: shown.label })
   return out
 }
+
+const NO_BUDGETS: readonly Budget[] = []
+const NO_AGENTS: readonly { id: string; name: string }[] = []
+const noName = () => undefined

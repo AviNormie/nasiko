@@ -10,7 +10,7 @@ import { configureMocks } from '@/mocks/handlers'
 import { GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
-import { server } from '@/test/setup'
+import { recordRequestBodies, server } from '@/test/setup'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -215,6 +215,101 @@ describe('/budgets', () => {
     )
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('contributor'))
     expect(screen.getByText(copy.burnPreview)).toBeInTheDocument()
+  })
+
+  it('Edit budget on Fleet: alert only, and Save sends a guarded full replace', async () => {
+    const rec = recordRequestBodies()
+    renderApp('/budgets')
+    await sentence()
+    await userEvent.click(screen.getByRole('button', { name: copy.editBudget }))
+    const sheet = await screen.findByRole('dialog', { name: copy.budgetEdit(copy.budgetFleet) })
+    expect(within(sheet).getByText(copy.budgetDescriptionFleet)).toBeInTheDocument()
+    expect(within(sheet).queryByRole('radio', { name: new RegExp(copy.actionStop) })).toBeNull()
+    expect(within(sheet).getByText(copy.budgetFleetAlertOnly)).toBeInTheDocument()
+    const limit = within(sheet).getByLabelText(copy.monthlyLimit)
+    await userEvent.clear(limit)
+    await userEvent.type(limit, '600')
+    await userEvent.click(within(sheet).getByRole('button', { name: copy.save }))
+    await waitFor(() => expect(sheet).not.toBeInTheDocument())
+    await rec.flush()
+    const put = rec.requests.find((r) => r.method === 'PUT')!
+    expect(put.url.pathname).toBe(`/api/budgets/${I.bOrg}`)
+    expect(put.body).toMatchObject({
+      limit_usd: 600,
+      action: 'alert',
+      expected_updated_at: expect.any(String),
+    })
+    expect(screen.getByTestId('budgets-announcer')).toHaveTextContent(
+      copy.budgetSaved(copy.budgetFleet),
+    )
+    rec.stop()
+  })
+
+  it('Adjust limit on an At risk row edits that budget, in place', async () => {
+    renderApp('/budgets')
+    await screen.findByRole('table', { name: copy.atRiskTitle })
+    await userEvent.click(
+      screen.getByRole('button', { name: copy.adjustLimitFor('Pricing Engine') }),
+    )
+    const sheet = await screen.findByRole('dialog', { name: copy.budgetEdit('Pricing Engine') })
+    expect(within(sheet).getByLabelText(copy.monthlyLimit)).toHaveValue('100.00')
+  })
+
+  it('Set a budget on an unbudgeted agent creates an agent budget for it', async () => {
+    const rec = recordRequestBodies()
+    renderApp('/budgets')
+    await screen.findByRole('table', { name: copy.unbudgetedTitle })
+    await userEvent.click(screen.getByRole('button', { name: copy.setBudgetFor('Support Bot') }))
+    const sheet = await screen.findByRole('dialog', { name: copy.budgetNew })
+    expect(sheet).toHaveTextContent(`${copy.budgetFor}: Support Bot`)
+    await userEvent.type(within(sheet).getByLabelText(copy.monthlyLimit), '40')
+    await userEvent.click(within(sheet).getByRole('button', { name: copy.save }))
+    await waitFor(() => expect(sheet).not.toBeInTheDocument())
+    await rec.flush()
+    expect(rec.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+      scope: 'agent',
+      agent_id: I.support,
+      limit_usd: 40,
+    })
+    rec.stop()
+  })
+
+  it('a superuser sets another owner’s budget with user_id; the stop consequence names them', async () => {
+    const rec = recordRequestBodies()
+    renderApp(`/budgets?scope=owner:${I.ana}`)
+    await sentence()
+    await userEvent.click(screen.getByRole('button', { name: copy.setBudget }))
+    const sheet = await screen.findByRole('dialog', { name: copy.budgetNew })
+    await userEvent.type(within(sheet).getByLabelText(copy.monthlyLimit), '80')
+    await userEvent.click(within(sheet).getByRole('radio', { name: new RegExp(copy.actionStop) }))
+    expect(within(sheet).getByTestId('stop-consequence')).toHaveTextContent(/billed to Ana/)
+    await userEvent.click(within(sheet).getByRole('button', { name: copy.save }))
+    await waitFor(() => expect(sheet).not.toBeInTheDocument())
+    await rec.flush()
+    expect(rec.requests.find((r) => r.method === 'POST')?.body).toMatchObject({
+      scope: 'owner',
+      user_id: I.ana,
+      action: 'stop',
+    })
+    rec.stop()
+  })
+
+  it('What if… Use this limit opens the editor with that limit', async () => {
+    renderApp(`/budgets?scope=owner:${I.dev}`)
+    await sentence()
+    await userEvent.click(screen.getByRole('button', { name: /^What if…/ }))
+    await userEvent.type(screen.getByLabelText(copy.whatIfLimit), '250')
+    await userEvent.click(await screen.findByRole('button', { name: copy.useThisLimit }))
+    const sheet = await screen.findByRole('dialog', { name: copy.budgetEdit('Dev') })
+    expect(within(sheet).getByLabelText(copy.monthlyLimit)).toHaveValue('250.00')
+  })
+
+  it('a member has no edit buttons on rows they don’t own', async () => {
+    configureMocks({ ...golden, budgetVariants: [...golden.budgetVariants], superuser: false })
+    renderApp('/budgets')
+    await sentence()
+    expect(screen.queryByRole('button', { name: /^Adjust limit/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Set a budget:/ })).toBeNull()
   })
 
   const axeClean = async () => {

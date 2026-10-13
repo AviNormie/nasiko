@@ -58,13 +58,9 @@ export const copy = {
   switchToAlert: 'Switch to Alert only',
   switchedToAlert: (name: string | null) =>
     `${name ? `${name} is` : 'Your budget is'} on Alert only. Calls resume within about a minute.`,
-  alertsTitle: 'Alerts',
-  alertsSubtitle: 'In-app, one per budget per mark per month. Email and webhooks are server work.',
-  noAlerts: 'No alerts this month or last',
-  alertCrossed: (label: string, pct: number, amount: string, stopped: boolean) =>
-    `${label} crossed ${pct}% (${amount})${stopped ? ' · calls stopped' : ''}`,
   viewBudget: 'View budget',
-  alertOwner: 'Your budget',
+  routerMovedToBudgets: 'Burn charts, causes and alerts are on the Budgets page.',
+  openBudgets: 'Open Budgets',
 
   // Budget sheet
   budgetNew: 'New budget',
@@ -93,6 +89,14 @@ export const copy = {
   stopHint: 'The router refuses the calls this budget counts until the month resets.',
   stopConsequenceAgent: (agent: string, date: string) =>
     `Calls from ${agent} get an error until ${date}. Its callers see the agent’s normal error.`,
+  stopConsequenceUser: (name: string, date: string) =>
+    `Every routed call billed to ${name} gets an error until ${date}, including their chats with other people’s agents.`,
+  budgetFleet: 'Fleet',
+  budgetDescriptionFleet:
+    'A monthly limit on all priced spend (routed calls, other traced calls and harness estimates), with alerts as it crosses each mark.',
+  budgetFleetAlertOnly:
+    'A fleet budget alerts only: much of its spend isn’t routed, so it can’t be stopped.',
+  budgetFor: 'Applies to',
   stopConsequenceOwner: (date: string) =>
     `Every routed call billed to you gets an error until ${date}, including your chats with other people’s agents.`,
   budgetTiming: 'Limit changes apply within about a minute.',
@@ -287,6 +291,18 @@ export const copy = {
       ? `${label} will pass ${pct}% around ${crosses} (projected on ${at})`
       : `${label} is projected to pass ${pct}% (projected on ${at})`,
   alertForecastCleared: (label: string, pct: number) => `${label}’s forecast for ${pct}% cleared`,
+
+  // Editing in place (F10)
+  editBudget: 'Edit budget',
+  adjustLimit: 'Adjust limit',
+  adjustLimitFor: (name: string) => `Adjust limit: ${name}`,
+  moreActions: (name: string) => `More actions: ${name}`,
+  openAgent: 'Open agent',
+  setBudgetFor: (name: string) => `Set a budget: ${name}`,
+  viewBudgetFor: (name: string) => `View budget: ${name}`,
+  useThisLimit: 'Use this limit',
+  editLoadFailed: 'Couldn’t open the budget. Try again.',
+  setYourBudget: 'Set your budget',
 
   setBudget: 'Set a budget',
   setFleetBudget: 'Set a fleet budget',

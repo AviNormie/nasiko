@@ -3,6 +3,7 @@
  * then a separate Alerts list. Every number is router-metered (token_usage) and covers routed calls only. The
  * contract is the proposed R-L10 (mocked; no server has it yet).
  */
+import { Link } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2, Info, OctagonX } from 'lucide-react'
 import { EmptyState } from '@/components/shared/state-card'
 import { Badge } from '@/components/ui/badge'
@@ -21,7 +22,7 @@ import { isBudgetsAbsent } from '@/lib/api/detect'
 import { cn } from '@/lib/utils'
 import { budgetForecast, budgetLabel, sortBudgets, stateView } from '../budgets'
 import { copy } from '../copy'
-import type { Budget, BudgetAlert, BudgetStatus, BudgetStatusResponse } from '../types'
+import type { Budget, BudgetStatus, BudgetStatusResponse } from '../types'
 import { CELL, HEAD, Label, ROW } from './tableStyles'
 import { UsedBar } from './UsedBar'
 import { LinkButton } from '@/features/router/components/bits'
@@ -41,7 +42,6 @@ export function BudgetsSection({
   budgets,
   status,
   statusAt,
-  alerts,
   agentName,
   resetsAt,
   pending,
@@ -53,7 +53,6 @@ export function BudgetsSection({
   status: Q<BudgetStatusResponse>
   /** When the status was read: the forecast's clock, so elapsed days and the daily series agree. */
   statusAt: Date
-  alerts: Q<BudgetAlert[]>
   agentName: (id: string) => string | undefined
   resetsAt: string
   /** Budgets with a switch to Alert only in flight. */
@@ -168,7 +167,16 @@ export function BudgetsSection({
         ) : null}
       </section>
       {list.length ? (
-        <AlertsSection alerts={alerts} budgets={list} agentName={agentName} onView={onEdit} />
+        // Alerts, burn and causes moved to /budgets (plans/feat-budget-burn.md F10).
+        <p className="text-sm text-muted-foreground">
+          {copy.routerMovedToBudgets}{' '}
+          <Link
+            to="/budgets"
+            className="font-medium text-primary-text underline-offset-4 hover:underline"
+          >
+            {copy.openBudgets}
+          </Link>
+        </p>
       ) : null}
     </>
   )
@@ -294,73 +302,5 @@ function StateBadge({ kind, label }: { kind: 'ok' | 'warning' | 'exceeded'; labe
     >
       <Icon aria-hidden /> {label}
     </Badge>
-  )
-}
-
-function AlertsSection({
-  alerts,
-  budgets,
-  agentName,
-  onView,
-}: {
-  alerts: Q<BudgetAlert[]>
-  budgets: readonly Budget[]
-  agentName: (id: string) => string | undefined
-  onView: (b: Budget) => void
-}) {
-  const byId = new Map(budgets.map((b) => [b.id, b]))
-  const rows = (alerts.data ?? []).filter((a) => byId.has(a.budget_id))
-  return (
-    <section id="router-alerts" aria-labelledby="router-alerts-h" className="scroll-mt-4 space-y-2">
-      <div>
-        <h2 id="router-alerts-h" className="text-sm font-semibold">
-          {copy.alertsTitle}
-        </h2>
-        <p className="text-xs text-muted-foreground">{copy.alertsSubtitle}</p>
-      </div>
-      {alerts.isPending ? (
-        <Skeleton className="h-11" />
-      ) : alerts.isError && !alerts.data ? (
-        <SectionError error={alerts.error} onRetry={() => void alerts.refetch()} />
-      ) : rows.length === 0 ? (
-        <EmptyState title={copy.noAlerts} />
-      ) : (
-        <ul
-          aria-label={copy.alertsTitle}
-          className="divide-y divide-border rounded-lg border border-border bg-card"
-        >
-          {rows.map((a) => {
-            const b = byId.get(a.budget_id)
-            if (!b) return null // rows are filtered to known budgets above
-            const label = budgetLabel(b, agentName)
-            return (
-              <li
-                key={a.id}
-                className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-sm"
-              >
-                <span className="min-w-0 flex-1">
-                  {copy.alertCrossed(
-                    b.scope === 'owner' ? copy.alertOwner : label,
-                    a.threshold,
-                    fmtMoney(a.amount_usd),
-                    a.stopped,
-                  )}
-                </span>
-                <time dateTime={a.at} className="text-xs text-muted-foreground">
-                  {fmtShortDay(a.at)}
-                </time>
-                <LinkButton
-                  className="text-xs"
-                  onClick={() => onView(b)}
-                  aria-label={`${copy.viewBudget}: ${label}`}
-                >
-                  {copy.viewBudget}
-                </LinkButton>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </section>
   )
 }
