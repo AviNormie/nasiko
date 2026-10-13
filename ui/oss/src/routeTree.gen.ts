@@ -20,6 +20,7 @@ import { Route as AppStatusRouteImport } from './../../common/src/routes/_app/st
 import { Route as AppTokenopsRouteImport } from './../../common/src/routes/_app/tokenops'
 import { Route as AppAccountAppearanceRouteImport } from './../../common/src/routes/_app/account.appearance'
 import { Route as AppAccountPasswordRouteImport } from './../../common/src/routes/_app/account.password'
+import { Route as AppAccountShortcutsRouteImport } from './../../common/src/routes/_app/account.shortcuts'
 import { Route as AppAgentsIndexRouteImport } from './../../common/src/routes/_app/agents.index'
 import { Route as AppAgentsAgentIdRouteImport } from './../../common/src/routes/_app/agents.$agentId'
 import { Route as AppAgentsMineRouteImport } from './../../common/src/routes/_app/agents.mine'
@@ -98,6 +99,11 @@ const AppAccountAppearanceRoute = AppAccountAppearanceRouteImport.update({
 const AppAccountPasswordRoute = AppAccountPasswordRouteImport.update({
   id: '/account/password',
   path: '/account/password',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAccountShortcutsRoute = AppAccountShortcutsRouteImport.update({
+  id: '/account/shortcuts',
+  path: '/account/shortcuts',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
@@ -238,6 +244,7 @@ export interface FileRoutesByFullPath {
   '/tokenops': typeof AppTokenopsRoute
   '/account/appearance': typeof AppAccountAppearanceRoute
   '/account/password': typeof AppAccountPasswordRoute
+  '/account/shortcuts': typeof AppAccountShortcutsRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/agents/mine': typeof AppAgentsMineRoute
   '/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -275,6 +282,7 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/account/appearance': typeof AppAccountAppearanceRoute
   '/account/password': typeof AppAccountPasswordRoute
+  '/account/shortcuts': typeof AppAccountShortcutsRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/agents/mine': typeof AppAgentsMineRoute
   '/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -314,6 +322,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/account/appearance': typeof AppAccountAppearanceRoute
   '/_app/account/password': typeof AppAccountPasswordRoute
+  '/_app/account/shortcuts': typeof AppAccountShortcutsRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/agents/mine': typeof AppAgentsMineRoute
   '/_app/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -353,6 +362,7 @@ export interface FileRouteTypes {
     | '/tokenops'
     | '/account/appearance'
     | '/account/password'
+    | '/account/shortcuts'
     | '/agents/$agentId'
     | '/agents/mine'
     | '/builds/$buildId'
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/'
     | '/account/appearance'
     | '/account/password'
+    | '/account/shortcuts'
     | '/agents/$agentId'
     | '/agents/mine'
     | '/builds/$buildId'
@@ -428,6 +439,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/account/appearance'
     | '/_app/account/password'
+    | '/_app/account/shortcuts'
     | '/_app/agents/$agentId'
     | '/_app/agents/mine'
     | '/_app/builds/$buildId'
@@ -537,6 +549,13 @@ declare module '@tanstack/react-router' {
       path: '/account/password'
       fullPath: '/account/password'
       preLoaderRoute: typeof AppAccountPasswordRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/account/shortcuts': {
+      id: '/_app/account/shortcuts'
+      path: '/account/shortcuts'
+      fullPath: '/account/shortcuts'
+      preLoaderRoute: typeof AppAccountShortcutsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/': {
@@ -727,6 +746,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAccountAppearanceRoute: typeof AppAccountAppearanceRoute
   AppAccountPasswordRoute: typeof AppAccountPasswordRoute
+  AppAccountShortcutsRoute: typeof AppAccountShortcutsRoute
   AppAgentsAgentIdRoute: typeof AppAgentsAgentIdRoute
   AppAgentsMineRoute: typeof AppAgentsMineRoute
   AppBuildsBuildIdRoute: typeof AppBuildsBuildIdRoute
@@ -764,6 +784,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAccountAppearanceRoute: AppAccountAppearanceRoute,
   AppAccountPasswordRoute: AppAccountPasswordRoute,
+  AppAccountShortcutsRoute: AppAccountShortcutsRoute,
   AppAgentsAgentIdRoute: AppAgentsAgentIdRoute,
   AppAgentsMineRoute: AppAgentsMineRoute,
   AppBuildsBuildIdRoute: AppBuildsBuildIdRoute,
