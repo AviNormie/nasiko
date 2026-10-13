@@ -192,7 +192,7 @@ impl StreamDecoder {
         }
     }
 
-    fn validate(&self, name: String, args: Map<String, Value>) -> Result<ToolCall> {
+    fn validate(&self, name: String, mut args: Map<String, Value>) -> Result<ToolCall> {
         let schema = self
             .catalog
             .get(&name)
@@ -204,6 +204,7 @@ impl StreamDecoder {
                 reason,
             });
         }
+        validate::fill_omitted_nullable(&mut args, schema);
         Ok(ToolCall {
             name,
             arguments: args,

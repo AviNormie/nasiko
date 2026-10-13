@@ -101,7 +101,7 @@
 //! | Error ([`CompactError::kind`]) | When |
 //! |---|---|
 //! | `unknown_tool` | the name is not in the tool list (reported as soon as the name is complete) |
-//! | `invalid_arguments` | not a JSON object, a repeated key, or a schema violation: missing required field, wrong type, value outside the enum or range, extra key in a `!` object, bad `date-time`/`date`/`time`/`uuid` |
+//! | `invalid_arguments` | not a JSON object, a repeated key, or a schema violation: missing required field (a required field that allows `null` may be omitted and is returned as `null`), wrong type, value outside the enum or range, extra key in a `!` object, bad `date-time`/`date`/`time`/`uuid` |
 //! | `malformed_call` | no space and name after `<<call`, no `{` or `>>` after the name, missing `>>`, output ending inside a call, a call over [`MAX_CALL_BYTES`] |
 //!
 //! Following JSON Schema, `30.0` is a valid integer and undeclared keys pass in an open object.
