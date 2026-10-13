@@ -115,7 +115,9 @@ describe('B0 review regressions', () => {
       used_usd: 24,
     })
     expect(
-      burn(w, admin, q('unit', I.growth), NOW + 1000).events.find((e) => e.kind === 'fiscal_year_changed'),
+      burn(w, admin, q('unit', I.growth), NOW + 1000).events.find(
+        (e) => e.kind === 'fiscal_year_changed',
+      ),
     ).toMatchObject({
       effective_from: '2027-01-01T00:00:00Z',
     })
