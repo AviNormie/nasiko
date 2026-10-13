@@ -20,7 +20,10 @@ export interface Budget {
   owner_id: string
   /** Who created or last changed it (a superuser may set a budget on anyone's agent). */
   set_by: string
-  period: 'month'
+  /** 1.0 adds quarter budgets (B6: calendar quarters, §7 Q2). */
+  period: 'month' | 'quarter'
+  /** 1.0: a period change scheduled for the next boundary (§4.3), else null or absent. */
+  next_period_change?: { period: 'month' | 'quarter'; effective_from: string } | null
   limit_usd: number
   /** Whole percents of the limit, ascending and unique (default 50, 80, 100); a `stop` budget always has 100. */
   thresholds: number[]
@@ -37,8 +40,8 @@ export interface CreateBudgetBody {
   session_id?: string
   /** 1.0 (EE): the org unit, for a unit budget. */
   unit_id?: string
-  /** 1.0: `session` for a session budget (its one period); month otherwise (the default). */
-  period?: 'session'
+  /** 1.0: `session` for a session budget (its one period); `quarter` for a quarter budget; month otherwise. */
+  period?: 'session' | 'quarter'
   /** 1.0: whose owner budget, when not the caller's (superuser, §6.4). */
   user_id?: string
   limit_usd: number
@@ -53,6 +56,8 @@ export interface UpdateBudgetBody {
   action: BudgetAction
   /** The `updated_at` the client read; a mismatch is 409 "budget changed elsewhere". */
   expected_updated_at: string
+  /** 1.0: a period change, scheduled for the next boundary (§6.5); absent keeps the period. */
+  period?: 'month' | 'quarter'
 }
 
 export interface BudgetStatus {

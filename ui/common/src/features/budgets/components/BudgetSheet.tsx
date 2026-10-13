@@ -44,6 +44,7 @@ import {
   thresholdError,
   withStopMark,
 } from '../budgets'
+import { quarterOf } from '../burn'
 import { copy } from '../copy'
 import { budgetError } from '../errors'
 import { fieldErrors } from '@/features/router/form'
@@ -64,6 +65,7 @@ const schema = z.object({
     if (e) ctx.addIssue({ code: 'custom', message: e })
   }),
   action: z.enum(['alert', 'stop']),
+  period: z.enum(['month', 'quarter']),
 })
 type Form = z.infer<typeof schema>
 
@@ -98,6 +100,8 @@ interface SheetProps {
   status?: BudgetStatus
   resetsAt: string
   onClose: () => void
+  /** The server has quarter budgets (`quarter_periods`, B6): offer the period. R-L10's router tab has month only. */
+  quarters?: boolean
 }
 
 export function BudgetSheet({
@@ -121,7 +125,16 @@ export function BudgetSheet({
   )
 }
 
-function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: SheetProps) {
+function Body({
+  mode,
+  budgets,
+  agents,
+  agentName,
+  status,
+  resetsAt,
+  onClose,
+  quarters,
+}: SheetProps) {
   const ids = useId()
   const announce = useAnnounce()
   const save = useSaveBudget()
@@ -146,11 +159,13 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       limit: mode.limit !== undefined ? mode.limit.toFixed(2) : src ? src.limit_usd.toFixed(2) : '',
       thresholds: src ? [...src.thresholds] : [...DEFAULT_THRESHOLDS],
       action: src?.action ?? 'alert',
+      // A scheduled change shows as the choice it will become (§4.3).
+      period: src?.next_period_change?.period ?? src?.period ?? 'month',
     },
     resolver: zodResolver(schema),
   })
   const form = useWatch({ control }) as Form
-  const { limit, thresholds, action } = form
+  const { limit, thresholds, action, period } = form
   // Opened before the owned agents loaded: take the first open scope once they arrive.
   const scope = form.scope || firstScope
   const setThresholds = (t: number[]) => setValue('thresholds', t, { shouldDirty: true })
@@ -190,6 +205,9 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
   // For sentences: null words it as "your budget".
   const subject = who.kind === 'you' ? (src ? sentenceName(src, agentName) : null) : label
   const reset = fmtShortDay(resetsAt)
+  // A quarter budget's words (B6): the descriptions say "monthly" for the default period.
+  const perPeriod = (t: string) =>
+    period === 'quarter' ? t.replace('A monthly limit', 'A quarterly limit') : t
   const errs = fieldErrors(schema, form)
   const limitErr = errs.limit
   const thrErr = errs.thresholds
@@ -218,9 +236,27 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       action,
     )
     const body = { limit_usd: parseLimit(limit), thresholds: marks, action }
+    // A period is sent only when it says something: a quarter budget, or a change from what's in force or scheduled
+    // (the current period again cancels a scheduled change, §4.3).
+    const periodChange = src && period !== (src.next_period_change?.period ?? src.period)
     const v: SaveBudget = src
-      ? { mode: 'update', id: src.id, body: { ...body, expected_updated_at: src.updated_at } }
-      : { mode: 'create', body: { ...body, ...createTarget(target ?? who) } }
+      ? {
+          mode: 'update',
+          id: src.id,
+          body: {
+            ...body,
+            expected_updated_at: src.updated_at,
+            ...(periodChange ? { period } : {}),
+          },
+        }
+      : {
+          mode: 'create',
+          body: {
+            ...body,
+            ...createTarget(target ?? who),
+            ...(period === 'quarter' && who.kind !== 'session' ? { period } : {}),
+          },
+        }
     save.mutate(v, {
       onSuccess: () => {
         announce(copy.budgetSaved(subject))
@@ -247,15 +283,17 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       <SheetHeader className="border-b border-border">
         <SheetTitle>{src ? copy.budgetEdit(subject) : copy.budgetNew}</SheetTitle>
         <SheetDescription>
-          {src && status
-            ? copy.budgetStatusLine(fmtMoney(status.used_usd), fmtMoney(src.limit_usd), reset)
-            : who.kind === 'fleet'
-              ? copy.budgetDescriptionFleet
-              : who.kind === 'unit'
-                ? copy.budgetDescriptionUnit
-                : who.kind === 'session'
-                  ? copy.budgetDescriptionSession
-                  : copy.budgetDescription}
+          {perPeriod(
+            src && status
+              ? copy.budgetStatusLine(fmtMoney(status.used_usd), fmtMoney(src.limit_usd), reset)
+              : who.kind === 'fleet'
+                ? copy.budgetDescriptionFleet
+                : who.kind === 'unit'
+                  ? copy.budgetDescriptionUnit
+                  : who.kind === 'session'
+                    ? copy.budgetDescriptionSession
+                    : copy.budgetDescription,
+          )}
         </SheetDescription>
       </SheetHeader>
       <form
@@ -307,9 +345,53 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
             </Field>
           ) : null}
 
+          {quarters && who.kind !== 'session' ? (
+            <FieldSet className="gap-2">
+              <FieldLegend variant="label" className="mb-0">
+                {copy.periodField}
+              </FieldLegend>
+              <RadioGroup
+                aria-label={copy.periodField}
+                value={period}
+                onValueChange={(p) =>
+                  setValue('period', p === 'quarter' ? 'quarter' : 'month', { shouldDirty: true })
+                }
+                className="gap-2"
+              >
+                {(['month', 'quarter'] as const).map((p) => (
+                  <div key={p} className="flex items-center gap-2">
+                    <RadioGroupItem id={`${ids}-period-${p}`} value={p} />
+                    <Label htmlFor={`${ids}-period-${p}`} className="font-normal">
+                      {p === 'month' ? copy.periodEveryMonth : copy.periodEveryQuarter}
+                    </Label>
+                  </div>
+                ))}
+              </RadioGroup>
+              {/* A change takes effect at the next boundary: the next quarter start, either way (§4.3). */}
+              {src && period !== (src.next_period_change?.period ?? src.period) ? (
+                <p className="text-xs text-muted-foreground">
+                  {period === src.period
+                    ? copy.periodPendingCancel
+                    : copy.periodChangeFrom(period, fmtShortDay(nextBoundary(resetsAt)))}
+                </p>
+              ) : src?.next_period_change ? (
+                <p className="text-xs text-muted-foreground">
+                  {copy.periodPending(
+                    src.next_period_change.period,
+                    fmtShortDay(src.next_period_change.effective_from),
+                  )}
+                </p>
+              ) : null}
+            </FieldSet>
+          ) : null}
+
           <Field className="gap-1">
             <FieldLabel htmlFor={`${ids}-limit`}>
-              {who.kind === 'session' ? copy.sessionLimit : copy.monthlyLimit}
+              {who.kind === 'session'
+                ? copy.sessionLimit
+                : period === 'quarter'
+                  ? copy.quarterlyLimit
+                  : copy.monthlyLimit}
             </FieldLabel>
             <Input
               id={`${ids}-limit`}
@@ -529,6 +611,13 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
 }
 
 /** The scope value a fixed target takes in the form. */
+/**
+ * A period change's boundary (§4.3): the end of the quarter the current period ends in (month → quarter and quarter →
+ * month alike), from the budget's own reset, never the browser's clock.
+ */
+const nextBoundary = (resetsAt: string) =>
+  new Date(quarterOf(Date.parse(resetsAt) - 1).end).toISOString()
+
 function targetScope(t: BudgetWho): string {
   return t.kind === 'agent'
     ? t.id
