@@ -8,7 +8,7 @@ mod common;
 
 use std::time::Duration;
 
-use nasiko_runtime::ContainerId;
+use nasiko_runtime::{ContainerId, RuntimeState};
 use serde_json::{Value, json};
 use serial_test::serial;
 use uuid::Uuid;
@@ -258,5 +258,107 @@ async fn registering_a_task_store_applies_no_bounds() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(server.runtime.applied_bounds().is_empty());
+    server.cleanup().await;
+}
+
+async fn state_mode(server: &common::TestServer, agent_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT state_mode FROM agents WHERE id = $1")
+        .bind(agent_id)
+        .fetch_one(&server.db)
+        .await
+        .unwrap()
+}
+
+/// The state API is configured, so a deploy of a new image resets the agent's state mode and
+/// the platform credentials are minted, as in production.
+async fn start_with_state_api() -> common::TestServer {
+    common::TestServer::start_with(|config| {
+        config.mcp_gateway_public_url = Some("http://cp.test/api/mcp".to_owned());
+    })
+    .await
+}
+
+/// `POST /api/containers/{agent}/restart[?query]`, the status it answers.
+async fn admin_restart(
+    server: &common::TestServer,
+    admin: &str,
+    agent_id: Uuid,
+    query: &str,
+) -> u16 {
+    common::as_superuser(
+        server
+            .client
+            .post(server.url(&format!("/api/containers/{agent_id}/restart{query}"))),
+        admin,
+        "admin",
+    )
+    .send()
+    .await
+    .unwrap()
+    .status()
+    .as_u16()
+}
+
+#[tokio::test]
+#[serial]
+async fn an_admin_restart_of_a_running_agent_rolls_it_in_place() {
+    let server = start_with_state_api().await;
+    server.runtime.set_restarts_in_place(true);
+    let (admin, admin_id) = init_admin(&server).await;
+    let agent = seed_versioned_agent(&server, admin_id).await;
+    set_column(&server, agent, "state_mode = 'durable'").await;
+    let id = ContainerId::from_uuid(agent);
+
+    assert_eq!(admin_restart(&server, &admin, agent, "").await, 200);
+
+    assert_eq!(server.runtime.restarted(), vec![id.clone()]);
+    assert!(
+        server.runtime.deployed_bounds().is_empty(),
+        "the workload is not destroyed and recreated"
+    );
+    assert_eq!(state_mode(&server, agent).await, "durable");
+    let env = server
+        .runtime
+        .last_refreshed_env(&id)
+        .expect("the replacements start with the rebuilt env");
+    assert!(env.contains_key("NASIKO_AGENT_TOKEN") && env.contains_key("MCP_GATEWAY_TOKEN"));
+    assert_eq!(env["PORT"], "8000", "the env is the agent's whole env");
+    server.cleanup().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn an_admin_restart_redeploys_what_cannot_be_rolled_in_place() {
+    let server = start_with_state_api().await;
+    let (admin, admin_id) = init_admin(&server).await;
+    let agent = seed_versioned_agent(&server, admin_id).await;
+
+    // A runtime whose restart does not apply a changed env.
+    assert_eq!(admin_restart(&server, &admin, agent, "").await, 200);
+    assert_eq!(wait_for_deploys(&server, agent).await, vec![(1, 1)]);
+    assert!(server.runtime.restarted().is_empty());
+
+    // An agent that is not there, and one that is stopped.
+    server.runtime.set_restarts_in_place(true);
+    server.runtime.set_status_follows_deploys(true);
+    let missing = seed_versioned_agent(&server, admin_id).await;
+    assert_eq!(admin_restart(&server, &admin, missing, "").await, 200);
+    assert_eq!(wait_for_deploys(&server, missing).await.len(), 1);
+    server.runtime.set_status_follows_deploys(false);
+    server.runtime.set_reported_state(RuntimeState::Stopped);
+    let stopped = seed_versioned_agent(&server, admin_id).await;
+    assert_eq!(admin_restart(&server, &admin, stopped, "").await, 200);
+    assert_eq!(wait_for_deploys(&server, stopped).await.len(), 1);
+    assert!(server.runtime.restarted().is_empty());
+
+    // A restart that pulls the image fresh.
+    server.runtime.set_reported_state(RuntimeState::Running);
+    let before = server.runtime.deployed_bounds().len();
+    assert_eq!(
+        admin_restart(&server, &admin, agent, "?refresh=true").await,
+        200
+    );
+    assert_eq!(server.runtime.deployed_bounds().len(), before + 1);
+    assert!(server.runtime.restarted().is_empty());
     server.cleanup().await;
 }
