@@ -15,7 +15,9 @@ import { toast } from 'sonner'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { useUsers } from '@/features/agents/api'
+import { useRouter } from '@tanstack/react-router'
 import { meQuery } from '@/lib/api/auth'
+import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { useSetSearch } from '@/lib/search'
 import { useReturnTick } from '@/lib/useReturnTick'
@@ -23,6 +25,8 @@ import {
   useAtRisk,
   useBreakdown,
   budgetV1Query,
+  useBudgets,
+  useBudgetStatus,
   useBudgetV1,
   useBurn,
   useChanges,
@@ -30,8 +34,8 @@ import {
   useUnbudgeted,
   type ScopeRef,
 } from './api'
-import { capabilitiesQuery, mayHave, type Availability } from './availability'
-import { figures, previewLine, projection, quarterOf, spikes, type BurnMode } from './burn'
+import { capabilitiesQuery, has, mayHave, type Availability, type Feature } from './availability'
+import { previewLine, projection, quarterOf, spikes, type BurnMode } from './burn'
 import { rememberBurnMode, storedBurnMode } from './burnMode'
 import { BurnCard } from './components/BurnCard'
 import { BurnStrip } from './components/BurnStrip'
@@ -48,9 +52,17 @@ import { WhatIfPanel } from './components/WhatIf'
 import { ScopeSwitch } from './components/ScopeSwitch'
 import { copy } from './copy'
 import { canWrite, scopeWho, toSheetBudget, whoForBudget } from './editing'
+import { burnFromStatus } from './fallback'
 import { resolveScope, scopeParam, scopeRef, type PageScope, type Viewer } from './scope'
 import type { BudgetsSearch } from './search'
-import { changesWindow, dimensionsFor, keyLabel, pickDimension, shareLine } from './causes'
+import {
+  changesWindow,
+  hasWeekBefore,
+  dimensionsFor,
+  keyLabel,
+  pickDimension,
+  shareLine,
+} from './causes'
 import { burnSentence } from './sentence'
 import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Budget, Burn } from './types'
@@ -122,6 +134,9 @@ function Page({
     { period: 'quarter' },
     burnAvailable && kind === 'month' && !!b?.budget && b.period === 'month',
   )
+  // An R-L10 server (no burn route, F11): Yours draws this period from the owner budget's status row.
+  const burnAbsent = !burnAvailable || isEndpointAbsent(burn.error)
+  const fallback = useFallbackBurn(burnAbsent && scope.kind === 'yours', viewer.id)
   const users = useUsers(viewer.superuser)
   const [stored, setStored] = useState(() => storedBurnMode(viewer.id))
   const mode: BurnMode = search.burn ?? stored ?? 'down'
@@ -149,8 +164,30 @@ function Page({
         />
       }
     >
-      {!burnAvailable ? (
-        <StateCard title={copy.pageMissing}>{copy.pageMissingBody}</StateCard>
+      {burnAbsent && scope.kind === 'yours' && fallback.burn ? (
+        <Body
+          key={`${scopeParam(scope)}:${kind}:fallback`}
+          burn={fallback.burn}
+          scopeRef={ref}
+          kind="month"
+          quarterRead={null}
+          mode={mode}
+          onMode={setMode}
+          search={search}
+          setSearch={setSearch}
+          caps={RL10_ONLY}
+          viewer={viewer}
+          pageScope={scope}
+          onOwner={null}
+        />
+      ) : burnAbsent && scope.kind === 'yours' && fallback.pending ? (
+        <PanelSkeleton height={340} />
+      ) : burnAbsent && scope.kind === 'yours' && fallback.error ? (
+        <PanelError error={fallback.error} onRetry={fallback.retry} what={copy.burnFailed} />
+      ) : burnAbsent ? (
+        <StateCard title={copy.pageMissing}>
+          {scope.kind === 'yours' ? copy.rl10NoBudget : copy.pageMissingBody}
+        </StateCard>
       ) : burn.isPending ? (
         <div aria-busy className="space-y-4">
           <PanelSkeleton height={24} />
@@ -160,6 +197,8 @@ function Page({
         <PanelError error={burn.error} onRetry={() => void burn.refetch()} what={copy.burnFailed} />
       ) : (
         <Body
+          // A new scope or period starts fresh: no what-if or open editor carries over (review).
+          key={`${scopeParam(scope)}:${kind}`}
           burn={burn.data}
           scopeRef={ref}
           kind={kind}
@@ -205,7 +244,11 @@ function Body({
   pageScope: PageScope
   onOwner: ((id: string) => void) | null
 }) {
-  const sentence = burnSentence(burn, kind)
+  // A month budget read by quarter keeps the month's figures and words; the quarter's end comes from this same read.
+  const words: 'month' | 'quarter' = burn.period === 'quarter' ? 'quarter' : 'month'
+  const sentence = burnSentence(burn, words)
+  const quarterFrom =
+    kind === 'quarter' && burn.budget && burn.period === 'month' ? burn : quarterRead
   const coverage = burn.budget
     ? burn.covers === 'all_priced'
       ? copy.coverageAll
@@ -220,12 +263,13 @@ function Body({
   // What's causing it (F3): the bars by contributor, a picked contributor's share, What changed, the picked day.
   const dimensions = dimensionsFor(ref.scope)
   const by = pickDimension(ref.scope, search.by)
-  const breakdown = useBreakdown(ref, { by, period: kind, top: 5 }, mayHave(caps, 'breakdown'))
+  const can = (f: Feature) => mayHave(caps, f)
+  const breakdown = useBreakdown(ref, { by, period: kind, top: 5 }, can('breakdown'))
   const picked = search.contributor ?? null
   const contributor = useBurn(
     ref,
     { period: kind, contributor: picked ? { by, key: picked } : null },
-    !!picked && mayHave(caps, 'contributor'),
+    !!picked && can('contributor'),
   )
   const shareRead = picked && contributor.data?.contributor ? contributor.data : null
 
@@ -236,29 +280,36 @@ function Body({
   const lastDay = burn.resets_at ? fmtShortDay(Date.parse(burn.resets_at) - 86_400_000) : ''
   const onWhatIf = (next: WhatIfState) => {
     setWhatIfState(next)
-    const inputs = whatIfInputs(burn, next)
-    if (inputs && picked) setSearch({ contributor: undefined }, { replace: true })
-    const p = projection(burn)
-    if (inputs && p)
-      announce(
-        copy.whatIfAnnounce(
-          fmtMoney(burn.used_usd + p.pace * (1 + inputs.paceChange) * p.daysLeft),
-          lastDay,
-        ),
-      )
+    if (whatIfInputs(burn, next) && picked) setSearch({ contributor: undefined }, { replace: true })
   }
-  const previewPoints = preview
-    ? previewLine(
-        burn,
-        burn.budget ? mode : 'up',
-        (projection(burn)?.pace ?? 0) * (1 + preview.paceChange),
-        preview.limit ?? undefined,
-      )
-    : null
+  // Announced once the inputs rest, not per keystroke or slider step (ledger #71).
+  const p = projection(burn)
+  const previewMessage =
+    preview && p
+      ? copy.whatIfAnnounce(
+          fmtMoney(burn.used_usd + p.pace * (1 + preview.paceChange) * p.daysLeft),
+          lastDay,
+        )
+      : ''
+  useEffect(() => {
+    if (!previewMessage) return
+    const t = setTimeout(() => announce(previewMessage), ANNOUNCE_REST_MS)
+    return () => clearTimeout(t)
+  }, [previewMessage, announce])
+  // One preview at a time, whatever moved the URL (Back included): a picked contributor wins (#71).
+  const previewPoints =
+    preview && !picked
+      ? previewLine(
+          burn,
+          burn.budget ? mode : 'up',
+          (projection(burn)?.pace ?? 0) * (1 + preview.paceChange),
+          preview.limit ?? undefined,
+        )
+      : null
 
   // At risk, Unbudgeted and the alerts (F5, F7): the scope's own lists.
-  const atRisk = useAtRisk(ref, mayHave(caps, 'at_risk'))
-  const unbudgeted = useUnbudgeted(ref, kind, mayHave(caps, 'unbudgeted'))
+  const atRisk = useAtRisk(ref, can('at_risk'))
+  const unbudgeted = useUnbudgeted(ref, kind, can('unbudgeted'))
   const alerts = useScopeAlerts(ref, mayHave(caps, 'budgets'))
   const own = useBudgetV1(burn.budget?.id ?? null, true)
   const limitsInside =
@@ -292,14 +343,37 @@ function Body({
       ? void openEdit(burn.budget.id, burn.label, limit)
       : setEditor({ kind: 'create', target: scopeWho(pageScope, burn.label), limit })
   const week = changesWindow(burn)
-  const changes = useChanges(ref, week ? { by, ...week } : null, mayHave(caps, 'changes'))
-  const noWeek = !week || figures(burn).week.sameDaysLastWeek === null
+  const changes = useChanges(ref, week ? { by, ...week } : null, can('changes'))
+  // Nothing to compare until a week of spend lies behind this one (no read reaches back that far); on a Monday the
+  // server still compares the hours so far (#70 excludes only Monday at 00:00).
+  const noWeek = !week || !hasWeekBefore(burn)
   const slug = burn.label.replace(/[^\w-]+/g, '-').toLowerCase()
   const date = burn.as_of.slice(0, 10)
-  const pickDay = (day: string) => setSearch({ day })
+  // A day opened here closes by going Back; a deep-linked one by replacing (the app's drill-down rule).
+  const router = useRouter()
+  const [dayOpenedHere, setDayOpenedHere] = useState(false)
+  const pickDay = (day: string) => {
+    setDayOpenedHere(true)
+    setSearch({ day })
+  }
+  const closeDay = () => {
+    if (dayOpenedHere) {
+      setDayOpenedHere(false)
+      router.history.back()
+    } else setSearch({ day: undefined }, { replace: true })
+  }
+  const missingViews =
+    caps.kind === 'available' && caps.version !== null
+      ? MISSING_CHECK.filter((f) => !has(caps, f)).map((f) => copy.viewNames[f] ?? f)
+      : []
   return (
     <>
       <p className="-mt-3 text-xs text-muted-foreground">{coverage}</p>
+      {missingViews.length ? (
+        <p className="-mt-3 text-xs text-muted-foreground">
+          {copy.viewsMissing(missingViews.join(', '))}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-lead">{sentence}</h2>
         {writable ? (
@@ -355,6 +429,7 @@ function Body({
             breakdown={breakdown.data}
             error={breakdown.error}
             pending={breakdown.isPending && breakdown.fetchStatus !== 'idle'}
+            missing={!can('breakdown')}
             onRetry={() => void breakdown.refetch()}
             by={by}
             dimensions={dimensions}
@@ -371,13 +446,14 @@ function Body({
       {shareRead ? (
         <ShareStrip scope={burn} read={shareRead} agentId={by === 'agent' ? picked : null} />
       ) : (
-        <BurnStrip burn={burn} kind={kind} quarterRead={quarterRead} />
+        <BurnStrip burn={burn} kind={words} quarterRead={quarterFrom} />
       )}
       <WhatChanged
         spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}
         changes={changes.data}
         error={changes.error}
         pending={changes.isPending && changes.fetchStatus !== 'idle'}
+        missing={!can('changes')}
         noWeek={noWeek}
         onRetry={() => void changes.refetch()}
         by={by}
@@ -385,7 +461,9 @@ function Body({
         onOwner={onOwner}
       />
       <AtRisk
-        rows={atRisk.data}
+        rows={atRisk.data?.rows}
+        partial={!!atRisk.data?.partial}
+        missing={!can('at_risk')}
         error={atRisk.error}
         pending={pending(atRisk)}
         onRetry={() => void atRisk.refetch()}
@@ -403,7 +481,9 @@ function Body({
         }
       />
       <Unbudgeted
-        rows={unbudgeted.data}
+        rows={unbudgeted.data?.rows}
+        partial={!!unbudgeted.data?.partial}
+        missing={!can('unbudgeted')}
         error={unbudgeted.error}
         pending={pending(unbudgeted)}
         onRetry={() => void unbudgeted.refetch()}
@@ -425,7 +505,8 @@ function Body({
         }
       />
       <ScopeAlerts
-        alerts={alerts.data}
+        alerts={alerts.data?.rows}
+        partial={!!alerts.data?.partial}
         error={alerts.error}
         pending={pending(alerts)}
         onRetry={() => void alerts.refetch()}
@@ -457,12 +538,8 @@ function Body({
         amount={burn.daily.find((d) => d.date === search.day)?.cost_usd ?? null}
         scope={ref}
         by={by}
-        enabled={{
-          breakdown: mayHave(caps, 'breakdown'),
-          hours: mayHave(caps, 'hours'),
-          traces: mayHave(caps, 'traces'),
-        }}
-        onClose={() => setSearch({ day: undefined })}
+        enabled={{ breakdown: can('breakdown'), hours: can('hours'), traces: can('traces') }}
+        onClose={closeDay}
       />
     </>
   )
@@ -489,3 +566,23 @@ function ownerOptions(
 const NO_BUDGETS: readonly Budget[] = []
 const NO_AGENTS: readonly { id: string; name: string }[] = []
 const noName = () => undefined
+
+/** The features a 1.0 server may leave out that the page names in its one notice line (design 2B). */
+const MISSING_CHECK: readonly Feature[] = ['breakdown', 'changes', 'hours', 'at_risk', 'unbudgeted']
+/** An R-L10 server: budgets only; every 1.0 section shows its one line (F11). */
+const RL10_ONLY: Availability = { kind: 'available', version: '0', features: ['budgets'] }
+const ANNOUNCE_REST_MS = 600
+
+/** Yours on an R-L10 server: the owner budget and its status row, as a burn read (`fallback.ts`). */
+function useFallbackBurn(enabled: boolean, self: string) {
+  const list = useBudgets(enabled)
+  const status = useBudgetStatus(enabled && !!list.data)
+  const own = list.data?.find((b) => b.scope === 'owner' && b.owner_id === self)
+  const row = own ? status.data?.data.find((r) => r.budget_id === own.id) : undefined
+  return {
+    burn: own && row ? burnFromStatus(own, row, copy.budgetOwner, status.dataUpdatedAt) : null,
+    pending: enabled && (list.isPending || (!!own && status.isPending)),
+    error: list.error ?? status.error,
+    retry: () => void (list.isError ? list.refetch() : status.refetch()),
+  }
+}

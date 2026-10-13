@@ -113,6 +113,8 @@ export const copy = {
   pageTitle: 'Budgets',
   pageFailed: 'budgets',
   pageMissing: 'Budgets need a newer OpenRuntime server',
+  rl10NoBudget:
+    'This server shows burn only for your own budget, and you don’t have one yet. Set one on the LLM router page.',
   pageMissingBody:
     'This page uses the /api/budgets endpoints, which this server doesn’t have yet. Set VITE_NASIKO_MOCK=budgets,agents to preview it with mock data.',
   scopeLabel: 'Scope',
@@ -235,6 +237,8 @@ export const copy = {
   whatIfRunsOut: (day: string, stops: boolean) =>
     stops ? `Runs out around ${day}` : `Exceeds the limit around ${day}`,
   whatIfWithin: 'Stays within the limit to the reset',
+  whatIfAlreadyOver: (stops: boolean) =>
+    stops ? 'Already over this limit: calls would stop now' : 'Already over this limit',
   whatIfAllowance: (perDay: string, days: number) =>
     `${perDay} a day for the next ${days} ${days === 1 ? 'day' : 'days'}`,
   whatIfAllowanceNone: 'No allowance left',
@@ -276,6 +280,17 @@ export const copy = {
   colSplit: 'Routed · traced · harness est.',
   unbudgetedHarness: 'Its calls don’t go through the router',
   sectionMissing: 'This list needs a newer OpenRuntime server.',
+  listPartial: 'Some rows couldn’t load.',
+  viewsMissing: (what: string) => `Some budget views need a newer OpenRuntime server: ${what}.`,
+  viewNames: {
+    breakdown: 'causes',
+    changes: 'comparisons',
+    hours: 'hours',
+    traces: 'traces',
+    contributor: 'shares',
+    at_risk: 'at risk',
+    unbudgeted: 'unbudgeted agents',
+  } as Record<string, string>,
 
   // Alerts (F5; moved from the router)
   alertsTitleV1: 'Alerts',

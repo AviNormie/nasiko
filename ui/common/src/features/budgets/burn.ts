@@ -352,6 +352,8 @@ export interface WhatIf {
   pace: number
   projected: number
   runOut: number | null
+  /** Spend already passed this limit: no crossing ahead, and not "within" (review). */
+  exceeded: boolean
   allowance: { perDay: number; none: boolean; days: number }
 }
 
@@ -378,6 +380,7 @@ export function whatIf(
     pace,
     projected,
     runOut: out,
+    exceeded: b.used_usd >= limit,
     allowance: allowance(b.used_usd, limit, asOf, resets),
   }
 }

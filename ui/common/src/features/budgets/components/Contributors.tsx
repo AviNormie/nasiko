@@ -21,6 +21,7 @@ export function Contributors({
   breakdown,
   error,
   pending,
+  missing,
   onRetry,
   by,
   dimensions,
@@ -32,6 +33,8 @@ export function Contributors({
   breakdown: Breakdown | undefined
   error: unknown
   pending: boolean
+  /** This server doesn't serve the breakdown (F11). */
+  missing: boolean
   onRetry: () => void
   by: Dimension
   dimensions: readonly Dimension[]
@@ -82,10 +85,10 @@ export function Contributors({
           </Button>
         ) : null}
       </div>
-      {pending ? (
-        <PanelSkeleton height={96} />
-      ) : isEndpointAbsent(error) ? (
+      {missing || isEndpointAbsent(error) ? (
         <p className="text-xs text-muted-foreground">{copy.contributorsMissing}</p>
+      ) : pending ? (
+        <PanelSkeleton height={96} />
       ) : error ? (
         <PanelError error={error} onRetry={onRetry} what={copy.contributorsTitle.toLowerCase()} />
       ) : !rows.length ? (

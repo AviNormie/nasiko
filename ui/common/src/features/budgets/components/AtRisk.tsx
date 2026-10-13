@@ -21,12 +21,15 @@ import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { copy } from '../copy'
+import { Partial } from './Partial'
 import type { AtRiskRow } from '../types'
 import { CELL, HEAD, Label, ROW } from './tableStyles'
 import { UsedBar } from './UsedBar'
 
 export function AtRisk({
   rows,
+  partial,
+  missing,
   error,
   pending,
   onRetry,
@@ -36,6 +39,10 @@ export function AtRisk({
   actions,
 }: {
   rows: readonly AtRiskRow[] | undefined
+  /** A later page failed: the rows shown are the first ones. */
+  partial: boolean
+  /** This server doesn't serve the list (F11): one line, never an empty state. */
+  missing: boolean
   error: unknown
   pending: boolean
   onRetry: () => void
@@ -57,9 +64,11 @@ export function AtRisk({
       }
       labelledBy={id}
     >
-      {pending ? (
+      {missing ? (
+        <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>
+      ) : pending ? (
         <PanelSkeleton height={120} />
-      ) : isEndpointAbsent(error) ? (
+      ) : missing || isEndpointAbsent(error) ? (
         <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>
       ) : error && !rows ? (
         <PanelError error={error} onRetry={onRetry} what={copy.atRiskFailed} />
@@ -120,7 +129,10 @@ export function AtRisk({
                   </TableCell>
                   <TableCell className={cn(CELL, 'tabular-nums')}>
                     <Label>{copy.colProjected}</Label>
-                    {r.rank.projected_pct === null ? '—' : `${Math.round(r.rank.projected_pct)}%`}
+                    {/* A stopped budget spends nothing more until the reset: no projection (#68). */}
+                    {r.stopped || r.rank.projected_pct === null
+                      ? '—'
+                      : `${Math.round(r.rank.projected_pct)}%`}
                   </TableCell>
                   <TableCell className={CELL}>
                     <Label>{copy.colReaches}</Label>
@@ -139,6 +151,7 @@ export function AtRisk({
           </Table>
         </div>
       )}
+      {partial ? <Partial onRetry={onRetry} /> : null}
     </Panel>
   )
 }

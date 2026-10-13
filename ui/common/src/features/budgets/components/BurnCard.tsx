@@ -65,10 +65,12 @@ export function BurnCard({
   const data = share && shown === 'up' ? { ...base, share: share.line } : base
   return (
     <Panel
-      title={
-        share ? (
-          <span className="inline-flex flex-wrap items-center gap-2">
-            {copy.burnCard}
+      title={copy.burnCard}
+      labelledBy={id}
+      actions={
+        <>
+          {/* The picked contributor, outside the heading so the panel's name stays "Burn" (review). */}
+          {share ? (
             <Badge variant="secondary" className="gap-1 pr-0.5">
               {copy.shareChip(share.name)}
               <Button
@@ -81,14 +83,7 @@ export function BurnCard({
                 <X className="size-3" aria-hidden />
               </Button>
             </Badge>
-          </span>
-        ) : (
-          copy.burnCard
-        )
-      }
-      labelledBy={id}
-      actions={
-        <>
+          ) : null}
           {burn.budget ? (
             <ToggleGroup
               type="single"

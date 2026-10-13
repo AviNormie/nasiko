@@ -358,3 +358,12 @@ describe('B1 review regressions (Codex)', () => {
     expect(chartModel(price(), 'down').floor).toBe(false)
   })
 })
+
+describe('B2 review: what-if over the limit already', () => {
+  it('a limit under what is spent is exceeded, not "within"', () => {
+    const w = whatIf(price(), { limit: 50 })!
+    expect(w.exceeded).toBe(true)
+    expect(w.runOut).toBeNull()
+    expect(whatIf(price(), { limit: 200 })!.exceeded).toBe(false)
+  })
+})

@@ -19,12 +19,15 @@ import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtMoney } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { copy } from '../copy'
+import { Partial } from './Partial'
 import type { UnbudgetedRow } from '../types'
 import { Owner } from './AtRisk'
 import { CELL, HEAD, Label, ROW } from './tableStyles'
 
 export function Unbudgeted({
   rows,
+  partial,
+  missing,
   error,
   pending,
   onRetry,
@@ -32,6 +35,10 @@ export function Unbudgeted({
   actions,
 }: {
   rows: readonly UnbudgetedRow[] | undefined
+  /** A later page failed: the rows shown are the first ones. */
+  partial: boolean
+  /** This server doesn't serve the list (F11): one line, never an empty state. */
+  missing: boolean
   error: unknown
   pending: boolean
   onRetry: () => void
@@ -41,9 +48,11 @@ export function Unbudgeted({
   const id = useId()
   return (
     <Panel title={copy.unbudgetedTitle} subtitle={copy.unbudgetedSubtitle} labelledBy={id}>
-      {pending ? (
+      {missing ? (
+        <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>
+      ) : pending ? (
         <PanelSkeleton height={96} />
-      ) : isEndpointAbsent(error) ? (
+      ) : missing || isEndpointAbsent(error) ? (
         <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>
       ) : error && !rows ? (
         <PanelError error={error} onRetry={onRetry} what={copy.unbudgetedFailed} />
@@ -101,6 +110,7 @@ export function Unbudgeted({
           </Table>
         </div>
       )}
+      {partial ? <Partial onRetry={onRetry} /> : null}
     </Panel>
   )
 }

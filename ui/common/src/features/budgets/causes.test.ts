@@ -14,6 +14,7 @@ import { chartModel, projection } from './burn'
 import {
   changeRows,
   changesWindow,
+  hasWeekBefore,
   contributorBurn,
   dimensionsFor,
   keyLabel,
@@ -107,5 +108,15 @@ describe('What changed', () => {
       c.items.filter((i) => i.delta_usd !== 0).map((i) => i.key),
     )
     expect(rows.every((r) => r.delta !== 0)).toBe(true)
+  })
+})
+
+describe('B2 review: What changed on a Monday', () => {
+  it('a Monday morning still compares its hours; a first week has nothing behind it', () => {
+    const b = read('org', null)
+    expect(hasWeekBefore({ ...b, as_of: '2026-10-12T12:00:00Z' })).toBe(true)
+    expect(
+      hasWeekBefore({ ...b, daily: b.daily.filter((d) => d.date >= '2026-10-06'), previous: null }),
+    ).toBe(false)
   })
 })

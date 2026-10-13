@@ -20,6 +20,7 @@ export function WhatChanged({
   changes,
   error,
   pending,
+  missing,
   noWeek,
   onRetry,
   by,
@@ -30,6 +31,8 @@ export function WhatChanged({
   changes: Changes | undefined
   error: unknown
   pending: boolean
+  /** This server doesn't serve comparisons (F11). */
+  missing: boolean
   /** No full week of spend to compare against yet (or Monday 00:00). */
   noWeek: boolean
   onRetry: () => void
@@ -64,12 +67,12 @@ export function WhatChanged({
             ))}
           </ul>
         ) : null}
-        {noWeek ? (
+        {missing || isEndpointAbsent(error) ? (
+          <p className="text-xs text-muted-foreground">{copy.changesMissing}</p>
+        ) : noWeek ? (
           <p className="text-muted-foreground">{copy.changesEmpty}</p>
         ) : pending ? (
           <PanelSkeleton height={120} />
-        ) : isEndpointAbsent(error) ? (
-          <p className="text-xs text-muted-foreground">{copy.changesMissing}</p>
         ) : error ? (
           <PanelError error={error} onRetry={onRetry} what={copy.changesFailed} />
         ) : !rows.length ? (

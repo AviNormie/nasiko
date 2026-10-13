@@ -181,7 +181,9 @@ describe('/budgets', () => {
       `Platform${copy.atRiskAlerts}`,
     ])
     expect(rows[0]).toHaveTextContent(copy.atRiskRanOut)
-    expect(rows[0]).toHaveTextContent('230%')
+    // Stopped: nothing more is spent until the reset, so no projection (#68), whatever the server ranked it by.
+    expect(within(rows[0]!).getAllByRole('cell')[3]).toHaveTextContent('—')
+    expect(rows[1]).toHaveTextContent('186%')
     expect(rows[1]).toHaveTextContent('Oct 17')
     expect(rows[3]).toHaveTextContent('Oct 22')
   })

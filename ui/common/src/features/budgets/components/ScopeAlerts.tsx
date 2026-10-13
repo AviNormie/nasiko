@@ -10,16 +10,19 @@ import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtShortDay } from '@/lib/format'
 import { alertText } from '../alerts'
 import { copy } from '../copy'
+import { Partial } from './Partial'
 import type { AlertV1 } from '../types'
 
 export function ScopeAlerts({
   alerts,
+  partial,
   error,
   pending,
   onRetry,
   actions,
 }: {
   alerts: readonly AlertV1[] | undefined
+  partial: boolean
   error: unknown
   pending: boolean
   onRetry: () => void
@@ -57,6 +60,7 @@ export function ScopeAlerts({
           ))}
         </ul>
       )}
+      {partial ? <Partial onRetry={onRetry} /> : null}
     </Panel>
   )
 }

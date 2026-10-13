@@ -95,6 +95,17 @@ export function changesWindow(b: Burn) {
   }
 }
 
+/**
+ * Whether a week of spend lies behind this one, which What changed needs before it compares (the read reaches back to
+ * the previous period). A Monday morning still compares its hours (#70 excludes only Monday at 00:00).
+ */
+export function hasWeekBefore(b: Burn): boolean {
+  const monday = weekStart(Date.parse(b.as_of))
+  return [...(b.previous?.daily ?? []), ...b.daily].some(
+    (d) => Date.parse(`${d.date}T00:00:00Z`) <= monday - 7 * DAY_MS,
+  )
+}
+
 export interface ChangeRow {
   key: string
   label: string

@@ -51,19 +51,31 @@ const json = { 'Content-Type': 'application/json' }
  */
 async function allPages<
   B extends { data: unknown[]; has_more?: boolean; next_cursor?: string | null },
->(path: string, signal: AbortSignal, schema?: Checked<B>['schema']): Promise<B> {
+>(
+  path: string,
+  signal: AbortSignal,
+  schema?: Checked<B>['schema'],
+  keepPartial = false,
+): Promise<B & { partial?: boolean }> {
   const sep = path.includes('?') ? '&' : '?'
   const first = await apiFetch<B>(`${path}${sep}limit=100`, { signal, schema })
   if (!first || !Array.isArray(first.data))
     throw new ApiError(200, first, path, `GET ${path} → unexpected response (no data array)`)
   let page = first
   for (let i = 0; i < MAX_PAGES && page.has_more && page.next_cursor; i++) {
-    page = await apiFetch<B>(
-      `${path}${sep}limit=100&cursor=${encodeURIComponent(page.next_cursor)}`,
-      { signal, schema },
-    )
-    if (!page || !Array.isArray(page.data))
-      throw new ApiError(200, page, path, `GET ${path} → unexpected response (no data array)`)
+    try {
+      page = await apiFetch<B>(
+        `${path}${sep}limit=100&cursor=${encodeURIComponent(page.next_cursor)}`,
+        { signal, schema },
+      )
+      if (!page || !Array.isArray(page.data))
+        throw new ApiError(200, page, path, `GET ${path} → unexpected response (no data array)`)
+    } catch (err) {
+      // A list shown to people keeps what it has (plan feat-budget-burn F13: "page 1 kept when page 2 fails"); a
+      // list a rule needs whole (R-L10's open scopes) fails instead.
+      if (!keepPartial) throw err
+      return Object.assign(first, { partial: true })
+    }
     first.data.push(...page.data)
   }
   return first
@@ -179,6 +191,16 @@ function scopeQuery(
   for (const [k, v] of Object.entries(extra)) if (v !== null && v !== undefined) p.set(k, String(v))
   return p.toString()
 }
+
+/** A shown list: its rows, and whether a later page failed (the list says so and offers Retry). */
+export interface Rows<T> {
+  rows: T[]
+  partial: boolean
+}
+const rowsOf = <T>(r: { data: T[]; partial?: boolean }): Rows<T> => ({
+  rows: r.data,
+  partial: !!r.partial,
+})
 
 /** The burn read options: no polling, no focus refetch (plan §5 "Clock and refresh": `useReturnTick` moves them). */
 const read = { staleTime: 60_000, refetchOnWindowFocus: false } as const
@@ -303,13 +325,14 @@ export function useAtRisk(ref: ScopeRef, enabled: boolean) {
   return useQuery({
     queryKey: budgetKeys.read('at-risk', query),
     queryFn: async ({ signal }) =>
-      (
+      rowsOf(
         await allPages<{ data: AtRiskRow[] }>(
           `/api/budgets/at-risk?${query}`,
           signal,
           atRiskListSchema,
-        )
-      ).data,
+          true,
+        ),
+      ),
     enabled,
     ...read,
   })
@@ -321,13 +344,14 @@ export function useUnbudgeted(ref: ScopeRef, period: 'month' | 'quarter', enable
   return useQuery({
     queryKey: budgetKeys.read('unbudgeted', query),
     queryFn: async ({ signal }) =>
-      (
+      rowsOf(
         await allPages<{ data: UnbudgetedRow[] }>(
           `/api/budgets/unbudgeted?${query}`,
           signal,
           unbudgetedListSchema,
-        )
-      ).data,
+          true,
+        ),
+      ),
     enabled,
     ...read,
   })
@@ -339,8 +363,14 @@ export function useScopeAlerts(ref: ScopeRef, enabled: boolean) {
   return useQuery({
     queryKey: budgetKeys.read('alerts', query),
     queryFn: async ({ signal }) =>
-      (await allPages<{ data: AlertV1[] }>(`/api/budgets/alerts?${query}`, signal, alertListSchema))
-        .data,
+      rowsOf(
+        await allPages<{ data: AlertV1[] }>(
+          `/api/budgets/alerts?${query}`,
+          signal,
+          alertListSchema,
+          true,
+        ),
+      ),
     enabled,
     ...read,
   })
