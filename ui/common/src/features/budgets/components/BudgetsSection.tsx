@@ -19,9 +19,11 @@ import {
 import { fmtInt, fmtMoney, fmtShortDay } from '@/lib/format'
 import { isBudgetsAbsent } from '@/lib/api/detect'
 import { cn } from '@/lib/utils'
-import { budgetForecast, budgetLabel, sortBudgets, stateView, usedPercent } from '../budgets'
+import { budgetForecast, budgetLabel, sortBudgets, stateView } from '../budgets'
 import { copy } from '../copy'
 import type { Budget, BudgetAlert, BudgetStatus, BudgetStatusResponse } from '../types'
+import { CELL, HEAD, Label, ROW } from './tableStyles'
+import { UsedBar } from './UsedBar'
 import { LinkButton } from '@/features/router/components/bits'
 import { SectionError } from '@/features/router/components/SectionError'
 
@@ -34,13 +36,6 @@ type Q<T> = {
 }
 
 // A table from lg; stacked (with inline labels) below it, where the sidebar leaves too little room for the tracks.
-const ROW = 'text-sm hover:bg-transparent max-lg:grid max-lg:gap-1.5 max-lg:px-4 max-lg:py-2.5'
-const CELL = 'p-0 whitespace-normal max-lg:block lg:px-1.5 lg:py-2.5 lg:first:pl-4 lg:last:pr-4'
-const HEAD = 'h-auto px-1.5 py-2 text-xs text-muted-foreground first:pl-4 last:pr-4'
-/** A cell's name in the stacked layout, where the header row is hidden. */
-const Label = ({ children }: { children: string }) => (
-  <span className="text-muted-foreground lg:hidden">{children}: </span>
-)
 
 export function BudgetsSection({
   budgets,
@@ -200,7 +195,6 @@ function Row({
 }) {
   const view = stateView(status)
   const fc = status ? budgetForecast(status, budget.limit_usd, statusAt) : null
-  const pct = status ? usedPercent(status.used_usd, budget.limit_usd) : 0
   return (
     <TableRow data-budget={budget.id} className={ROW}>
       <TableCell className={cn(CELL, 'min-w-0 font-medium')}>
@@ -215,22 +209,7 @@ function Row({
         <div className="flex items-center gap-2">
           {status ? (
             <>
-              <span
-                className="relative h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
-                aria-hidden
-              >
-                <span
-                  className={cn(
-                    'absolute inset-y-0 left-0 rounded-full',
-                    view?.kind === 'exceeded'
-                      ? 'bg-destructive'
-                      : view?.kind === 'warning'
-                        ? 'bg-warning'
-                        : 'bg-primary',
-                  )}
-                  style={{ width: `${pct}%` }}
-                />
-              </span>
+              <UsedBar used={status.used_usd} limit={budget.limit_usd} state={view?.kind ?? 'ok'} />
               <span className="whitespace-nowrap">
                 {copy.usedOf(fmtMoney(status.used_usd), fmtMoney(budget.limit_usd))}
               </span>

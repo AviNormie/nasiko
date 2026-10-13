@@ -8,6 +8,7 @@ import {
   alertListSchema,
   atRiskListSchema,
   breakdownResponseSchema,
+  budgetResponseSchema,
   burnResponseSchema,
   changesResponseSchema,
   hoursResponseSchema,
@@ -16,6 +17,7 @@ import {
   type AlertV1,
   type AtRiskRow,
   type Breakdown,
+  type BudgetV1,
   type Budget,
   type BudgetAlert,
   type BudgetStatusResponse,
@@ -340,6 +342,22 @@ export function useScopeAlerts(ref: ScopeRef, enabled: boolean) {
       (await allPages<{ data: AlertV1[] }>(`/api/budgets/alerts?${query}`, signal, alertListSchema))
         .data,
     enabled,
+    ...read,
+  })
+}
+
+/** One 1.0 budget record (§6.3): the editor's source, and "Limits inside it" (D15). */
+export function useBudgetV1(id: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: budgetKeys.read('budget', id ?? ''),
+    queryFn: async ({ signal }) =>
+      (
+        await apiFetch<{ data: BudgetV1 }>(`/api/budgets/${id}`, {
+          signal,
+          schema: budgetResponseSchema,
+        })
+      ).data,
+    enabled: enabled && !!id,
     ...read,
   })
 }

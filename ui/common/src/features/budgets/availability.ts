@@ -75,7 +75,7 @@ export const capabilitiesQuery = {
 } as const
 
 /** The server serves `feature` completely (budgets.md §10.1). */
-export const has = (a: Availability | undefined, feature: Feature) =>
+const has = (a: Availability | undefined, feature: Feature) =>
   a?.kind === 'available' && a.features.includes(feature)
 
 /**
