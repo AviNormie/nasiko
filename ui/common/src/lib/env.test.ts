@@ -87,6 +87,20 @@ describe('env', () => {
     expect(isPreview('router', { mode: 'live', partialMocks: ['budgets'] })).toBe(false)
   })
 
+  it('budgets-fill replaces budgets (also when router would add it) and previews budgets', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warn.mockClear()
+    const live = (mock: string) =>
+      readEnv({ VITE_NASIKO_API_MODE: 'live', VITE_NASIKO_MOCK: mock, DEV: true }).partialMocks
+    expect(live('budgets-fill')).toEqual(['budgets-fill'])
+    expect(live('budgets-fill,budgets,agents').sort()).toEqual(['agents', 'budgets-fill'])
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('"budgets-fill" already answers budgets'),
+    )
+    expect(live('router,agents,providers,budgets-fill')).not.toContain('budgets')
+    expect(isPreview('budgets', { mode: 'live', partialMocks: ['budgets-fill'] })).toBe(true)
+  })
+
   it('chat is mocked only with agents and observability', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(
