@@ -13,16 +13,21 @@ import { useUsers } from '@/features/agents/api'
 import { meQuery } from '@/lib/api/auth'
 import { useSetSearch } from '@/lib/search'
 import { useReturnTick } from '@/lib/useReturnTick'
-import { useBurn } from './api'
-import { capabilitiesQuery, mayHave } from './availability'
-import { quarterOf, type BurnMode } from './burn'
+import { useBreakdown, useBurn, useChanges, type ScopeRef } from './api'
+import { capabilitiesQuery, mayHave, type Availability } from './availability'
+import { figures, quarterOf, spikes, type BurnMode } from './burn'
 import { rememberBurnMode, storedBurnMode } from './burnMode'
 import { BurnCard } from './components/BurnCard'
 import { BurnStrip } from './components/BurnStrip'
+import { Contributors } from './components/Contributors'
+import { DayPanel } from './components/DayPanel'
+import { ShareStrip } from './components/ShareStrip'
+import { WhatChanged } from './components/WhatChanged'
 import { ScopeSwitch } from './components/ScopeSwitch'
 import { copy } from './copy'
 import { resolveScope, scopeParam, scopeRef, type PageScope } from './scope'
 import type { BudgetsSearch } from './search'
+import { changesWindow, dimensionsFor, keyLabel, pickDimension, shareLine } from './causes'
 import { burnSentence } from './sentence'
 import type { Burn } from './types'
 
@@ -47,7 +52,7 @@ export function BudgetsPage({ search }: { search: BudgetsSearch }) {
     <Page
       search={search}
       viewer={{ id: me.data.sub, superuser: me.data.is_superuser }}
-      burnAvailable={mayHave(caps.data, 'burn')}
+      caps={caps.data}
     />
   )
 }
@@ -64,12 +69,13 @@ function Frame({ children, actions }: { children: ReactNode; actions?: ReactNode
 function Page({
   search,
   viewer,
-  burnAvailable,
+  caps,
 }: {
   search: BudgetsSearch
   viewer: { id: string; superuser: boolean }
-  burnAvailable: boolean
+  caps: Availability
 }) {
+  const burnAvailable = mayHave(caps, 'burn')
   const setSearch = useSetSearch<BudgetsSearch>('/budgets')
   const qc = useQueryClient()
   // No polling, no focus refetch: coming back after a minute re-reads the page's budget reads (plan §5).
@@ -128,12 +134,15 @@ function Page({
       ) : (
         <Body
           burn={burn.data}
+          scopeRef={ref}
           kind={kind}
           quarterRead={quarterRead.data ?? null}
           mode={mode}
           onMode={setMode}
-          pickedDay={search.day ?? null}
-          onPickDay={(day) => setSearch({ day })}
+          search={search}
+          setSearch={setSearch}
+          caps={caps}
+          onOwner={viewer.superuser ? (id) => setScope({ kind: 'owner', id }) : null}
         />
       )}
     </Frame>
@@ -142,20 +151,26 @@ function Page({
 
 function Body({
   burn,
+  scopeRef: ref,
   kind,
   quarterRead,
   mode,
   onMode,
-  pickedDay,
-  onPickDay,
+  search,
+  setSearch,
+  caps,
+  onOwner,
 }: {
   burn: Burn
+  scopeRef: ScopeRef
   kind: 'month' | 'quarter'
   quarterRead: Burn | null
   mode: BurnMode
   onMode: (m: BurnMode) => void
-  pickedDay: string | null
-  onPickDay: (day: string) => void
+  search: BudgetsSearch
+  setSearch: (patch: Partial<BudgetsSearch>, opts?: { replace?: boolean }) => void
+  caps: Availability
+  onOwner: ((id: string) => void) | null
 }) {
   const sentence = burnSentence(burn, kind)
   const coverage = burn.budget
@@ -168,6 +183,24 @@ function Body({
     kind === 'quarter' && burn.period === 'month'
       ? quarterOf(Date.parse(burn.as_of)).end
       : undefined
+
+  // What's causing it (F3): the bars by contributor, a picked contributor's share, What changed, the picked day.
+  const dimensions = dimensionsFor(ref.scope)
+  const by = pickDimension(ref.scope, search.by)
+  const breakdown = useBreakdown(ref, { by, period: kind, top: 5 }, mayHave(caps, 'breakdown'))
+  const picked = search.contributor ?? null
+  const contributor = useBurn(
+    ref,
+    { period: kind, contributor: picked ? { by, key: picked } : null },
+    !!picked && mayHave(caps, 'contributor'),
+  )
+  const shareRead = picked && contributor.data?.contributor ? contributor.data : null
+  const week = changesWindow(burn)
+  const changes = useChanges(ref, week ? { by, ...week } : null, mayHave(caps, 'changes'))
+  const noWeek = !week || figures(burn).week.sameDaysLastWeek === null
+  const slug = burn.label.replace(/[^\w-]+/g, '-').toLowerCase()
+  const date = burn.as_of.slice(0, 10)
+  const pickDay = (day: string) => setSearch({ day })
   return (
     <>
       <p className="-mt-3 text-xs text-muted-foreground">{coverage}</p>
@@ -178,11 +211,62 @@ function Body({
         onMode={onMode}
         sentence={sentence}
         domainEnd={domainEnd}
-        pickedDay={pickedDay}
-        onPickDay={onPickDay}
-        fileName={`budget-burn-${burn.label.replace(/[^\w-]+/g, '-').toLowerCase()}-${burn.as_of.slice(0, 10)}.csv`}
+        pickedDay={search.day ?? null}
+        onPickDay={pickDay}
+        fileName={`budget-burn-${slug}-${date}.csv`}
+        breakdown={breakdown.data}
+        share={
+          shareRead?.contributor
+            ? {
+                name: keyLabel({ label: shareRead.contributor.label, redacted: false }),
+                line: shareLine(shareRead),
+              }
+            : null
+        }
+        onClearShare={() => setSearch({ contributor: undefined }, { replace: true })}
+        footer={
+          <Contributors
+            breakdown={breakdown.data}
+            error={breakdown.error}
+            pending={breakdown.isPending && breakdown.fetchStatus !== 'idle'}
+            onRetry={() => void breakdown.refetch()}
+            by={by}
+            dimensions={dimensions}
+            onBy={(d) => setSearch({ by: d, contributor: undefined }, { replace: true })}
+            picked={picked}
+            onPick={(key) => setSearch({ contributor: key === picked ? undefined : key })}
+            fileName={`budget-contributors-${slug}-${date}.csv`}
+          />
+        }
       />
-      <BurnStrip burn={burn} kind={kind} quarterRead={quarterRead} />
+      {shareRead ? (
+        <ShareStrip scope={burn} read={shareRead} agentId={by === 'agent' ? picked : null} />
+      ) : (
+        <BurnStrip burn={burn} kind={kind} quarterRead={quarterRead} />
+      )}
+      <WhatChanged
+        spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}
+        changes={changes.data}
+        error={changes.error}
+        pending={changes.isPending && changes.fetchStatus !== 'idle'}
+        noWeek={noWeek}
+        onRetry={() => void changes.refetch()}
+        by={by}
+        onPickDay={pickDay}
+        onOwner={onOwner}
+      />
+      <DayPanel
+        day={search.day ?? null}
+        amount={burn.daily.find((d) => d.date === search.day)?.cost_usd ?? null}
+        scope={ref}
+        by={by}
+        enabled={{
+          breakdown: mayHave(caps, 'breakdown'),
+          hours: mayHave(caps, 'hours'),
+          traces: mayHave(caps, 'traces'),
+        }}
+        onClose={() => setSearch({ day: undefined })}
+      />
     </>
   )
 }

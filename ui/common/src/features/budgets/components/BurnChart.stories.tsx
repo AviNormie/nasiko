@@ -4,9 +4,14 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { BurnChart } from '@/components/charts/burn-chart'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
-import { burn as engineBurn, worldFromScenario } from '@/mocks/budgetEngine'
+import {
+  breakdown as engineBreakdown,
+  burn as engineBurn,
+  worldFromScenario,
+} from '@/mocks/budgetEngine'
 import { budgetScenario, GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
 import { chartModel, previewLine, projection, tableRows, type BurnMode } from '../burn'
+import { shareLine, stackBars } from '../causes'
 import { burnAxisMoney, burnChartData, burnChartLabels } from '../chartData'
 import { BurnTable } from './BurnTable'
 
@@ -146,6 +151,37 @@ export const TableView: StoryObj = {
           events={burnChartData(chartModel(b, 'down')).markers}
         />
         <p className="mt-2 text-xs text-muted-foreground">Used {fmtMoney(b.used_usd)}</p>
+      </div>
+    )
+  },
+}
+
+export const StackedWithShare: StoryObj = {
+  render: () => {
+    const w = worldFromScenario(budgetScenario(), { adminId: 'admin', edition: 'ee' })
+    const viewer = { id: 'admin', superuser: true }
+    const b = engineBurn(
+      w,
+      viewer,
+      { scope: 'org', id: null, contributor: I.reviewer, by: 'agent' },
+      NOW,
+    )
+    const br = engineBreakdown(w, viewer, { scope: 'org', id: null, by: 'agent' }, NOW)
+    const m = chartModel(b, 'up')
+    return (
+      <div className="max-w-3xl rounded-lg border border-border bg-card p-4">
+        <BurnChart
+          data={{ ...stackBars(burnChartData(m), br), share: shareLine(b) }}
+          labels={{
+            ...burnChartLabels(m, {
+              stops: false,
+              summary: 'The fleet by agent, Code Reviewer picked.',
+            }),
+            share: 'Code Reviewer, cumulative',
+          }}
+          formatMoney={burnAxisMoney}
+          formatDay={(t) => fmtShortDay(new Date(t).toISOString())}
+        />
       </div>
     )
   },
