@@ -42,6 +42,7 @@ import { BurnStrip } from './components/BurnStrip'
 import { AtRisk } from './components/AtRisk'
 import { BudgetSheet, type BudgetMode } from './components/BudgetSheet'
 import { Contributors } from './components/Contributors'
+import { LeverAction } from './components/LeverAction'
 import { Levers } from './components/Levers'
 import { RowActions } from './components/RowActions'
 import { DayPanel } from './components/DayPanel'
@@ -501,6 +502,21 @@ function Body({
           previewing={lever ? lever.id : null}
           onPreview={onLeverPreview}
           titleRef={leversRef}
+          // Who: the agent's owner or a superuser; stop and raise, whoever may write this budget (F4, §5).
+          actions={(l) =>
+            (
+              l.kind === 'raise' || l.kind === 'stop'
+                ? writable
+                : viewer.superuser || l.agent.ownerId === viewer.id
+            ) ? (
+              <LeverAction
+                lever={l}
+                burn={burn}
+                onRaise={(limit) => editOwn(limit)}
+                onApplied={() => setLeverId(null)}
+              />
+            ) : null
+          }
         />
         <WhatChanged
           spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}

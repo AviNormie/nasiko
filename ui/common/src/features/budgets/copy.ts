@@ -331,6 +331,30 @@ export const copy = {
   leversNoBudget: 'Levers compare against a budget. Set one to see them.',
   leversNoProjection: 'Levers need a projection: 3 days of spend.',
   leversNone: 'Nothing OpenRuntime can change for this budget.',
+  leverDo: {
+    compression: 'Turn on',
+    model: 'Switch model',
+    stop: 'Stop at the limit',
+    raise: 'Raise',
+  },
+  leverDoLabel: (what: string) => `Apply: ${what}`,
+  leverConfirmCompression: (name: string) => `Turn on token optimization for ${name}?`,
+  leverConfirmCompressionBody:
+    'It also compresses this agent’s LLM-router payloads and asks it for concise answers. You can turn it off on the agent’s Settings tab.',
+  leverConfirmModel: (name: string) => `Route ${name} to a cheaper model?`,
+  leverConfirmModelBody: (name: string, from: string, to: string) =>
+    `${name}: ${from} → ${to}, only this agent. Its shared config doesn’t change; the router pins this agent’s model.`,
+  leverConfirmStop: 'Stop calls at the limit?',
+  leverConfirmStopBody: (limit: string, reset: string) =>
+    `Routed calls this budget counts get an error once spend reaches ${limit}, until ${reset}.`,
+  leverConfirmStopNow: (reset: string) =>
+    `It’s already over its limit: routed calls this budget counts get an error now, until ${reset}.`,
+  leverApplied: {
+    compression: (name: string) => `Token optimization is on for ${name}.`,
+    model: (name: string, to: string) => `${name} now routes to ${to}.`,
+    stop: 'Calls now stop at the limit.',
+  },
+  leverFailed: 'That didn’t apply.',
   previewNotApplied: (amount: string, pct: string) => `Preview, not applied: ${amount} (${pct})`,
   previewReset: 'Reset',
   reviewActions: 'Review actions',
