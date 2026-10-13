@@ -31,6 +31,8 @@ export const MOCKABLE = [
   'router',
   // Budgets (plans/feat-budget-burn.md eng D1, D2): R-L10 and the burn contract. `router` brings it along.
   'budgets',
+  // Partial live for budgets (budgets.md §15): the real server where it serves a feature, the golden mock elsewhere.
+  'budgets-fill',
   'deploy',
   'settings',
   'mcp',
@@ -97,8 +99,19 @@ export function readEnv(
     partialMocks = partialMocks.filter((s) => s !== 'router')
   }
 
+  // budgets-fill answers budgets itself (live first, then the golden mock): it replaces `budgets`.
+  if (partialMocks.includes('budgets-fill') && partialMocks.includes('budgets')) {
+    console.warn(
+      '[ui-lab] VITE_NASIKO_MOCK: "budgets-fill" already answers budgets (live first, then the mock); ignoring "budgets".',
+    )
+    partialMocks = partialMocks.filter((s) => s !== 'budgets')
+  }
   // Budgets used to be part of the router group (plans/feat-budget-burn.md eng D2): `router` keeps mocking them.
-  if (partialMocks.includes('router') && !partialMocks.includes('budgets'))
+  if (
+    partialMocks.includes('router') &&
+    !partialMocks.includes('budgets') &&
+    !partialMocks.includes('budgets-fill')
+  )
     partialMocks = [...partialMocks, 'budgets']
   // Budgets are counted from the seed agents' spend: without `agents` they would name agents the server doesn't have.
   if (partialMocks.includes('budgets') && !partialMocks.includes('agents')) {
@@ -207,10 +220,11 @@ export const env = readEnv()
  * so a preview never draws from an unexpected live response.
  */
 export function isPreview(group: Mockable, config: Pick<EnvConfig, 'mode' | 'partialMocks'> = env) {
-  // `router` implies `budgets` (eng D2), also for a config built by hand.
+  // `router` implies `budgets` (eng D2), also for a config built by hand; `budgets-fill` previews budgets too.
   return (
     config.mode === 'mock' ||
     config.partialMocks.includes(group) ||
-    (group === 'budgets' && config.partialMocks.includes('router'))
+    (group === 'budgets' &&
+      (config.partialMocks.includes('router') || config.partialMocks.includes('budgets-fill')))
   )
 }

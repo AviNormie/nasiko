@@ -1,10 +1,10 @@
 {
   "fixture_version": 1,
-  "id": "router.budgets",
-  "recorded_at": "2026-09-29T05:55:37.018Z",
+  "id": "budgets.alerts",
+  "recorded_at": "2026-09-29T05:55:37.019Z",
   "window": {
-    "start": "2026-09-29T05:55:37.018Z",
-    "end": "2026-09-29T05:55:37.019Z"
+    "start": "2026-09-29T05:55:37.019Z",
+    "end": "2026-09-29T05:55:37.020Z"
   },
   "anchor": "2026-09-29T05:55:34.182Z",
   "edition": "oss",
@@ -17,14 +17,14 @@
   },
   "request": {
     "method": "GET",
-    "path": "/api/budgets",
+    "path": "/api/budgets/alerts",
     "query": {}
   },
   "status": 404,
   "content_type": "application/json",
   "body": {
     "data": null,
-    "message": "no API route matches /api/budgets",
+    "message": "no API route matches /api/budgets/alerts",
     "status_code": 404
   }
 }

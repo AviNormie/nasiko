@@ -4,7 +4,8 @@
  *
  * Variants (`handlers.ts` `BUDGETS_PAGE_VARIANTS`): `budgets-absent` (and the older `home-budgets-absent`) answer every
  * budgets route with a bare 404, a server without budgets; `budgets-rl10-only` keeps R-L10's routes and answers the
- * 1.0 ones with a bare 404 (F11's fallback detection); `budgets-fail` answers every read with a 500.
+ * 1.0 ones with a bare 404 (F11's fallback detection); `budgets-fail` answers every read with a 500. With `fill`
+ * (`budgets-fill`), requests the real server serves go there first (`budgetFill.ts`).
  */
 import { http, HttpResponse, type HttpHandler } from 'msw'
 import { MockHttpError } from './aggregate'
@@ -46,6 +47,8 @@ export interface BudgetMockCtx {
   /** Every read fails with a 500. */
   failing: () => boolean
   unauthorized: () => Response
+  /** `budgets-fill`: the real server's answer for a request it serves, else null (the mock answers). */
+  fill?: (request: Request) => Promise<Response | null>
 }
 
 const bare404 = () => new HttpResponse(null, { status: 404 })
@@ -81,7 +84,15 @@ export function budgetHandlers(ctx: BudgetMockCtx): HttpHandler[] {
   const unparseable = () =>
     HttpResponse.json({ error: 'invalid JSON body', code: 'invalid_body' }, { status: 422 })
 
+  // budgets-fill: the real server first; a resolver that returns nothing falls through to the mock routes below.
+  const fill: HttpHandler[] = ctx.fill
+    ? ['/api/budgets', '/api/budgets/*'].map((path) =>
+        http.all(path, async ({ request }) => (await ctx.fill!(request)) ?? undefined),
+      )
+    : []
+
   return [
+    ...fill,
     http.get('/api/budgets/capabilities', () =>
       run(() => one(capabilities(ctx.world())), { v1: true }),
     ),

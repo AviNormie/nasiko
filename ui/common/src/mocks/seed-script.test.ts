@@ -90,7 +90,8 @@ describe('scripts/seed-trace-usage.ts', () => {
     expect(status).toBe(0)
     expect(statements[0]).toBe('BEGIN;')
     expect(statements.at(-1)).toBe('COMMIT;')
-    expect(statements).toHaveLength(14)
+    // + the budgets scenario's guarded reset block (scripts/lib/budgetSeed.ts).
+    expect(statements).toHaveLength(15)
     expectSeedScopedDeletes(statements)
     expect(statements.join('\n')).not.toMatch(/\bINSERT\b/)
   })

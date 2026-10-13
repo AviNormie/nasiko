@@ -8,7 +8,7 @@
  * Finops 200s use the `{data, status_code, message}` envelope; 400/404/500 are plain
  * text, like the real server.
  */
-import { http, HttpResponse, type HttpHandler } from 'msw'
+import { bypass, http, HttpResponse, type HttpHandler } from 'msw'
 import type { components } from '@/lib/api/schema.gen'
 import { mockEntries as parseMockList } from '@/features/chat/search'
 import { SPEND_LIMIT } from '@/features/router/tuning'
@@ -17,6 +17,7 @@ import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
 import { sessionBudgets, buildBudgetState, type BudgetMockStore } from './budgets'
 import { budgetView, worldFromScenario, type World } from './budgetEngine'
 import { budgetHandlers } from './budgetHandlers'
+import { liveFirst } from './budgetFill'
 import { budgetScenario } from './seed-budgets'
 import type { Budget } from '@/features/budgets/types'
 import type { Mockable } from '@/lib/env'
@@ -518,6 +519,14 @@ function getRouter(): RouterState {
   return routerState
 }
 
+// budgets-fill (partial live): the golden world answers whatever the real server doesn't serve.
+let fillWorld: World | null = null
+const getFillWorld = (): World =>
+  (fillWorld ??= worldFromScenario(
+    budgetScenario(Math.floor(nowFn() / 3_600_000) * 3_600_000, ADMIN_ID),
+    { adminId: ADMIN_ID, edition: 'ee' },
+  ))
+
 /**
  * The budgets mock's live state, for tests: the engine's world, and every budget in R-L10's shape (a snapshot; change
  * the world to change what the routes answer).
@@ -554,6 +563,7 @@ export function resetAgentsMock() {
   workflowsState = null
   flowsState = null
   budgetState = null
+  fillWorld = null
   settingsRow = null
   secretValues = new Map()
   mockPassword = null
@@ -1878,6 +1888,18 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       unauthorized: () => unauthorized(),
     }),
   ],
+  // Partial live (budgets.md §15): the real server's answer where it serves the feature, the golden world elsewhere.
+  'budgets-fill': budgetHandlers({
+    loggedIn: () => loggedIn,
+    now: () => nowFn(),
+    world: () => getFillWorld(),
+    viewer: () => ({ id: ADMIN_ID, superuser: true }),
+    absent: () => false,
+    rl10Only: () => false,
+    failing: () => false,
+    unauthorized: () => unauthorized(),
+    fill: liveFirst((request) => fetch(bypass(request))),
+  }),
   chat: [],
   // Settings (plans/feat-settings.md); EE stacks /api/settings/oidc and the SCIM tokens on top.
   settings: [
@@ -2599,8 +2621,11 @@ const healthHandlers: HttpHandler[] = [
   ),
 ]
 
+/** Full mock mode: every group but `budgets-fill`, which asks the real server first (partial live only). */
 export const allHandlers: HttpHandler[] = [
-  ...Object.values(handlerGroups).flat(),
+  ...Object.entries(handlerGroups)
+    .filter(([g]) => g !== 'budgets-fill')
+    .flatMap(([, hs]) => hs),
   ...healthHandlers,
 ]
 
