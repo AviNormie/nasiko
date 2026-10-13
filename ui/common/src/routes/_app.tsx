@@ -47,12 +47,13 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const { navHidden, shellEnd: ShellEnd } = useSlots()
+  const { navHidden, shellEnd: ShellEnd, shellSplit } = useSlots()
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
   const path = useRouterState({ select: (s) => s.location.pathname })
   return (
     <AppShell
+      split={shellSplit}
       end={
         <>
           <BuildToasts />

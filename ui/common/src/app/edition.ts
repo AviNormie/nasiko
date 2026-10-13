@@ -10,7 +10,7 @@
  *   editions have (the harness usage endpoint's bare vs coded 404, crash-guardian fields). A probe never stands in
  *   for the edition.
  */
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { NavGroupId, NavItem } from './shell/nav'
 
 export type EditionId = 'oss' | 'ee' | 'mt'
@@ -49,17 +49,6 @@ export interface SettingsSection {
   Section: ComponentType
 }
 
-/**
- * Sign-in methods a layer adds under /login's password form (EE: single sign-on). A method leaves the app for its
- * provider: it calls `onStart` first, then sends the browser away with `returnTo` as the path to come back to.
- * `/login` finishes that sign-in itself; a failed one comes back with `#error=<code>`, handed over as `error`.
- */
-export interface LoginMethodsProps {
-  returnTo: string
-  onStart: () => void
-  error?: string
-}
-
 /** The org-unit filter a layer can add to TokenOps (planned in EE). */
 interface OrgUnitFilterProps {
   value?: string
@@ -72,10 +61,10 @@ export interface Slots {
   granteeKinds: GranteeKind[]
   connectorGranteeKinds: ConnectorGranteeKind[]
   settingsSections: SettingsSection[]
-  loginMethods: ComponentType<LoginMethodsProps> | null
   tokenopsOrgUnitFilter: ComponentType<OrgUnitFilterProps> | null
   topbarStart: ComponentType | null
   shellEnd: ComponentType<{ path: string }> | null
+  shellSplit: ComponentType<{ path: string; children: ReactNode }> | null
   /**
    * Rows a layer adds to /optimization's Workspace footer, after the core's tiers row (EE: Organization policy;
    * plans/feat-optimization-page.md R5B). Superusers only, like the footer. Each renders a `WorkspaceRow` or nothing.
@@ -107,10 +96,10 @@ export const OSS_SLOTS: Slots = {
   granteeKinds: [],
   connectorGranteeKinds: [],
   settingsSections: [],
-  loginMethods: null,
   tokenopsOrgUnitFilter: null,
   topbarStart: null,
   shellEnd: null,
+  shellSplit: null,
   optimizationWorkspace: null,
   navHidden: null,
 }
@@ -152,10 +141,10 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
       out.connectorGranteeKinds = [...out.connectorGranteeKinds, ...s.connectorGranteeKinds]
     if (s.settingsSections) out.settingsSections = [...out.settingsSections, ...s.settingsSections]
     if (s.harnessOrgScope !== undefined) out.harnessOrgScope = s.harnessOrgScope
-    if (s.loginMethods !== undefined) out.loginMethods = s.loginMethods
     if (s.tokenopsOrgUnitFilter !== undefined) out.tokenopsOrgUnitFilter = s.tokenopsOrgUnitFilter
     if (s.topbarStart !== undefined) out.topbarStart = s.topbarStart
     if (s.shellEnd !== undefined) out.shellEnd = s.shellEnd
+    if (s.shellSplit !== undefined) out.shellSplit = s.shellSplit
     if (s.optimizationWorkspace !== undefined) out.optimizationWorkspace = s.optimizationWorkspace
     if (s.navHidden !== undefined) out.navHidden = s.navHidden
   }
