@@ -193,6 +193,8 @@ export const versionListSchema = list(versionSchema)
 export const budgetSettingsSchema = one(
   z.looseObject({
     team_identity: z.boolean().optional(),
+    /** EE: unit leads may write their units' budgets (budgets.md §5, §6.8; plan §7 Q4). */
+    unit_leads_write: z.boolean().optional(),
     fiscal_year_first_month: z.number().int().min(1).max(12).optional(),
     updated_at: iso,
   }),
