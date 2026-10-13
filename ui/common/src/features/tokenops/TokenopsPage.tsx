@@ -487,7 +487,7 @@ export function TokenopsPage({
         actions={
           isMd ? (
             // A column, so the invalid-range note sits under the filters and both keep the right edge.
-            <div className="flex flex-col items-end gap-1">
+            <div data-tour="tokenops-filters" className="flex flex-col items-end gap-1">
               <div className="flex flex-wrap items-center justify-end gap-2">{filterControls}</div>
               {time.invalid ? <InvalidRangeNote /> : null}
             </div>
@@ -497,7 +497,10 @@ export function TokenopsPage({
       />
       {/* Phones: the custom dates and the filters scroll sideways in one row instead of wrapping (A1b). */}
       {isMd ? null : (
-        <div className="-mx-4 mb-2 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 [&>*]:shrink-0">
+        <div
+          data-tour="tokenops-filters"
+          className="-mx-4 mb-2 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 [&>*]:shrink-0"
+        >
           <CustomRange {...time} />
           {filterControls}
         </div>
@@ -562,7 +565,7 @@ export function TokenopsPage({
             }}
           />
 
-          <div className="flex flex-col">
+          <div data-tour="tokenops-sections" className="flex flex-col">
             <Disclosure
               id="spend"
               title="Spend over time"

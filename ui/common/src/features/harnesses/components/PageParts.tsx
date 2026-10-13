@@ -29,7 +29,11 @@ import { Trend } from './Trend'
 
 function Summary({ sentences, callout }: { sentences: string[]; callout: string | null }) {
   return (
-    <section aria-labelledby="harness-summary" className="flex flex-col gap-2">
+    <section
+      data-tour="harnesses-summary"
+      aria-labelledby="harness-summary"
+      className="flex flex-col gap-2"
+    >
       <h2 id="harness-summary" className="sr-only">
         Summary
       </h2>
@@ -78,7 +82,10 @@ export function SummaryCard({
   days: string[]
 }) {
   return (
-    <Card className="gap-0 overflow-hidden p-0 lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+    <Card
+      data-tour="harnesses-summary"
+      className="gap-0 overflow-hidden p-0 lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
+    >
       <div className="flex flex-col gap-4 p-5">
         <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary-text">
           <span>{windowLabel}</span>
@@ -144,7 +151,7 @@ export function HarnessHeader({
   extra?: ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div data-tour="harnesses-header" className="flex flex-col gap-3">
       <PageHeader
         title={copy.title}
         description={copy.subtitle}
@@ -334,7 +341,6 @@ export function LiveFallbackLevel({
             title={copy.lastSessions(LIVE_SESSION_LIMIT)}
             note={copy.sessionsOwnOnly}
             linkable={!preview}
-            ledger
             items={d.sessions}
             initial={RECENT_SESSIONS_SHOWN}
             emptyText={copy.noRecentSessions}
@@ -406,7 +412,6 @@ export function UserLevel({
         title="Recent sessions"
         note={self || viewerIsSuperuser ? undefined : copy.sessionsOwnOnly}
         linkable={!preview && (self || viewerIsSuperuser)}
-        ledger={self}
         items={res.recent_sessions ?? []}
         initial={RECENT_SESSIONS_SHOWN}
       />

@@ -27,7 +27,11 @@ export function SectionNav({
       {/* The module's first section is its nav item ("Agents"); the others are a level below it ("Agents › Builds"). */}
       <TopBar trail={at && at !== sections[0] ? [at.label] : []} />
       {/* Underlined, full width: the module's sections read as the page's tabs, not as loose buttons. */}
-      <nav aria-label={label} className="flex gap-1 overflow-x-auto border-b border-border">
+      <nav
+        data-tour="section-nav"
+        aria-label={label}
+        className="flex gap-1 overflow-x-auto border-b border-border"
+      >
         {sections.map((s) => (
           <Link
             key={s.to}

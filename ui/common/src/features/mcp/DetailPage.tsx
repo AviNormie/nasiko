@@ -115,14 +115,14 @@ function Detail({ id, search }: { id: string; search: DetailSearch }) {
     <div className="space-y-4">
       <Header connector={c} manage={manage} meName={me?.username} openPopup={openPopup} />
       <Tabs value={current} onValueChange={setTab}>
-        <TabsList className="max-w-full justify-start overflow-x-auto">
+        <TabsList data-tour="mcp-detail-tabs" className="max-w-full justify-start overflow-x-auto">
           {allowed.map((t) => (
             <TabsTrigger key={t} value={t}>
               {copy.tabsNames[t]}
             </TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent value="overview" className="pt-3">
+        <TabsContent data-tour="mcp-detail-overview" value="overview" className="pt-3">
           <OverviewTab connector={c} manage={manage} openPopup={openPopup} />
         </TabsContent>
         <TabsContent value="agents" className="pt-3">
@@ -166,7 +166,7 @@ function Header({
   const version = c.version ?? c.upload_info?.version
   const owner = c.is_owner ? copy.you : (c.owner_username ?? meName ?? '—')
   return (
-    <div className="flex items-start gap-3">
+    <div data-tour="mcp-detail-header" className="flex items-start gap-3">
       <TopBar trail={[label]} />
       <AgentMark name={label} iconUrl={c.logo_url} size={40} />
       <PageHeader
@@ -191,7 +191,7 @@ function Header({
           </span>
         }
         actions={
-          <div className="flex items-start gap-2">
+          <div data-tour="mcp-detail-actions" className="flex items-start gap-2">
             {status !== 'building' && status !== 'failed' ? (
               <ConnectControl
                 target={{

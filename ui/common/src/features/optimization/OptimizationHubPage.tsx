@@ -39,8 +39,15 @@ import { Workspace } from './components/Workspace'
 import { Lead } from './components/Lead'
 import { NeedsAttention } from './components/NeedsAttention'
 import { copy } from './copy'
-import { leadState, sliceLabel, trendRows, weeklyPoints } from './lead'
-import { parseSlice, sliceOf, type BucketSize } from '@/lib/slice'
+import {
+  leadState,
+  parseSlice,
+  sliceLabel,
+  sliceOf,
+  trendRows,
+  weeklyPoints,
+  type BucketSize,
+} from './lead'
 import { OptimizationPage } from './OptimizationPage'
 import type { OptimizationSearch } from './search'
 
@@ -167,7 +174,10 @@ export function OptimizationHubPage() {
     <Announcer>
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         {/* TokenOps' sticky bar: title, the window, and the jump to your settings (R1D, R7A). */}
-        <div className="sticky top-0 z-20 -mx-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
+        <div
+          data-tour="optimization-header"
+          className="sticky top-(--topbar-h) z-20 -mx-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
+        >
           <PageHeader
             title={copy.title}
             description={phone ? undefined : <SettingsLink />}
@@ -252,6 +262,7 @@ export function OptimizationHubPage() {
           </>
         )}
         <section
+          data-tour="optimization-settings"
           ref={settingsSection}
           id="settings"
           aria-labelledby="optimization-settings-h"

@@ -121,7 +121,7 @@ export function OverviewTab({
           </Card>
         </div>
 
-        <div className="flex min-w-0 flex-col gap-4">
+        <div data-tour="agent-facts" className="flex min-w-0 flex-col gap-4">
           <RoutingCard
             agent={{
               id: agent.id,

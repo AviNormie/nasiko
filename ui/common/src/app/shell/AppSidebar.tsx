@@ -325,7 +325,7 @@ function NavGroups({
       >
         {/* A group with no items (Lab, in a production build) has no header either. */}
         {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g) => (
-          <SidebarGroup key={g.id} className={cn(GROUP, 'py-0')}>
+          <SidebarGroup key={g.id} data-tour={`nav-${g.id}`} className={cn(GROUP, 'py-0')}>
             {/* In the rail a header becomes a short hairline: the icons stay one even column, the groups still apart. */}
             {g.label ? (
               <>

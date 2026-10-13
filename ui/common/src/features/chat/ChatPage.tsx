@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { MessagesSquare } from 'lucide-react'
 import { use, useCallback, useMemo, useRef, useState } from 'react'
 import { SidebarPanel } from '@/app/shell/SidebarPanel'
+import { TourButton } from '@/app/shell/TopBar'
 import { SidebarPanelContext } from '@/app/shell/panelSlot'
 import { DotBackground } from '@/components/aceternity/dot-background'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -126,6 +127,10 @@ function ChatLayout({
           {/* isolate: the dots' -z-10 stays inside the section, above the page background. */}
           <section className="@container relative isolate flex min-w-0 flex-1 flex-col">
             <DotBackground className="-z-10" />
+            {/* New chat has no top bar on desktop: its tour button sits in the corner instead. */}
+            {sessionId ? null : (
+              <TourButton className="absolute top-3 right-3 z-10 max-md:hidden" />
+            )}
             {sessionId ? (
               <SessionViewMemo key={sessionId} sessionId={sessionId} {...props} />
             ) : (
