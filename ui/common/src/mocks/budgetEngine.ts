@@ -60,6 +60,17 @@ export interface WBudget {
     set_by: string
     set_at: number
   } | null
+  /** Deleted budgets stay in the world: their refusals happened (the refusal pass keeps them). */
+  deleted_at: number | null
+  /** Write events kept as records (§4.3a): period changes scheduled, fiscal year changes. Never rewritten. */
+  log: {
+    kind: 'period_change_scheduled' | 'fiscal_year_changed'
+    at: number
+    version: number
+    period: 'month' | 'quarter' | null
+    effective_from: number
+    by: string
+  }[]
 }
 interface WUser {
   id: string
@@ -88,7 +99,12 @@ export interface World {
   meta: { exact_dedupe_from: number | null; membership_history_from: number | null }
   /** Per-source completeness; Infinity = always complete (the default world). */
   watermarks: Record<Source, number>
-  settings: { team_identity: boolean; fiscal_year_first_month: number; updated_at: number }
+  settings: {
+    team_identity: boolean
+    /** The fiscal year's first month over time, ascending (§6.8): a change applies from the next quarter start. */
+    fiscal: { from: number; month: number }[]
+    updated_at: number
+  }
   prices: Price[]
   /** New budget ids: `${idPrefix}${n}` padded. */
   idPrefix: string
@@ -111,9 +127,18 @@ const U = 1e8
 export const toUnits = (usd: number) => Math.round(usd * U)
 const usd = (u: number) => u / U
 const cents = (v: number) => Math.round(v * 100) / 100
+/** Half-even to whole cents (§6.4), on the value's own decimal digits so float noise can't tip a tie. */
+const centsHalfEven = (v: number) => {
+  const scaled = Number((v * 100).toFixed(6))
+  const floor = Math.floor(scaled)
+  const diff = scaled - floor
+  const n = diff > 0.5 ? floor + 1 : diff < 0.5 ? floor : floor % 2 === 0 ? floor : floor + 1
+  return n / 100
+}
 const round2 = (v: number) => Math.round(v * 100) / 100
 const HOUR = 3_600_000
-const iso = (t: number) => new Date(t).toISOString()
+/** RFC 3339 UTC, to the second, as the spec's examples (`2026-10-14T12:00:00Z`). */
+const iso = (t: number) => new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const dayOf = (t: number) => iso(t).slice(0, 10)
 const dayStart = (t: number) => Math.floor(t / DAY_MS) * DAY_MS
 const parseDay = (d: string) => Date.parse(`${d}T00:00:00Z`)
@@ -138,6 +163,17 @@ function periodAt(kind: 'month' | 'quarter', t: number, firstMonth = 1): [number
   return [Date.UTC(y, start, 1), Date.UTC(y, start + 3, 1)]
 }
 
+/** A month, or a (fiscal) quarter under the setting in force at `t`, clamped at a fiscal change (§4.3). */
+function periodOf(w: World, kind: 'month' | 'quarter', t: number): [number, number] {
+  if (kind === 'month') return periodAt('month', t)
+  const f = w.settings.fiscal
+  let i = 0
+  while (i + 1 < f.length && f[i + 1]!.from <= t) i++
+  const [s0, e0] = periodAt('quarter', t, f[i]!.month)
+  const next = f[i + 1]
+  return [Math.max(s0, f[i]!.from), next && e0 > next.from ? next.from : e0]
+}
+
 export const versionAt = (b: WBudget, t: number): WVersion =>
   [...b.versions].reverse().find((v) => v.effective_from <= t) ?? b.versions[0]!
 
@@ -150,7 +186,7 @@ function budgetPeriod(w: World, b: WBudget, t: number): [number, number] {
     const s = sessionOf(w, b.session_id)
     return [s?.started_at ?? b.created_at, Infinity]
   }
-  return periodAt(v.period, t, w.settings.fiscal_year_first_month)
+  return periodOf(w, v.period, t)
 }
 
 // ─── units (P-4) ────────────────────────────────────────────────────────────
@@ -234,8 +270,11 @@ function inScope(w: World, scope: Scope, id: string | null, c: WCall): boolean {
   }
 }
 
+/** The budgets that exist now (deleted ones only keep their history in the refusal pass). */
+const alive = (w: World) => w.budgets.filter((b) => b.deleted_at === null)
+
 const budgetOf = (w: World, scope: Scope, id: string | null) =>
-  w.budgets.find(
+  alive(w).find(
     (b) =>
       b.scope === scope &&
       (scope === 'org' ||
@@ -265,7 +304,7 @@ export function accepted(w: World): WCall[] {
     const mine = stoppable.filter((b) => inScope(w, b.scope, targetOf(b), c))
     const key = (b: WBudget) => `${b.id}:${budgetPeriod(w, b, c.at)[0]}`
     const refused = mine.some((b) => {
-      if (c.at < b.created_at) return false
+      if (c.at < b.created_at || (b.deleted_at !== null && c.at >= b.deleted_at)) return false
       const v = versionAt(b, c.at)
       return v.action === 'stop' && (spend.get(key(b)) ?? 0) >= toUnits(v.limit_usd)
     })
@@ -286,8 +325,10 @@ const asOfFor = (w: World, now: number) =>
 
 // ─── ACL and redaction (§5, §5.2) ───────────────────────────────────────────
 
+/** A unit lead is a `manager` named as the unit's lead (§5); `lead_id` alone grants nothing. */
 const ledUnits = (w: World, v: Viewer) => {
   const out = new Set<string>()
+  if (w.users.find((u) => u.id === v.id)?.role !== 'manager') return out
   for (const u of w.units) if (u.lead_id === v.id) for (const s of subtree(w, u.id)) out.add(s)
   return out
 }
@@ -342,6 +383,13 @@ function canRead(w: World, v: Viewer, scope: Scope, id: string | null): boolean 
 function requireWrite(w: World, v: Viewer, scope: Scope, id: string | null) {
   if (!canRead(w, v, scope, id)) notFound()
   if (v.superuser) return
+  // Finance reads everything it may and writes nothing (§5).
+  if (v.finance)
+    fail(
+      403,
+      scope === 'org' || scope === 'unit' ? 'not_allowed' : 'not_owner',
+      scope === 'org' || scope === 'unit' ? 'only an admin can do this' : 'not your budget',
+    )
   if (scope === 'org' || scope === 'unit') fail(403, 'not_allowed', 'only an admin can do this')
   const mine =
     scope === 'owner'
@@ -512,14 +560,14 @@ const eventOrder = (a: BudgetEvent, b: BudgetEvent) =>
   (a.percent ?? 0) - (b.percent ?? 0) ||
   a.id.localeCompare(b.id)
 
-const recordsCache = new WeakMap<World, Map<string, Rec[]>>()
+const recordsCache = new WeakMap<World, Map<string, { key: string; out: Rec[] }>>()
 /** Every event and alert of one budget up to `asOf`: thresholds, stops, resumes, version events, forecasts. */
 function records(w: World, b: WBudget, asOf: number): Rec[] {
   let byKey = recordsCache.get(w)
   if (!byKey) recordsCache.set(w, (byKey = new Map()))
   const key = `${w.rev}:${b.id}:${asOf}`
-  const hit = byKey.get(key)
-  if (hit) return hit
+  const hit = byKey.get(b.id)
+  if (hit && hit.key === key) return hit.out
   const out: Rec[] = []
   // Version events, written with the version.
   b.versions.forEach((v, i) => {
@@ -542,23 +590,19 @@ function records(w: World, b: WBudget, asOf: number): Rec[] {
         }),
       )
   })
-  if (b.next_period && b.next_period.set_at < asOf)
-    out.push(
-      ev(
-        b,
-        'period_change_scheduled',
-        b.next_period.set_at,
-        versionAt(b, b.next_period.set_at).version,
-        {
-          period: b.next_period.period,
-          effective_from: iso(b.next_period.effective_from),
-          by: b.next_period.set_by,
-        },
-      ),
-    )
+  for (const l of b.log)
+    if (l.at < asOf)
+      out.push(
+        ev(b, l.kind, l.at, l.version, {
+          period: l.period,
+          effective_from: iso(l.effective_from),
+          by: l.by,
+        }),
+      )
   out.push(...thresholdWalk(w, b, asOf), ...forecastReplay(w, b, asOf))
   out.sort(eventOrder)
-  byKey.set(key, out)
+  // One entry per budget: a later as_of replaces it, so the cache never grows past the budget count.
+  byKey.set(b.id, { key, out })
   return out
 }
 
@@ -567,10 +611,16 @@ function thresholdWalk(w: World, b: WBudget, asOf: number): Rec[] {
   const stoppable = coversOf(b.scope) === 'routed_calls'
   const calls = counted(w, b.scope, targetOf(b), coversOf(b.scope), asOf)
   const firstStart = budgetPeriod(w, b, b.created_at)[0]
-  // Timeline: calls, the creation (version 1's activation) and later versions' activations.
-  type Step = { at: number; call?: WCall; activate?: WVersion }
+  // Timeline: calls, the creation (version 1's activation), later versions' activations, and every period start (a
+  // stop that was refusing resumes there, even with no call after it).
+  type Step = { at: number; call?: WCall; activate?: WVersion; boundary?: true }
+  const boundaries: Step[] = []
+  if (versionAt(b, b.created_at).period !== 'session')
+    for (let p = budgetPeriod(w, b, firstStart)[1]; p < asOf; p = budgetPeriod(w, b, p)[1])
+      boundaries.push({ at: p, boundary: true })
   const steps = (
     [
+      ...boundaries,
       ...calls.filter((c) => c.at >= firstStart).map((c) => ({ at: c.at, call: c })),
       { at: b.created_at, activate: b.versions[0]! },
       ...b.versions
@@ -592,6 +642,7 @@ function thresholdWalk(w: World, b: WBudget, asOf: number): Rec[] {
       period = ps
       cum = 0
     }
+    if (s.boundary) continue
     if (s.activate) {
       const was = refusing()
       live = s.activate
@@ -651,7 +702,8 @@ function forecastReplay(w: World, b: WBudget, asOf: number): Rec[] {
         resetsAt: end,
         asOf: h,
       })
-      if (!pr) continue
+      // Pace 0 is no projection (§9): nothing fires and a pending clear neither advances nor resets.
+      if (!pr || pr.pace === 0) continue
       for (const p of v.forecast_thresholds) {
         const st = state.get(p) ?? { fired: false, below: 0 }
         state.set(p, st)
@@ -707,7 +759,7 @@ function limitsInside(w: World, b: WBudget, now: number): [number | null, number
     const units = w.members.filter((m) => m.to === null && m.user_id === user).map((m) => m.unit_id)
     return b.scope === 'org' ? units.length === 0 : units.includes(b.unit_id!)
   }
-  const kids = w.budgets.filter(
+  const kids = alive(w).filter(
     (c) =>
       versionAt(c, now).period === period &&
       ((c.scope === 'unit' && rootOrChild(c.unit_id!)) ||
@@ -895,14 +947,22 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
   const covers: Covers = b ? coversOf(t.scope) : 'all_priced'
   const asOf = asOfFor(w, now)
   const session = t.scope === 'session' ? sessionOf(w, t.id) : undefined
-  const kind: Kind = session
-    ? 'session'
-    : (period ?? ((b ? versionAt(b, asOf).period : 'month') as Kind))
-  const [start, end] = session
-    ? [session.started_at, Infinity]
-    : periodAt(kind as 'month' | 'quarter', asOf, w.settings.fiscal_year_first_month)
-  const from = session ? dayStart(start) : q.from ? parseDay(q.from) : dayStart(start)
-  if (!Number.isFinite(from) || from > dayStart(asOf) || (dayStart(asOf) - from) / DAY_MS > 400)
+  // A budget's own periods (its versions' kinds) govern; `period` alone sets the default range (§7.1): a month budget
+  // read with `period=quarter` starts at the quarter's first day and still resets monthly.
+  const periodFn = (at: number): [number, number] =>
+    b ? budgetPeriod(w, b, at) : periodOf(w, period ?? 'month', at)
+  const kind: Kind = session ? 'session' : b ? versionAt(b, asOf).period : (period ?? 'month')
+  const [start, end] = session ? [session.started_at, Infinity] : periodFn(asOf)
+  const from = session
+    ? dayStart(start)
+    : q.from
+      ? parseDay(q.from)
+      : dayStart(period ? periodOf(w, period, asOf)[0] : start)
+  if (
+    !Number.isFinite(from) ||
+    from > dayStart(asOf) ||
+    (!session && (dayStart(asOf) - from) / DAY_MS > 400)
+  )
     fail(400, 'bad_range', 'from must be on or before to, within 400 days')
   if (!!q.contributor !== !!q.by) fail(400, 'contributor_needs_by', 'contributor needs by')
   const by = q.by ? dimension(w, t.scope, q.by) : null
@@ -927,13 +987,7 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
     const bounds = new Set<number>([from])
     for (const ver of b.versions)
       if (ver.effective_from > from && ver.effective_from < end) bounds.add(ver.effective_from)
-    if (!session)
-      for (
-        let p = periodAt(kind as 'month' | 'quarter', from, w.settings.fiscal_year_first_month)[1];
-        p < end;
-        p = periodAt(kind as 'month' | 'quarter', p, w.settings.fiscal_year_first_month)[1]
-      )
-        bounds.add(p)
+    if (!session) for (let p = periodFn(from)[1]; p < end; p = periodFn(p)[1]) bounds.add(p)
     const sorted = [...bounds].sort((x, y) => x - y)
     const limits: LimitStep[] = sorted.map((at, i) => {
       const ver = versionAt(b, at)
@@ -970,11 +1024,8 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
       unpriced_calls: used.unpriced,
     })
   else
-    for (
-      let p = periodAt(kind as 'month' | 'quarter', from, w.settings.fiscal_year_first_month)[0];
-      p <= asOf;
-    ) {
-      const [ps, pe] = periodAt(kind as 'month' | 'quarter', p, w.settings.fiscal_year_first_month)
+    for (let p = periodFn(from)[0]; p <= asOf;) {
+      const [ps, pe] = periodFn(p)
       const s = sumOf(range.filter((c) => c.at >= ps && c.at < pe))
       periods.push({
         period_start: iso(ps),
@@ -987,11 +1038,7 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
 
   let previous: Burn['previous'] = null
   if (!session && q.include_previous === 'true') {
-    const [ps, pe] = periodAt(
-      kind as 'month' | 'quarter',
-      start - 1,
-      w.settings.fiscal_year_first_month,
-    )
+    const [ps, pe] = periodFn(start - 1)
     const cs = all.filter((c) => c.at >= ps && c.at < pe)
     const s = sumOf(cs)
     previous = {
@@ -1046,7 +1093,9 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
     const byTurn = new Map<string, WCall[]>()
     for (const c of current) {
       const k = c.turn_id ?? c.flow_id ?? c.call_id
-      byTurn.set(k, [...(byTurn.get(k) ?? []), c])
+      const list = byTurn.get(k)
+      if (list) list.push(c)
+      else byTurn.set(k, [c])
     }
     turns = [...byTurn]
       .map(([turn_id, cs]) => {
@@ -1113,6 +1162,16 @@ export function burn(w: World, v: Viewer, q: BurnQuery, now: number): Burn {
 
 // ─── GET /api/budgets/burn/breakdown (§7.2) ─────────────────────────────────
 
+/** The units a `by=unit` read lists (§7.2): the root units for `org`, a unit's direct sub-units. */
+const listedUnits = (w: World, scope: Scope, id: string | null) =>
+  w.units
+    .filter((u) =>
+      w.parents.some(
+        (p) => p.to === null && p.unit_id === u.id && p.parent_id === (scope === 'org' ? null : id),
+      ),
+    )
+    .map((u) => u.id)
+
 export interface BreakdownQuery extends ScopeQuery {
   by: string | null
   period?: string | null
@@ -1140,9 +1199,7 @@ export function breakdown(w: World, v: Viewer, q: BreakdownQuery, now: number): 
   const session = t.scope === 'session' ? sessionOf(w, t.id) : undefined
   const kind =
     period ?? (b && !session ? (versionAt(b, asOf).period as 'month' | 'quarter') : 'month')
-  const start = session
-    ? session.started_at
-    : periodAt(kind, asOf, w.settings.fiscal_year_first_month)[0]
+  const start = session ? session.started_at : periodOf(w, kind, asOf)[0]
   const from = q.from ? parseDay(q.from) : dayStart(start)
   const to = Math.min(q.to ? parseDay(q.to) : dayStart(asOf), dayStart(asOf))
   if (!Number.isFinite(from) || !Number.isFinite(to) || from > to || (to - from) / DAY_MS > 400)
@@ -1182,18 +1239,7 @@ export function breakdown(w: World, v: Viewer, q: BreakdownQuery, now: number): 
   const overlapDay = new Map<number, number>()
   const outsideDay = new Map<number, number>()
   const dayTotal = new Map<number, Sum>()
-  let listed: string[] = []
-  if (by === 'unit')
-    listed = w.units
-      .filter((u) =>
-        w.parents.some(
-          (p) =>
-            p.to === null &&
-            p.unit_id === u.id &&
-            p.parent_id === (t.scope === 'org' ? null : t.id),
-        ),
-      )
-      .map((u) => u.id)
+  const listed = by === 'unit' ? listedUnits(w, t.scope, t.id) : []
   for (const c of cs) {
     const d = dayStart(c.at)
     let dt = dayTotal.get(d)
@@ -1321,18 +1367,21 @@ export function changes(w: World, v: Viewer, q: ChangesQuery, now: number): Chan
     const shift = to - asOf
     to -= shift
     cTo -= shift
+    if (to <= from) fail(400, 'bad_range', 'from must be on or before to, within 400 days')
   }
   const b = budgetOf(w, t.scope, t.id)
   const covers: Covers = b ? coversOf(t.scope) : 'all_priced'
   const cs = counted(w, t.scope, t.id, covers, asOf)
   const redact = redactor(w, v, cs)
+  const listed = by === 'unit' ? listedUnits(w, t.scope, t.id) : []
   const cur = cs.filter((c) => c.at >= from && c.at < to)
   const cmp = cs.filter((c) => c.at >= cFrom && c.at < cTo)
   const sums = new Map<string, [number, number]>()
   const put = (list: WCall[], i: 0 | 1) => {
     for (const c of list) {
       if (c.u === null) continue
-      const keys = by === 'unit' ? [...unitsOfCall(w, c)] : [redact(keyOf(w, by, c))]
+      const keys =
+        by === 'unit' ? listed.filter((u) => unitsOfCall(w, c).has(u)) : [redact(keyOf(w, by, c))]
       for (const k of keys) {
         if (k === null) continue
         const s = sums.get(k) ?? [0, 0]
@@ -1425,7 +1474,9 @@ export function traces(
   const groups = new Map<string, WCall[]>()
   for (const c of cs) {
     const k = c.flow_id ? `f:${c.flow_id}:${c.agent_id}` : `a:${c.agent_id}:${c.source}`
-    groups.set(k, [...(groups.get(k) ?? []), c])
+    const list = groups.get(k)
+    if (list) list.push(c)
+    else groups.set(k, [c])
   }
   const rows = [...groups].map(([k, g]) => {
     const s = sumOf(g)
@@ -1528,13 +1579,16 @@ export function statusList(
   now: number,
 ) {
   let list: WBudget[]
-  if (!q.scope) list = w.budgets.filter((b) => b.owner_id === v.id).sort(byScopeLabel(w))
+  if (!q.scope)
+    list = alive(w)
+      .filter((b) => b.owner_id === v.id)
+      .sort(byScopeLabel(w))
   else {
     const t = readTarget(w, v, q)
     const own = budgetOf(w, t.scope, t.id)
     list = [
       ...(own ? [own] : []),
-      ...w.budgets
+      ...alive(w)
         .filter((b) => b !== own && inside(w, t.scope, t.id, b) && readableBudget(w, v, b))
         .sort(byScopeLabel(w)),
     ]
@@ -1564,16 +1618,18 @@ export function atRisk(
   const t = readTarget(w, v, q)
   const asOf = asOfFor(w, now)
   const rows: AtRiskRow[] = []
-  for (const b of w.budgets) {
+  for (const b of alive(w)) {
     if (!inside(w, t.scope, t.id, b) || !readableBudget(w, v, b)) continue
     const session = b.scope === 'session' ? sessionOf(w, b.session_id) : undefined
     if (session && session.ended_at !== null) continue
     const f = figures(w, b, asOf)
     const limit = f.version.limit_usd
     const daily = dailyRows(f.calls, f.start, dayStart(asOf))
-    const pr = session
+    const raw = session
       ? null
       : project({ daily, used: usd(f.used.u), limit, resetsAt: f.end, asOf })
+    // Pace 0 is no projection (§9): no run-out, no ranking basis.
+    const pr = raw && raw.pace > 0 ? raw : null
     const reason =
       f.state === 'exceeded'
         ? 'exceeded'
@@ -1645,7 +1701,7 @@ export function unbudgeted(
   const t = readTarget(w, v, q)
   const kind = okPeriod(q.period) ?? 'month'
   const asOf = asOfFor(w, now)
-  const [start] = periodAt(kind, asOf, w.settings.fiscal_year_first_month)
+  const [start] = periodOf(w, kind, asOf)
   const members = t.scope === 'unit' ? membersOf(w, t.id!) : null
   const rows: UnbudgetedRow[] = []
   for (const a of w.agents) {
@@ -1690,10 +1746,10 @@ export function alertRows(
 ) {
   const asOf = asOfFor(w, now)
   let list: WBudget[]
-  if (!q.scope) list = w.budgets.filter((b) => b.owner_id === v.id)
+  if (!q.scope) list = alive(w).filter((b) => b.owner_id === v.id)
   else {
     const t = readTarget(w, v, q)
-    list = w.budgets.filter(
+    list = alive(w).filter(
       (b) =>
         (b === budgetOf(w, t.scope, t.id) || inside(w, t.scope, t.id, b)) &&
         readableBudget(w, v, b),
@@ -1702,6 +1758,11 @@ export function alertRows(
   const all = q.kind === 'all'
   const rows: AlertV1[] = []
   for (const b of list) {
+    if (q.from) {
+      const f = parseDay(q.from)
+      if (!Number.isFinite(f) || f > dayStart(asOf) || (dayStart(asOf) - f) / DAY_MS > 400)
+        fail(400, 'bad_range', 'from must be on or before to, within 400 days')
+    }
     const since = q.from ? parseDay(q.from) : budgetPeriod(w, b, budgetPeriod(w, b, asOf)[0] - 1)[0]
     for (const r of records(w, b, asOf)) {
       if (
@@ -1764,7 +1825,7 @@ const marks = (thresholds: readonly number[], action: string) =>
 
 function validateFields(body: CreateBody, scope: Scope, defaults: boolean) {
   const limit = body.limit_usd
-  if (typeof limit !== 'number' || !Number.isFinite(limit) || cents(limit) <= 0)
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || centsHalfEven(limit) <= 0)
     fail(400, 'invalid_limit', 'limit_usd must be greater than 0')
   const thresholds = body.thresholds ?? (defaults ? [50, 80, 100] : undefined)
   if (
@@ -1794,7 +1855,7 @@ function validateFields(body: CreateBody, scope: Scope, defaults: boolean) {
   if (action === 'stop' && (scope === 'org' || scope === 'unit'))
     fail(400, 'stop_not_available', 'stop is not available for this scope')
   return {
-    limit_usd: cents(limit as number),
+    limit_usd: centsHalfEven(limit as number),
     thresholds: marks(thresholds as number[], action as string),
     forecast_thresholds:
       forecast === undefined ? undefined : [...(forecast as number[])].sort((a, b) => a - b),
@@ -1870,6 +1931,8 @@ export function createBudget(w: World, v: Viewer, body: CreateBody, now: number)
       },
     ],
     next_period: null,
+    deleted_at: null,
+    log: [],
   }
   w.budgets.push(b)
   w.rev++
@@ -1877,7 +1940,7 @@ export function createBudget(w: World, v: Viewer, body: CreateBody, now: number)
 }
 
 const findBudget = (w: World, v: Viewer, id: string) => {
-  const b = w.budgets.find((x) => x.id === id)
+  const b = alive(w).find((x) => x.id === id)
   if (!b || !readableBudget(w, v, b)) budgetNotFound()
   return b!
 }
@@ -1926,14 +1989,19 @@ export function updateBudget(
       b.next_period = null
     } else {
       // The first boundary that ends the current period and starts a period of the new kind.
-      let at = periodAt(
-        cur.period as 'month' | 'quarter',
-        now,
-        w.settings.fiscal_year_first_month,
-      )[1]
-      while (periodAt(p, at, w.settings.fiscal_year_first_month)[0] !== at)
-        at = periodAt(cur.period as 'month' | 'quarter', at, w.settings.fiscal_year_first_month)[1]
+      let at = periodOf(w, cur.period as 'month' | 'quarter', now)[1]
+      for (let i = 0; i < 24 && periodOf(w, p, at)[0] !== at; i++)
+        at = periodOf(w, cur.period as 'month' | 'quarter', at)[1]
       b.next_period = { period: p, effective_from: at, set_by: v.id, set_at: now }
+      // A record (§4.3a): later PUTs and the activation never remove it.
+      b.log.push({
+        kind: 'period_change_scheduled',
+        at: now,
+        version: versionAt(b, now).version,
+        period: p,
+        effective_from: at,
+        by: v.id,
+      })
       changed = true
     }
   }
@@ -1944,10 +2012,10 @@ export function updateBudget(
   return b
 }
 
-export function deleteBudget(w: World, v: Viewer, id: string) {
+export function deleteBudget(w: World, v: Viewer, id: string, now: number) {
   const b = findBudget(w, v, id)
   requireWrite(w, v, b.scope, targetOf(b))
-  w.budgets = w.budgets.filter((x) => x !== b)
+  b.deleted_at = now
   w.rev++
 }
 
@@ -2009,7 +2077,7 @@ export function versionsList(
 export function settingsView(w: World) {
   return {
     ...(w.edition === 'ee' ? { team_identity: w.settings.team_identity } : {}),
-    fiscal_year_first_month: w.settings.fiscal_year_first_month,
+    fiscal_year_first_month: w.settings.fiscal.at(-1)!.month,
     updated_at: iso(w.settings.updated_at),
   }
 }
@@ -2036,7 +2104,24 @@ export function updateSettings(
   if (body.expected_updated_at !== iso(w.settings.updated_at))
     fail(409, 'settings_changed', 'settings changed elsewhere')
   if (body.team_identity !== undefined) w.settings.team_identity = body.team_identity as boolean
-  if (m !== undefined) w.settings.fiscal_year_first_month = m as number
+  if (m !== undefined && m !== w.settings.fiscal.at(-1)!.month) {
+    // From the next quarter start under the setting in force now (§6.8), replacing a change still pending.
+    const from = periodOf(w, 'quarter', now)[1]
+    w.settings.fiscal = [
+      ...w.settings.fiscal.filter((f) => f.from <= now),
+      { from, month: m as number },
+    ]
+    for (const b of w.budgets)
+      if (versionAt(b, now).period === 'quarter')
+        b.log.push({
+          kind: 'fiscal_year_changed',
+          at: now,
+          version: versionAt(b, now).version,
+          period: null,
+          effective_from: from,
+          by: v.id,
+        })
+  }
   w.settings.updated_at = now
   w.rev++
   return settingsView(w)
@@ -2094,6 +2179,8 @@ export function worldFromScenario(
       ...b,
       updated_at: b.versions.at(-1)!.effective_from,
       next_period: null,
+      deleted_at: null,
+      log: [],
     })),
     users: [
       { id: opts.adminId, name: 'admin', role: 'superuser' },
@@ -2105,10 +2192,12 @@ export function worldFromScenario(
     parents: sc.parents,
     sessions: sc.sessions,
     meta: { ...sc.meta },
-    watermarks: { routed: sc.anchor, traced: sc.anchor, harness_estimate: sc.anchor },
+    // Complete up to now: the world's clock is the caller's (tests and the golden variant run at the anchor), so a
+    // write made at `now` shows in every read at once.
+    watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
     settings: {
       team_identity: false,
-      fiscal_year_first_month: 1,
+      fiscal: [{ from: -Infinity, month: 1 }],
       updated_at: sc.budgets[0]!.created_at,
     },
     prices: GOLDEN_PRICES,

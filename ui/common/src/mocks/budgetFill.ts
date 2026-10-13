@@ -46,7 +46,7 @@ export function liveFirst(fetchLive: LiveFetch) {
     }
     const listed = await capabilities(url.origin)
     if (listed)
-      return listed.includes(budgetFeatureOf(request.method, url)) ? fetchLive(request) : null
+      return budgetFeatureOf(url).some((f) => listed.includes(f)) ? fetchLive(request) : null
     const r = await fetchLive(request.clone()).catch(() => null)
     return r && !(await bare404(r)) ? r : null
   }

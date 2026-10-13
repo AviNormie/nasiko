@@ -2,8 +2,10 @@
  * The budgets golden scenario as SQL (docs/requirements/budgets.md §14.8, plan feat-budget-burn #45): what
  * `seed:live` writes so a server that has built budgets answers the same world as the UI's `budgets-golden` mock.
  *
- * A server's own watermarks and one-time instants (`budget_watermarks`, `budget_meta`) are only written when absent
- * (a fresh contract database), never overwritten or removed: they aren't the seed's rows.
+ * Seed-only databases only: `seed-trace-usage.ts` writes the scenario on `--marker` runs (the throwaway contract
+ * database and EE's `nasiko_ee`), never on `nasiko_dev`, where a developer may have used a seeded session or agent
+ * and the reset's cascades would take their rows with it. There the watermarks and one-time instants are the
+ * scenario's to set (re-seeding moves them to the new anchor).
  *
  * Every statement sits inside one guarded block: it runs only when the server has the contract's tables
  * (`budget_calls` first), so on today's servers the seed only says it skipped them. Rows use ids `5eed0017-*` (users
@@ -20,15 +22,24 @@ const ts = (t: number | null) =>
 const arr = (xs: number[]) => `ARRAY[${xs.join(',')}]::int[]`
 /** The scenario's admin is the server's superuser, read in the block. */
 const who = (id: string) => (id === ADMIN ? 'admin_id' : `${q(id)}::uuid`)
+/** Every table the scenario writes (budgets.md §14.8); a server missing any of them is skipped, not half-seeded. */
+const TABLES = ['budget_calls', 'budget_watermarks', 'budget_meta', 'budgets', 'budget_versions']
 const guard = (body: string[]) => `DO $$
 DECLARE admin_id uuid;
 BEGIN
-  IF to_regclass('public.budget_calls') IS NULL THEN
+  IF ${TABLES.map((t) => `to_regclass('public.${t}') IS NULL`).join(' OR ')} THEN
     RAISE NOTICE 'nasiko-ui-lab seed: this server has no budget tables (budgets.md P-1); the budgets scenario is skipped';
     RETURN;
   END IF;
   admin_id := (SELECT id FROM users WHERE is_superuser AND deleted_at IS NULL ORDER BY created_at LIMIT 1);
+  IF admin_id IS NULL THEN
+    RAISE NOTICE 'nasiko-ui-lab seed: no superuser; the budgets scenario is skipped';
+    RETURN;
+  END IF;
 ${body.map((s) => `  ${s.replace(/\n/g, '\n  ')}`).join('\n')}
+EXCEPTION WHEN OTHERS THEN
+  -- A server whose budget tables don't match budgets.md §14.8 skips the scenario; the rest of the seed still commits.
+  RAISE WARNING 'nasiko-ui-lab seed: the budgets scenario was skipped: %', SQLERRM;
 END $$;`
 
 /** Removes the scenario's rows (also run before inserting, so a re-seed re-anchors). */
@@ -114,9 +125,9 @@ ${sc.budgets
   )
   .join(',\n')};`,
     `INSERT INTO budget_meta (key, value) VALUES ('exact_dedupe_from', ${ts(sc.meta.exact_dedupe_from)}), ('membership_history_from', ${ts(sc.meta.membership_history_from)})
-ON CONFLICT (key) DO NOTHING;`,
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;`,
     `INSERT INTO budget_watermarks (source, complete_to) VALUES ('routed', ${ts(anchor)}), ('traced', ${ts(anchor)}), ('harness_estimate', ${ts(anchor)})
-ON CONFLICT (source) DO NOTHING;`,
+ON CONFLICT (source) DO UPDATE SET complete_to = EXCLUDED.complete_to;`,
     // EE: units, then membership and ancestry history (P-4), when this server has them.
     `IF to_regclass('public.org_unit_member_history') IS NOT NULL THEN
   INSERT INTO org_units (id, name, source) VALUES

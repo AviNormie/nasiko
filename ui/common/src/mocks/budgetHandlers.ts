@@ -350,7 +350,7 @@ export function budgetHandlers(ctx: BudgetMockCtx): HttpHandler[] {
     http.delete('/api/budgets/:id', ({ params }) =>
       run(
         () => {
-          deleteBudget(ctx.world(), ctx.viewer(), String(params.id))
+          deleteBudget(ctx.world(), ctx.viewer(), String(params.id), ctx.now())
           return new HttpResponse(null, { status: 204 })
         },
         { read: false },

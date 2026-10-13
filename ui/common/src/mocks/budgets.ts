@@ -108,7 +108,11 @@ export function buildBudgetState(
     sessions: [],
     meta: { exact_dedupe_from: null, membership_history_from: null },
     watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
-    settings: { team_identity: false, fiscal_year_first_month: 1, updated_at: monthStart(now) },
+    settings: {
+      team_identity: false,
+      fiscal: [{ from: -Infinity, month: 1 }],
+      updated_at: monthStart(now),
+    },
     prices: SEED_MODELS.filter((m) => m.inPerM > 0).map((m) => ({
       provider: m.provider,
       model: m.model,
@@ -154,6 +158,8 @@ export function buildBudgetState(
       },
     ],
     next_period: null,
+    deleted_at: null,
+    log: [],
   })
   const used = (pick: (c: WCall) => boolean) =>
     accepted(w)
@@ -181,6 +187,36 @@ export function buildBudgetState(
   return w
 }
 
+/**
+ * Keeps the world's agents and owners in step with the agents mock (a deploy or a delete in the session), so a budget
+ * can be set on an agent made after the world was built. Spend comes only from the seed's traces.
+ */
+export function syncAgents(w: BudgetMockStore, agents: readonly MockAgent[]) {
+  let changed = false
+  for (const a of agents) {
+    const have = w.agents.find((x) => x.id === a.id)
+    if (!have) {
+      w.agents.push({
+        id: a.id,
+        name: a.display_name || a.name,
+        owner_id: a.owner_id,
+        harness: a.tags.includes('coding-agent'),
+        deleted: a.deleted,
+      })
+      changed = true
+    } else if (!!have.deleted !== a.deleted || have.owner_id !== a.owner_id) {
+      have.deleted = a.deleted
+      have.owner_id = a.owner_id
+      changed = true
+    }
+    if (!w.users.some((u) => u.id === a.owner_id)) {
+      w.users.push({ id: a.owner_id, name: `User ${a.owner_id.slice(-4)}`, role: 'member' })
+      changed = true
+    }
+  }
+  if (changed) w.rev++
+}
+
 const viewer = (user: string, superuser = false): Viewer => ({ id: user, superuser })
 
 /** The R-L10 view of a budget (its 1.0 fields are a superset). */
@@ -188,7 +224,9 @@ const legacy = (w: World, b: WBudget, now: number) => budgetView(w, b, now) as u
 
 /** The caller's budgets in the order they were made (R-L10 has no order; GET sorts them, §6.2). */
 export const listBudgets = (w: BudgetMockStore, user: string, now = Date.now()): Budget[] =>
-  w.budgets.filter((b) => b.owner_id === user).map((b) => legacy(w, b, now))
+  w.budgets
+    .filter((b) => b.owner_id === user && b.deleted_at === null)
+    .map((b) => legacy(w, b, now))
 
 export function createBudget(
   w: BudgetMockStore,
@@ -212,8 +250,14 @@ export function updateBudget(
   return legacy(w, engineUpdate(w, viewer(user, superuser), id, body, now), now)
 }
 
-export function deleteBudget(w: BudgetMockStore, id: string, user: string, superuser = false) {
-  engineDelete(w, viewer(user, superuser), id)
+export function deleteBudget(
+  w: BudgetMockStore,
+  id: string,
+  user: string,
+  superuser = false,
+  now = Date.now(),
+) {
+  engineDelete(w, viewer(user, superuser), id, now)
 }
 
 export function budgetStatus(

@@ -36,11 +36,23 @@ describe('budgets seed SQL', () => {
     expect(sql).toContain(`('routed', '2026-10-14T12:00:00.000Z'::timestamptz)`)
   })
 
-  it('reset removes only 5eed0017 rows; a server’s own watermarks and instants are never overwritten or removed', () => {
+  it('reset removes only 5eed0017 rows (the meta and watermarks are re-set by the next seed, not deleted)', () => {
     const reset = BUDGET_RESET.join('\n')
     for (const line of reset.split('\n').filter((l) => l.includes('DELETE FROM')))
       expect(line).toMatch(/5eed0017/)
     expect(reset).not.toMatch(/budget_meta|budget_watermarks/)
-    expect(sql).not.toMatch(/\bDO UPDATE\b|\bUPDATE budget/)
+  })
+
+  it('checks every table it writes, needs a superuser, and contains its own failure', () => {
+    for (const t of [
+      'budget_calls',
+      'budget_watermarks',
+      'budget_meta',
+      'budgets',
+      'budget_versions',
+    ])
+      expect(sql).toContain(`to_regclass('public.${t}') IS NULL`)
+    expect(sql).toContain('IF admin_id IS NULL THEN')
+    expect(sql).toContain('EXCEPTION WHEN OTHERS THEN')
   })
 })

@@ -54,4 +54,16 @@ describe('contract:check budgets', () => {
         .result,
     ).toBe('fail')
   })
+
+  it('a malformed as_of fails its own route, never the run; a listed fiscal_year needs the settings route', async () => {
+    const odd = async (path: string) =>
+      path === '/api/budgets/capabilities'
+        ? { status: 200, body: { data: { version: '1.0', features: ['fiscal_year'] } } }
+        : path.startsWith('/api/budgets/burn?scope=org')
+          ? { status: 200, body: { data: { as_of: 'not-a-date' } } }
+          : { status: 404, body: null }
+    const r = await checkBudgets(odd)
+    expect(r.verdicts.find((v) => v.feature === 'fiscal_year')!.result).toBe('unavailable')
+    expect(r.code).toBe(1)
+  })
 })
