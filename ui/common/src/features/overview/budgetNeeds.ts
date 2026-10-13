@@ -131,7 +131,7 @@ export function useBudgetNeeds(
   const caps = useQuery({ ...capabilitiesQuery, enabled })
   const available = caps.data?.kind === 'available'
   // A fleet reader (superuser, EE org admin or finance, B6) watches the fleet; anyone else their own budgets.
-  const who = useBudgetsViewer()
+  const who = useBudgetsViewer(enabled && available)
   const fleet = who.viewer ? readsFleet(who.viewer) : me.is_superuser
   const self = who.viewer?.id ?? me.sub
   const ref: ScopeRef = fleet ? { scope: 'org', id: null } : { scope: 'owner', id: self }

@@ -80,8 +80,8 @@ export const copy = {
   periodField: 'Resets',
   periodEveryMonth: 'Every month',
   periodEveryQuarter: 'Every quarter (Jan, Apr, Jul, Oct)',
-  periodChangeFrom: (period: 'month' | 'quarter', date: string) =>
-    `Every ${period} from ${date}: the current period keeps its limit and resets as before.`,
+  periodChangeFrom: (period: 'month' | 'quarter', date: string, now: 'month' | 'quarter') =>
+    `Every ${period} from ${date}. The limit below applies now, to this ${now}, and carries into the new period.`,
   periodPending: (period: 'month' | 'quarter', date: string) =>
     `Scheduled: every ${period} from ${date}.`,
   periodPendingCancel: 'Saving keeps the current period: the scheduled change is cancelled.',
@@ -426,6 +426,8 @@ export const copy = {
 
   // Editing in place (F10)
   editBudget: 'Edit budget',
+  editNotAllowed: 'You can’t change this budget.',
+  roleFailed: 'your organization role',
   adjustLimit: 'Adjust limit',
   adjustLimitFor: (name: string) => `Adjust limit: ${name}`,
   moreActions: (name: string) => `More actions: ${name}`,

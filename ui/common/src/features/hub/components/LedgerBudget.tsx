@@ -9,6 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect } from 'react'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { useBurn } from '@/features/budgets/api'
+import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
@@ -29,6 +30,7 @@ export function LedgerBudget({
   ownSession: boolean
 }) {
   const me = useQuery(meQuery).data
+  const viewer = useBudgetsViewer().viewer
   const caps = useQuery(capabilitiesQuery)
   // Session budgets are their own feature (BG-10, `session_budgets`): a 1.0 server may serve burns without them.
   const on = mayHave(caps.data, 'burn') && mayHave(caps.data, 'session_budgets')
@@ -69,8 +71,9 @@ export function LedgerBudget({
         burn={b}
         sessionId={sessionId}
         sessionName={title}
-        viewerId={me.sub}
-        writable={open && (ownSession || me.is_superuser)}
+        viewerId={viewer?.id ?? me.sub}
+        // Its owner or a superuser / EE org admin, never finance (§5), and only while the session is open.
+        writable={open && !viewer?.finance && (ownSession || !!viewer?.superuser)}
       />
     </Suspense>
   )

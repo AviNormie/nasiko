@@ -53,7 +53,9 @@ describe('quarter budgets', () => {
     expect(within(sheet).getByRole('radio', { name: copy.periodEveryMonth })).toBeChecked()
     await userEvent.click(within(sheet).getByRole('radio', { name: copy.periodEveryQuarter }))
     // Oct 14: the next boundary is Jan 1.
-    expect(sheet).toHaveTextContent(copy.periodChangeFrom('quarter', 'Jan 1'))
+    expect(sheet).toHaveTextContent(copy.periodChangeFrom('quarter', 'Jan 1', 'month'))
+    // The limit applies now, to this month (§4.3): its label stays the month's (B6 review).
+    expect(within(sheet).getByLabelText(copy.monthlyLimit)).toBeInTheDocument()
     await userEvent.click(within(sheet).getByRole('button', { name: copy.save }))
     await waitFor(() => expect(sheet).not.toBeInTheDocument())
     await rec.flush()
@@ -63,6 +65,22 @@ describe('quarter budgets', () => {
     const again = await editPricing()
     expect(again).toHaveTextContent(copy.periodPending('quarter', 'Jan 1'))
     expect(within(again).getByRole('radio', { name: copy.periodEveryQuarter })).toBeChecked()
+  })
+
+  it('picking the current period again cancels a scheduled change: PUT period=month', async () => {
+    const first = await editPricing()
+    await userEvent.click(within(first).getByRole('radio', { name: copy.periodEveryQuarter }))
+    await userEvent.click(within(first).getByRole('button', { name: copy.save }))
+    await waitFor(() => expect(first).not.toBeInTheDocument())
+    const rec = recordRequestBodies()
+    const again = await editPricing()
+    await userEvent.click(within(again).getByRole('radio', { name: copy.periodEveryMonth }))
+    expect(again).toHaveTextContent(copy.periodPendingCancel)
+    await userEvent.click(within(again).getByRole('button', { name: copy.save }))
+    await waitFor(() => expect(again).not.toBeInTheDocument())
+    await rec.flush()
+    expect(rec.requests.find((r) => r.method === 'PUT')?.body).toMatchObject({ period: 'month' })
+    rec.stop()
   })
 
   it('an edit that keeps the period sends none', async () => {
