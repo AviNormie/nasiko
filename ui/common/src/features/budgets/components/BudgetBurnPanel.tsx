@@ -4,14 +4,15 @@
  * minus Projected), then four figures: today, this week, the month to date (with its % of the limit) and the most per
  * day that keeps it within budget. On Yours the budget's population is named: "Calls billed to you", beside "Your
  * agents' spend" (they differ when you use others' agents or they use yours), then what's outside the budget. The
- * Burndown/Burn-up choice is the one /budgets remembers. Home renders it only once the burn read answered (D13).
+ * Burndown/Burn-up choice is the one /budgets remembers. Home renders it only once the burn read answered (D13). A unit
+ * has no Open budgets link until /budgets has unit scopes (B6).
  */
 import { Link } from '@tanstack/react-router'
 import { useId, useState } from 'react'
 import { BurnChart } from '@/components/charts/burn-chart'
 import { Delta } from '@/components/shared/delta'
 import { KpiTile } from '@/components/shared/kpi-tile'
-import { Panel, PanelSkeleton } from '@/components/shared/panel'
+import { Panel, PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtMoney, fmtMoneyFloor, fmtShortDay } from '@/lib/format'
@@ -39,7 +40,7 @@ export default function BudgetBurnPanel({
   scopeRef: ScopeRef
   /** "Fleet", "Yours" or a unit's name. */
   scopeName: string
-  /** The /budgets `?scope=` that opens the same scope. */
+  /** The /budgets `?scope=` that opens the same scope; none (a unit) hides the link. */
   scopeParam: string | undefined
   yours: boolean
   viewerId: string
@@ -86,14 +87,16 @@ export default function BudgetBurnPanel({
               </ToggleGroupItem>
             </ToggleGroup>
           ) : null}
-          <Link
-            to="/budgets"
-            search={scopeParam ? { scope: scopeParam } : {}}
-            aria-label={copy.homeOpenLabel(scopeName)}
-            className="text-xs font-medium text-primary-text underline-offset-4 hover:underline focus-visible:underline"
-          >
-            {copy.homeOpen} <span aria-hidden>→</span>
-          </Link>
+          {scopeParam ? (
+            <Link
+              to="/budgets"
+              search={{ scope: scopeParam }}
+              aria-label={copy.homeOpenLabel(scopeName)}
+              className="text-xs font-medium text-primary-text underline-offset-4 hover:underline focus-visible:underline"
+            >
+              {copy.homeOpen} <span aria-hidden>→</span>
+            </Link>
+          ) : null}
         </>
       }
     >
@@ -115,7 +118,11 @@ export default function BudgetBurnPanel({
           ) : risk.isPending ? (
             <PanelSkeleton height={96} />
           ) : risk.isError ? (
-            <p className="text-xs text-muted-foreground">{copy.atRiskFailed}</p>
+            <PanelError
+              error={risk.error}
+              onRetry={() => void risk.refetch()}
+              what={copy.atRiskFailed}
+            />
           ) : top.length ? (
             <AtRiskTable labelledBy={atRiskId} rows={top} onOwner={null} compact />
           ) : (

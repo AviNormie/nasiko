@@ -7,6 +7,7 @@ import { apiData, apiFetch, ApiError, type Checked } from '@/lib/api/client'
 import {
   alertListSchema,
   priceListSchema,
+  statusListSchema,
   atRiskListSchema,
   breakdownResponseSchema,
   budgetResponseSchema,
@@ -29,6 +30,7 @@ import {
   type Hours,
   type Price,
   type Scope,
+  type StatusRow,
   type TraceRow,
   type UnbudgetedRow,
   type UpdateBudgetBody,
@@ -407,5 +409,27 @@ export function usePrices(enabled: boolean) {
     enabled,
     staleTime: 10 * 60_000,
     refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * Status for every budget the caller can read inside a scope, the scope's own first (BG-8, §8.1): where Needs you finds
+ * the scope's own budget, which At risk never lists (§8.2).
+ */
+export function useScopeStatus(ref: ScopeRef, enabled: boolean) {
+  const query = scopeQuery(ref)
+  return useQuery({
+    queryKey: budgetKeys.read('status', query),
+    queryFn: async ({ signal }) =>
+      rowsOf(
+        await allPages<{ data: StatusRow[] }>(
+          `/api/budgets/status?${query}`,
+          signal,
+          statusListSchema,
+          true,
+        ),
+      ),
+    enabled,
+    ...read,
   })
 }

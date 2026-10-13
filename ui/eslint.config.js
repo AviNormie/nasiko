@@ -116,6 +116,8 @@ const PUBLIC = {
     'availability',
     // Home's Budget burn panel (F10, B4), lazy-loaded by the home.
     'components/BudgetBurnPanel',
+    // The projection rule (§4.6): Needs you rates the viewer's own budget the way At risk ranks the rest (B4 review).
+    'projection',
   ],
   // The hairline rows every Settings page is built from (EE uses them too).
   settings: ['components/SettingRow', 'components/Chosen', 'components/tileStyles'],
