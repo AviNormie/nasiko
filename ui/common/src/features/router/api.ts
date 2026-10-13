@@ -154,7 +154,8 @@ export function useUsageByAgent(enabled: boolean) {
   })
 }
 
-const routingQuery = (id: string) => ({
+/** One agent's routing read, as query options (the budget levers read it fresh before a pin, eng D4). */
+export const routingQuery = (id: string) => ({
   queryKey: routerKeys.agent(id),
   queryFn: ({ signal }: { signal: AbortSignal }) =>
     routerLimiter(signal, () => apiData<AgentRouting>(`/api/agents/${id}/llm-config`, { signal })),
