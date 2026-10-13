@@ -8,7 +8,7 @@ const admin = { id: 'u-admin', superuser: true }
 const ana = { id: 'u-ana', superuser: false }
 
 describe('whoFor', () => {
-  it('fleet, you, another user, an agent; units and sessions aren’t edited here', () => {
+  it('fleet, you, another user, an agent, a unit (B6); sessions are set on their ledger', () => {
     expect(whoFor('org', null, 'Fleet', admin)).toEqual({ kind: 'fleet' })
     expect(whoFor('owner', 'u-admin', 'admin', admin)).toEqual({ kind: 'you' })
     expect(whoFor('owner', 'u-ana', 'Ana', admin)).toEqual({
@@ -21,16 +21,31 @@ describe('whoFor', () => {
       id: 'a1',
       name: 'Pricing',
     })
-    expect(whoFor('unit', 'x', 'Platform', admin)).toBeNull()
+    expect(whoFor('unit', 'x', 'Platform', admin)).toEqual({
+      kind: 'unit',
+      id: 'x',
+      name: 'Platform',
+    })
     expect(whoFor('session', 'x', 'S1', admin)).toBeNull()
   })
 })
 
 describe('canWrite (§5)', () => {
-  it('a superuser any owner, agent or fleet budget; never units or sessions here', () => {
+  it('a superuser any owner, agent, fleet or unit budget; never sessions here', () => {
     expect(canWrite('org', null, admin)).toBe(true)
     expect(canWrite('owner', 'u-ana', admin)).toBe(true)
-    expect(canWrite('unit', null, admin)).toBe(false)
+    expect(canWrite('unit', 'eng', admin)).toBe(true)
+    expect(canWrite('session', 's1', admin)).toBe(false)
+  })
+
+  it('a unit lead writes only the units the org lets them (B6, §7 Q4); finance writes nothing', () => {
+    const lead = { id: 'u-maya', superuser: false, writeUnits: new Set(['eng']) }
+    expect(canWrite('unit', 'eng', lead)).toBe(true)
+    expect(canWrite('unit', 'sales', lead)).toBe(false)
+    expect(canWrite('unit', 'eng', { ...lead, writeUnits: new Set<string>() })).toBe(false)
+    const fin = { id: 'u-fin', superuser: false, finance: true }
+    expect(canWrite('owner', 'u-fin', fin)).toBe(false)
+    expect(canWrite('org', null, fin)).toBe(false)
   })
 
   it('anyone else their own owner and agent budgets only', () => {

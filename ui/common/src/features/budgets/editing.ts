@@ -1,7 +1,8 @@
 /**
  * Editing from /budgets (plan feat-budget-burn F10: "editing happens in place"), pure: who a budget is for (the sheet's
- * words), who may change it (budgets.md §5: a superuser any owner, agent or fleet budget; anyone else their own owner
- * and agent budgets; units and sessions aren't edited here, B5/B6), and a 1.0 record in the sheet's R-L10 shape.
+ * words), who may change it (budgets.md §5: a superuser or org admin any owner, agent, unit or fleet budget; a unit lead
+ * their units' while the org allows it, §7 Q4; finance nothing; anyone else their own owner and agent budgets; sessions
+ * are set on their ledger, B5), and a 1.0 record in the sheet's R-L10 shape.
  * `editing.test.ts`.
  */
 import type { BudgetWho } from './components/BudgetSheet'
@@ -16,6 +17,7 @@ export function whoFor(
   v: Viewer,
 ): BudgetWho | null {
   if (scope === 'org') return { kind: 'fleet' }
+  if (scope === 'unit' && target) return { kind: 'unit', id: target, name: label }
   if (scope === 'owner' && target)
     return target === v.id ? { kind: 'you' } : { kind: 'user', id: target, name: label }
   if (scope === 'agent' && target) return { kind: 'agent', id: target, name: label }
@@ -24,12 +26,20 @@ export function whoFor(
 
 /** A loaded budget's subject. */
 export const whoForBudget = (b: BudgetV1, label: string, v: Viewer) =>
-  whoFor(b.scope, b.scope === 'agent' ? b.agent_id : b.owner_id, label, v)
+  whoFor(
+    b.scope,
+    b.scope === 'agent' ? b.agent_id : b.scope === 'unit' ? b.unit_id : b.owner_id,
+    label,
+    v,
+  )
 
 /** May the viewer change a budget on `scope` owned by `ownerId` (§5). */
 export function canWrite(scope: Scope, ownerId: string | null, v: Viewer): boolean {
-  if (scope === 'unit' || scope === 'session') return false
+  if (scope === 'session') return false
   if (v.superuser) return true
+  if (v.finance) return false
+  // A unit's "owner" is the unit itself: the viewer's writable units (an admin's all, a lead's per §7 Q4).
+  if (scope === 'unit') return !!ownerId && !!v.writeUnits?.has(ownerId)
   return (scope === 'owner' || scope === 'agent') && ownerId === v.id
 }
 
@@ -37,6 +47,7 @@ export function canWrite(scope: Scope, ownerId: string | null, v: Viewer): boole
 export function scopeWho(s: PageScope, label: string): BudgetWho {
   if (s.kind === 'fleet') return { kind: 'fleet' }
   if (s.kind === 'owner') return { kind: 'user', id: s.id, name: label }
+  if (s.kind === 'unit') return { kind: 'unit', id: s.id, name: label }
   return { kind: 'you' }
 }
 

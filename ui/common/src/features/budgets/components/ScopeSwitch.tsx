@@ -1,6 +1,7 @@
 /**
- * The /budgets header switches (plan feat-budget-burn F12): scope (Fleet · Yours · an owner, superuser only; EE adds
- * units in B6) and period (Month · Quarter), as `ToggleGroup`s; owners are a `Select` beside the toggle.
+ * The /budgets header switches (plan feat-budget-burn F12): scope (Fleet · Yours · an owner, for a fleet reader; EE's
+ * units for whoever may read them, B6) and period (Month · Quarter), as `ToggleGroup`s; owners and units are `Select`s
+ * beside the toggle.
  */
 import {
   Select,
@@ -11,46 +12,70 @@ import {
 } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { copy } from '../copy'
+import type { HomeLevel } from '@/app/edition'
 import type { PageScope } from '../scope'
 
 export function ScopeSwitch({
   scope,
-  superuser,
+  fleet,
   owners,
+  units,
   onScope,
   period,
   onPeriod,
 }: {
   scope: PageScope
-  superuser: boolean
-  /** Other users, for the owner picker (superuser). */
+  /** Fleet and the owner picker: a superuser or org admin, or finance. */
+  fleet: boolean
+  /** Other users, for the owner picker (a fleet reader). */
   owners: readonly { id: string; name: string }[]
+  /** Units the viewer may read (EE), in tree order. */
+  units: readonly HomeLevel[]
   onScope: (s: PageScope) => void
   period: 'month' | 'quarter'
   onPeriod: (p: 'month' | 'quarter') => void
 }) {
   return (
     <>
-      {superuser ? (
+      {fleet || units.length ? (
         <>
           <ToggleGroup
             type="single"
             variant="outline"
             size="sm"
-            value={scope.kind === 'owner' ? '' : scope.kind}
+            value={scope.kind === 'owner' || scope.kind === 'unit' ? '' : scope.kind}
             onValueChange={(v) => {
               if (v === 'fleet' || v === 'yours') onScope({ kind: v })
             }}
             aria-label={copy.scopeLabel}
           >
-            <ToggleGroupItem value="fleet" className="px-3 text-xs">
-              {copy.scopeFleet}
-            </ToggleGroupItem>
+            {fleet ? (
+              <ToggleGroupItem value="fleet" className="px-3 text-xs">
+                {copy.scopeFleet}
+              </ToggleGroupItem>
+            ) : null}
             <ToggleGroupItem value="yours" className="px-3 text-xs">
               {copy.scopeYours}
             </ToggleGroupItem>
           </ToggleGroup>
-          {owners.length ? (
+          {units.length ? (
+            <Select
+              value={scope.kind === 'unit' ? scope.id : ''}
+              onValueChange={(id) => onScope({ kind: 'unit', id })}
+            >
+              <SelectTrigger size="sm" className="w-44 text-xs" aria-label={copy.scopeUnitPick}>
+                <SelectValue placeholder={copy.scopeUnit} />
+              </SelectTrigger>
+              <SelectContent>
+                {units.map((u) => (
+                  <SelectItem key={u.id} value={u.id} aria-label={u.path}>
+                    <span style={{ paddingLeft: `${u.depth * 0.75}rem` }}>{u.label}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {fleet && owners.length ? (
             <Select
               value={scope.kind === 'owner' ? scope.id : ''}
               onValueChange={(id) => onScope({ kind: 'owner', id })}

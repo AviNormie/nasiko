@@ -215,7 +215,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
               ? copy.budgetBurn.yours
               : (home.org.level?.label ?? copy.budgetBurn.unit)
         }
-        scopeParam={scope === 'fleet' || scope === 'yours' ? scope : undefined}
+        // A unit opens its own scope on /budgets (B6); every scope Home shows is one /budgets reads.
+        scopeParam={scope ?? undefined}
         yours={scope === 'yours'}
         viewerId={me.sub}
         atRisk={mayHave(caps.data, 'at_risk')}

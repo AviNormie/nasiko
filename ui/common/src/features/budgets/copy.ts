@@ -104,6 +104,13 @@ export const copy = {
   budgetFleetAlertOnly:
     'A fleet budget alerts only: much of its spend isn’t routed, so it can’t be stopped.',
   budgetFor: 'Applies to',
+  // A unit budget (EE, B6): its members' spend, every source priced; alert only (§7 Q1).
+  budgetDescriptionUnit:
+    'A monthly limit on all priced spend of this unit’s members (routed calls, other traced calls and harness estimates), with alerts as it crosses each mark.',
+  budgetUnitAlertOnly:
+    'A unit budget alerts only: much of its spend isn’t routed, so it can’t be stopped.',
+  scopeUnit: 'Unit',
+  scopeUnitPick: 'Pick a unit',
   stopConsequenceOwner: (date: string) =>
     `Every routed call billed to you gets an error until ${date}, including your chats with other people’s agents.`,
   budgetTiming: 'Limit changes apply within about a minute.',

@@ -16,7 +16,6 @@ import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { useUsers } from '@/features/agents/api'
 import { useRouter } from '@tanstack/react-router'
-import { meQuery } from '@/lib/api/auth'
 import { isEndpointAbsent } from '@/lib/api/detect'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { useSetSearch } from '@/lib/search'
@@ -55,7 +54,15 @@ import { ScopeSwitch } from './components/ScopeSwitch'
 import { copy } from './copy'
 import { canWrite, scopeWho, toSheetBudget, whoForBudget } from './editing'
 import { burnFromStatus } from './fallback'
-import { resolveScope, scopeParam, scopeRef, type PageScope, type Viewer } from './scope'
+import {
+  readsFleet,
+  resolveScope,
+  scopeParam,
+  scopeRef,
+  type PageScope,
+  type Viewer,
+} from './scope'
+import { useBudgetsViewer } from './useBudgetsViewer'
 import type { BudgetsSearch } from './search'
 import {
   changesWindow,
@@ -72,9 +79,9 @@ import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Budget, Burn } from './types'
 
 export function BudgetsPage({ search }: { search: BudgetsSearch }) {
-  const me = useQuery(meQuery)
+  const who = useBudgetsViewer()
   const caps = useQuery(capabilitiesQuery)
-  if (me.isPending || caps.isPending) return <PageLoader />
+  if (who.pending || caps.isPending) return <PageLoader />
   if (caps.isError)
     return (
       <Frame>
@@ -87,14 +94,8 @@ export function BudgetsPage({ search }: { search: BudgetsSearch }) {
         <StateCard title={copy.pageMissing}>{copy.pageMissingBody}</StateCard>
       </Frame>
     )
-  if (!me.data) return <PageLoader />
-  return (
-    <Page
-      search={search}
-      viewer={{ id: me.data.sub, superuser: me.data.is_superuser }}
-      caps={caps.data}
-    />
-  )
+  if (!who.viewer) return <PageLoader />
+  return <Page search={search} viewer={who.viewer} caps={caps.data} />
 }
 
 function Frame({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
@@ -115,7 +116,7 @@ function Page({
   caps,
 }: {
   search: BudgetsSearch
-  viewer: { id: string; superuser: boolean }
+  viewer: Viewer
   caps: Availability
 }) {
   const burnAvailable = mayHave(caps, 'burn')
@@ -141,7 +142,7 @@ function Page({
   // An R-L10 server (no burn route, F11): Yours draws this period from the owner budget's status row.
   const burnAbsent = !burnAvailable || isEndpointAbsent(burn.error)
   const fallback = useFallbackBurn(burnAbsent && scope.kind === 'yours', viewer.id)
-  const users = useUsers(viewer.superuser)
+  const users = useUsers(readsFleet(viewer))
   const [stored, setStored] = useState(() => storedBurnMode(viewer.id))
   const mode: BurnMode = search.burn ?? stored ?? 'down'
   const setMode = (m: BurnMode) => {
@@ -160,8 +161,9 @@ function Page({
       actions={
         <ScopeSwitch
           scope={scope}
-          superuser={viewer.superuser}
+          fleet={readsFleet(viewer)}
           owners={ownerOptions(users.data, viewer.id, scope, b)}
+          units={viewer.units ?? []}
           onScope={setScope}
           period={kind}
           onPeriod={(p) => setSearch({ period: p, day: undefined }, { replace: true })}
@@ -214,7 +216,7 @@ function Page({
           caps={caps}
           viewer={viewer}
           pageScope={scope}
-          onOwner={viewer.superuser ? (id) => setScope({ kind: 'owner', id }) : null}
+          onOwner={readsFleet(viewer) ? (id) => setScope({ kind: 'owner', id }) : null}
         />
       )}
     </Frame>
@@ -556,7 +558,11 @@ function Body({
         limitsInside={limitsInside}
         onOwner={onOwner}
         actions={(r) =>
-          canWrite(r.scope, r.scope === 'owner' ? r.target_id : r.owner_id, viewer) ? (
+          canWrite(
+            r.scope,
+            r.scope === 'owner' || r.scope === 'unit' ? r.target_id : r.owner_id,
+            viewer,
+          ) ? (
             <RowActions
               name={r.label}
               agentId={r.scope === 'agent' ? r.target_id : null}

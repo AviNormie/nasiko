@@ -5,6 +5,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiData, apiFetch, ApiError, type Checked } from '@/lib/api/client'
 import {
+  budgetSettingsSchema,
+  type BudgetSettings,
   alertListSchema,
   priceListSchema,
   statusListSchema,
@@ -218,6 +220,31 @@ const readBurn = one<Burn>('burn', burnResponseSchema)
 const readBreakdown = one<Breakdown>('burn/breakdown', breakdownResponseSchema)
 const readChanges = one<Changes>('burn/changes', changesResponseSchema)
 const readHours = one<Hours>('burn/hours', hoursResponseSchema)
+
+/** §6.8: the org's budget settings (anyone signed in reads them; EE adds `unit_leads_write`, B6). */
+export const budgetSettingsQuery = {
+  queryKey: budgetKeys.read('settings', ''),
+  queryFn: ({ signal }: { signal: AbortSignal }) =>
+    apiFetch<{ data: BudgetSettings }>('/api/budgets/settings', {
+      signal,
+      schema: budgetSettingsSchema,
+    }).then((r) => r.data),
+  ...read,
+}
+
+/** §6.8: a guarded write of the settings it names (superuser or org admin; 409 `settings_changed` when stale). */
+export function useSaveBudgetSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { unit_leads_write?: boolean; expected_updated_at: string }) =>
+      apiFetch<{ data: BudgetSettings }>('/api/budgets/settings', {
+        method: 'PUT',
+        headers: json,
+        body: JSON.stringify(body),
+      }),
+    onSettled: () => qc.invalidateQueries({ queryKey: budgetKeys.all }),
+  })
+}
 
 /** BG-3/BG-5: the scope's series for a period, with its budget (or null) inside. */
 type BurnOpts = {

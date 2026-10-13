@@ -11,7 +11,6 @@
  *   for the edition.
  */
 import type { ComponentType } from 'react'
-import type { TourStep } from '@/lib/tour'
 import type { NavGroupId, NavItem } from './shell/nav'
 
 export type EditionId = 'oss' | 'ee' | 'mt'
@@ -21,6 +20,45 @@ interface HarnessOrgScope {
   /** The org-level page (units, landing rules, org/team rows, the breadcrumb root). */
   Page: ComponentType
 }
+
+/** A query a layer hands the core to run (from a lazy chunk, so the layer's entry code needs no query hooks). */
+interface SlotQuery<T> {
+  queryKey: readonly unknown[]
+  queryFn: (ctx: { signal: AbortSignal }) => Promise<T>
+  staleTime?: number
+}
+
+/** A level the home's scope control adds after Yours and Fleet (EE: an org unit, with its subtree). */
+export interface HomeLevel {
+  /** The level's id, written to `?scope=unit:<id>`. */
+  id: string
+  label: string
+  /** Its ancestors' names and its own ("Engineering › Platform"): the accessible name, so same-named units differ. */
+  path: string
+  /** Nesting under its visible parent, for the picker's indent (0 = a root). */
+  depth: number
+}
+
+/**
+ * The home's org levels (plans/feat-agent-centric.md PR2c; eng "homeOrgScope defines { levels, filterRows, rollup }").
+ * OSS: Yours and Fleet only.
+ * - `levels`: the units the viewer may pick (the server already limits them: a manager's led subtrees, nothing for a
+ *   member).
+ * - `owners`: the users whose agents a level shows (its members, subtree included); the home keeps the rows they own.
+ *   The roll-up stays the sum of those rows: there is no team budget to show (R-L10 has owner and agent budgets only).
+ */
+export interface HomeOrgScope<L = unknown, M = unknown> {
+  levels: { query: SlotQuery<L>; list: (data: L) => readonly HomeLevel[] }
+  owners: {
+    query: (id: string) => SlotQuery<M>
+    /** The owners, or null when the server wouldn't say (`{"available": false}`): the level reads as not visible. */
+    ids: (data: M) => ReadonlySet<string> | null
+    /** Owners' names, so a manager's unit groups rows by person even without the user list. */
+    names: (data: M) => ReadonlyMap<string, string>
+  }
+}
+
+export const homeOrgScope = <L, M>(s: HomeOrgScope<L, M>) => s as unknown as HomeOrgScope
 
 /** Who else an agent can be shared with, besides users (EE: org units). */
 export interface GranteeKind {
@@ -56,21 +94,10 @@ interface OrgUnitFilterProps {
   onChange: (orgUnit: string | undefined) => void
 }
 
-/**
- * The product tour of a layer's own pages (EE: Access control). Matched after the core's pages; its steps load only
- * when it opens, so a layer's tour text stays out of its shell.
- */
-export interface LayerTour {
-  /** Remembered as seen under this id: unique across the core's tours (`features/tour/logic.ts`) and every layer's. */
-  id: string
-  /** The pages it covers (pathname). */
-  match: RegExp
-  steps: () => Promise<readonly TourStep[]>
-}
-
 /** Every slot has an OSS fallback in the core; a slot is added in the PR whose layer first fills it. */
 export interface Slots {
   harnessOrgScope: HarnessOrgScope | null
+  homeOrgScope: HomeOrgScope | null
   granteeKinds: GranteeKind[]
   connectorGranteeKinds: ConnectorGranteeKind[]
   settingsSections: SettingsSection[]
@@ -84,9 +111,30 @@ export interface Slots {
   optimizationWorkspace: ComponentType | null
   /** Sidebar items to hide for this viewer (EE: Access control below `can_read_org`). */
   navHidden: NavHidden | null
-  /** Tours of the layer's own pages. */
-  tours: LayerTour[]
+  /**
+   * The viewer's org role for budgets (plans/feat-budget-burn.md B6; budgets.md §5). OSS: none, the superuser flag
+   * alone. EE: an org admin reads and writes like a superuser, finance reads everything and writes nothing, a unit lead
+   * reads (and, while the org allows it, writes) the units they lead; the units themselves are `homeOrgScope`'s levels.
+   */
+  budgetsOrgRole: BudgetsOrgRole | null
 }
+
+export interface BudgetsOrgRoleOf {
+  /** The account the org context speaks for (owner budgets are this id's). */
+  id: string
+  admin: boolean
+  finance: boolean
+  /** Units the viewer leads (their sub-units come with them). */
+  leads: readonly string[]
+}
+
+/** One query and the role it says. Build it with `budgetsOrgRole()`, which pairs the two. */
+export interface BudgetsOrgRole<T = unknown> {
+  query: SlotQuery<T>
+  role: (data: T) => BudgetsOrgRoleOf
+}
+
+export const budgetsOrgRole = <T>(r: BudgetsOrgRole<T>) => r as unknown as BudgetsOrgRole
 
 /**
  * One query and the items to hide given its data (`undefined` while it loads). The shell runs the query from its lazy
@@ -107,6 +155,7 @@ export const navHidden = <T>(n: NavHidden<T>) => n as NavHidden
 /** The core's answer for every slot: an OSS build renders exactly this. */
 export const OSS_SLOTS: Slots = {
   harnessOrgScope: null,
+  homeOrgScope: null,
   granteeKinds: [],
   connectorGranteeKinds: [],
   settingsSections: [],
@@ -115,7 +164,7 @@ export const OSS_SLOTS: Slots = {
   shellEnd: null,
   optimizationWorkspace: null,
   navHidden: null,
-  tours: [],
+  budgetsOrgRole: null,
 }
 
 /** A layer's own sidebar item: any path its routes serve. */
@@ -147,7 +196,6 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     granteeKinds: [],
     connectorGranteeKinds: [],
     settingsSections: [],
-    tours: [],
   }
   for (const layer of layers) {
     const s = layer.slots ?? {}
@@ -155,13 +203,14 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     if (s.connectorGranteeKinds)
       out.connectorGranteeKinds = [...out.connectorGranteeKinds, ...s.connectorGranteeKinds]
     if (s.settingsSections) out.settingsSections = [...out.settingsSections, ...s.settingsSections]
-    if (s.tours) out.tours = [...out.tours, ...s.tours]
     if (s.harnessOrgScope !== undefined) out.harnessOrgScope = s.harnessOrgScope
+    if (s.homeOrgScope !== undefined) out.homeOrgScope = s.homeOrgScope
     if (s.tokenopsOrgUnitFilter !== undefined) out.tokenopsOrgUnitFilter = s.tokenopsOrgUnitFilter
     if (s.topbarStart !== undefined) out.topbarStart = s.topbarStart
     if (s.shellEnd !== undefined) out.shellEnd = s.shellEnd
     if (s.optimizationWorkspace !== undefined) out.optimizationWorkspace = s.optimizationWorkspace
     if (s.navHidden !== undefined) out.navHidden = s.navHidden
+    if (s.budgetsOrgRole !== undefined) out.budgetsOrgRole = s.budgetsOrgRole
   }
   return out
 }

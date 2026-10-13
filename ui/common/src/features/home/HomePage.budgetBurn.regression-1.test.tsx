@@ -136,7 +136,7 @@ describe('B4 review regressions', () => {
     expect(screen.queryByText(copy.budget.off)).toBeNull()
   })
 
-  it('a unit’s panel has no Open budgets link: /budgets has no unit scope until B6 (Codex 5)', () => {
+  it('a panel given no scope to open has no Open budgets link (Codex 5; units open theirs since B6)', () => {
     const w = worldFromScenario(budgetScenario(), { adminId: 'admin', edition: 'ee' })
     const ref = { scope: 'unit' as const, id: I.platform }
     render(
