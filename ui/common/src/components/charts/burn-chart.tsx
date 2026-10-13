@@ -1,0 +1,565 @@
+/**
+ * Lab: the burn chart (plans/feat-budget-burn.md F1, design 1B, 5C, 7B), on raw visx like the cost scatter: the time
+ * series kit draws one series family against a data-bound x domain, and a burn chart needs a fixed period domain, a
+ * future band, stepped limits and a hatched area below $0. One card, two plots on one x axis: the burn (burndown or
+ * burn-up) on top, the daily bars below, one crosshair, one picked day.
+ *
+ * Plain data props, no feature imports (`features/budgets/burn.ts` `chartModel` builds them; copy comes as labels).
+ * Marks follow the kit's defaults (design 5B): lines in the series edge, the band in the series fill, rules in theme
+ * tokens, every mark labelled or in the legend. Pointer-only: the Table view is the keyboard and screen-reader path
+ * (design 6B); `summary` is the accessible description. Lines sweep in once, drawn at rest under reduced motion.
+ */
+import { AxisBottom, AxisLeft } from '@visx/axis'
+import { GridRows } from '@visx/grid'
+import { Group } from '@visx/group'
+import { ParentSize } from '@visx/responsive'
+import { scaleLinear, scaleTime } from '@visx/scale'
+import { Area, LinePath } from '@visx/shape'
+import { motion, useReducedMotion } from 'motion/react'
+import { useId, useState } from 'react'
+import { Swatch } from '@/components/shared/chart-marks'
+import { seriesAt } from '@/lib/chart'
+import { HatchPattern } from './hatch-pattern'
+
+export interface BurnChartPoint {
+  t: number
+  v: number
+}
+
+export interface BurnChartData {
+  mode: 'down' | 'up'
+  start: number
+  end: number
+  actual: BurnChartPoint[]
+  pace: BurnChartPoint[][]
+  band: { t: number; low: number; high: number }[]
+  limits: { from: number; to: number; v: number }[]
+  thresholds: { from: number; to: number; v: number; percent: number }[]
+  /** The y value calls stop at (the stop line), or null. */
+  stopAt: number | null
+  runOut: { t: number; observed: boolean } | null
+  /** Events merged per day: the flag shows a count past one; hover lists them. */
+  markers: { day: string; t: number; labels: string[] }[]
+  bars: { day: string; t: number; v: number; spike: boolean }[]
+  minY: number
+  maxY: number
+}
+
+export interface BurnChartLabels {
+  actual: string
+  pace: string
+  band: string
+  limit: string
+  threshold: (percent: number) => string
+  /** The legend's key for the threshold lines. */
+  thresholds: string
+  stop: string
+  /** "−$41 over", drawn at the line's end when it is below $0 (burndown). */
+  over: string | null
+  runOut: string | null
+  preview: string
+  bars: string
+  spike: string
+  /** The chart's accessible description: the page's sentence (F12). */
+  summary: string
+}
+
+export interface BurnChartProps {
+  data: BurnChartData
+  labels: BurnChartLabels
+  formatMoney: (v: number) => string
+  formatDay: (t: number) => string
+  /** A dashed "Preview, not applied" line (a lever or what-if). */
+  preview?: BurnChartPoint[] | null
+  pickedDay?: string | null
+  onPickDay?: (day: string) => void
+  className?: string
+}
+
+const ACTUAL = seriesAt(0)
+const PREVIEW = seriesAt(2)
+const MARGIN = { top: 22, right: 64, bottom: 28, left: 56 }
+/** Share of the plot height the burn takes; the daily bars get the rest (design 1B). */
+const BURN_SHARE = 0.68
+const GAP = 14
+const TICK = { fill: 'var(--muted-foreground)', fontSize: 11 }
+
+export function BurnChart(props: BurnChartProps) {
+  const { labels, data, preview } = props
+  return (
+    <figure aria-label={labels.summary} className={props.className}>
+      <div role="presentation" className="h-72 md:h-80">
+        <ParentSize>
+          {({ width, height }) =>
+            width > 10 && height > 10 ? <Plot {...props} width={width} height={height} /> : null
+          }
+        </ParentSize>
+      </div>
+      <figcaption className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <Key color={ACTUAL.edge}>{labels.actual}</Key>
+        {data.pace.length ? (
+          <Key dashed color="var(--muted-foreground)">
+            {labels.pace}
+          </Key>
+        ) : null}
+        {data.band.length ? <Key band>{labels.band}</Key> : null}
+        {data.limits.length && data.mode === 'up' && data.stopAt === null ? (
+          <Key color="var(--foreground)">{labels.limit}</Key>
+        ) : null}
+        {data.thresholds.length ? (
+          <Key dashed color="var(--warning)">
+            {labels.thresholds}
+          </Key>
+        ) : null}
+        {data.stopAt !== null ? <Key color="var(--destructive)">{labels.stop}</Key> : null}
+        {preview?.length ? (
+          <Key dashed color={PREVIEW.edge}>
+            {labels.preview}
+          </Key>
+        ) : null}
+        <span className="inline-flex items-center gap-1.5">
+          <Swatch series={ACTUAL} /> {labels.bars}
+        </span>
+      </figcaption>
+    </figure>
+  )
+}
+
+/** A legend key: a solid or dashed rule in the mark's colour, or the band's swatch. */
+function Key({
+  children,
+  color,
+  dashed,
+  band,
+}: {
+  children: string
+  color?: string
+  dashed?: boolean
+  band?: boolean
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {band ? (
+        <span
+          aria-hidden
+          className="h-2.5 w-3 rounded-xs"
+          style={{ background: ACTUAL.fill, opacity: 0.45 }}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className="w-3"
+          style={{ borderTop: `2px ${dashed ? 'dashed' : 'solid'} ${color}` }}
+        />
+      )}
+      {children}
+    </span>
+  )
+}
+
+function Plot({
+  data,
+  labels,
+  formatMoney,
+  formatDay,
+  preview,
+  pickedDay,
+  onPickDay,
+  width,
+  height,
+}: BurnChartProps & { width: number; height: number }) {
+  const reduce = useReducedMotion()
+  const hatch = useId().replace(/:/g, '')
+  const [hover, setHover] = useState<number | null>(null)
+  const innerW = Math.max(0, width - MARGIN.left - MARGIN.right)
+  const innerH = Math.max(0, height - MARGIN.top - MARGIN.bottom)
+  const burnH = innerH * BURN_SHARE
+  const barsTop = burnH + GAP
+  const barsH = Math.max(0, innerH - barsTop)
+
+  const x = scaleTime({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
+  const lowY = Math.min(0, data.minY, ...(preview ?? []).map((p) => p.v))
+  const highY = Math.max(data.maxY, ...(preview ?? []).map((p) => p.v)) * 1.06 || 1
+  const y = scaleLinear({ domain: [lowY, highY], range: [burnH, 0], nice: true })
+  const barMax = Math.max(1e-9, ...data.bars.map((b) => b.v))
+  const yb = scaleLinear({ domain: [0, barMax], range: [barsH, 0], nice: true })
+  const X = (t: number) => x(new Date(t))
+  const dayW = Math.max(1, (X(data.start + 86_400_000) - X(data.start)) * 0.72)
+  const sweep = reduce ? undefined : { initial: { pathLength: 0 }, animate: { pathLength: 1 } }
+  const zeroY = y(0)
+  const last = data.actual.at(-1)
+
+  const hovered =
+    hover === null
+      ? null
+      : data.bars.reduce<(typeof data.bars)[number] | null>(
+          (best, b) =>
+            !best || Math.abs(b.t + 43_200_000 - hover) < Math.abs(best.t + 43_200_000 - hover)
+              ? b
+              : best,
+          null,
+        )
+  const atHover = (pts: BurnChartPoint[]) => {
+    if (hovered === null) return null
+    const t = hovered.t + 86_400_000
+    const p = pts.findLast((q) => q.t <= t)
+    return p ?? null
+  }
+
+  const actualAt = atHover(data.actual)
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      className="overflow-visible"
+      onPointerMove={(e) => {
+        const box = e.currentTarget.getBoundingClientRect()
+        const px = e.clientX - box.left - MARGIN.left
+        setHover(px >= 0 && px <= innerW ? x.invert(px).getTime() : null)
+      }}
+      onPointerLeave={() => setHover(null)}
+      onClick={() => {
+        if (hovered && onPickDay) onPickDay(hovered.day)
+      }}
+    >
+      <HatchPattern id={hatch} stroke="var(--destructive)" />
+      <Group left={MARGIN.left} top={MARGIN.top}>
+        <GridRows
+          scale={y}
+          width={innerW}
+          numTicks={4}
+          stroke="var(--border)"
+          strokeOpacity={0.6}
+        />
+        {/* Over the limit: the area below $0 is hatched with a destructive edge (design 5C). */}
+        {data.mode === 'down' && lowY < 0 ? (
+          <g aria-hidden>
+            <rect
+              x={0}
+              y={zeroY}
+              width={innerW}
+              height={Math.max(0, burnH - zeroY)}
+              fill={`url(#${hatch})`}
+              opacity={0.25}
+            />
+            <line
+              x1={0}
+              x2={innerW}
+              y1={zeroY}
+              y2={zeroY}
+              stroke="var(--destructive)"
+              strokeWidth={1}
+            />
+          </g>
+        ) : null}
+        {/* The band from as_of to the reset (design 4B: "projection from recent spending rates"). */}
+        {data.band.length ? (
+          <g aria-hidden>
+            <Area
+              data={data.band}
+              x={(d) => X(d.t)}
+              y0={(d) => y(d.low)}
+              y1={(d) => y(d.high)}
+              fill={ACTUAL.fill}
+              fillOpacity={0.45}
+            />
+            {/* The edges, so a band whose two rates agree still shows its projection as one dashed line. */}
+            {(['low', 'high'] as const).map((edge) => (
+              <LinePath
+                key={edge}
+                data={data.band}
+                x={(d) => X(d.t)}
+                y={(d) => y(d[edge])}
+                stroke={ACTUAL.edge}
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+              />
+            ))}
+          </g>
+        ) : null}
+        {data.pace.map((seg) => (
+          <LinePath
+            key={seg[0]?.t ?? 0}
+            data={seg}
+            x={(d) => X(d.t)}
+            y={(d) => y(d.v)}
+            stroke="var(--muted-foreground)"
+            strokeDasharray="4 4"
+            strokeWidth={1}
+            aria-hidden
+          />
+        ))}
+        {data.mode === 'up'
+          ? data.limits.map((l, i) => (
+              <g key={l.from} aria-hidden>
+                <line
+                  x1={X(l.from)}
+                  x2={X(l.to)}
+                  y1={y(l.v)}
+                  y2={y(l.v)}
+                  stroke={data.stopAt !== null ? 'var(--destructive)' : 'var(--foreground)'}
+                  strokeWidth={1.5}
+                />
+                {/* Inside the plot, above the line, right-aligned (as ReferenceLine): never clipped by the margin. */}
+                {i === data.limits.length - 1 ? (
+                  <Label x={X(l.to) - 2} y={y(l.v) - 9} anchor="end">
+                    {data.stopAt !== null
+                      ? `${formatMoney(l.v)} · ${labels.stop}`
+                      : formatMoney(l.v)}
+                  </Label>
+                ) : null}
+              </g>
+            ))
+          : null}
+        {data.thresholds.map((th) => (
+          <g key={`${th.from}:${th.percent}`} aria-hidden>
+            <line
+              x1={X(th.from)}
+              x2={X(th.to)}
+              y1={y(th.v)}
+              y2={y(th.v)}
+              stroke="var(--warning)"
+              strokeDasharray="2 3"
+              strokeWidth={1}
+            />
+            {th.to >= data.end - 1 ? (
+              <Label x={X(th.to) + 4} y={y(th.v)} anchor="start">
+                {labels.threshold(th.percent)}
+              </Label>
+            ) : null}
+          </g>
+        ))}
+        {data.stopAt !== null && data.mode === 'down' ? (
+          <g aria-hidden>
+            <line
+              x1={0}
+              x2={innerW}
+              y1={y(data.stopAt)}
+              y2={y(data.stopAt)}
+              stroke="var(--destructive)"
+              strokeWidth={1.5}
+            />
+            <Label x={innerW + 4} y={y(data.stopAt)} anchor="start">
+              {labels.stop}
+            </Label>
+          </g>
+        ) : null}
+        {preview?.length ? (
+          <LinePath
+            data={preview}
+            x={(d) => X(d.t)}
+            y={(d) => y(d.v)}
+            stroke={PREVIEW.edge}
+            strokeWidth={2}
+            strokeDasharray="6 4"
+            aria-hidden
+          />
+        ) : null}
+        <LinePath data={data.actual} x={(d) => X(d.t)} y={(d) => y(d.v)}>
+          {({ path }) => (
+            <motion.path
+              d={path(data.actual) ?? ''}
+              fill="none"
+              stroke={ACTUAL.edge}
+              strokeWidth={2.5}
+              strokeLinejoin="round"
+              transition={{ duration: 0.6, ease: 'easeOut' }}
+              aria-hidden
+              {...sweep}
+            />
+          )}
+        </LinePath>
+        {last ? (
+          <g aria-hidden>
+            <circle cx={X(last.t)} cy={y(last.v)} r={3.5} fill={ACTUAL.edge} />
+            {labels.over ? (
+              <Label x={X(last.t) + 6} y={y(last.v) + 12} anchor="start" tone="var(--destructive)">
+                {labels.over}
+              </Label>
+            ) : null}
+          </g>
+        ) : null}
+        {data.runOut && labels.runOut ? (
+          <g aria-hidden>
+            <line
+              x1={X(data.runOut.t)}
+              x2={X(data.runOut.t)}
+              y1={0}
+              y2={burnH}
+              stroke="var(--destructive)"
+              strokeDasharray={data.runOut.observed ? undefined : '3 3'}
+              strokeWidth={1}
+            />
+            <Label x={X(data.runOut.t)} y={-8} anchor="middle" tone="var(--destructive)">
+              {labels.runOut}
+            </Label>
+          </g>
+        ) : null}
+        {/* Event flags, merged per day with a count (design 7B); hover lists them. */}
+        {data.markers.map((m) => (
+          <g key={m.day} transform={`translate(${X(m.t)}, ${burnH - 2})`} aria-hidden>
+            <title>{m.labels.join('\n')}</title>
+            <path
+              d="M0,0 L0,-12 L8,-9 L0,-6"
+              fill="none"
+              stroke="var(--foreground)"
+              strokeWidth={1.2}
+            />
+            {m.labels.length > 1 ? (
+              <Label x={4} y={-19} anchor="middle">
+                {`+${m.labels.length - 1}`}
+              </Label>
+            ) : null}
+          </g>
+        ))}
+
+        {/* The daily bars, on the same x axis. */}
+        <Group top={barsTop}>
+          {data.bars.map((b) => {
+            const h = barsH - yb(b.v)
+            const picked = b.day === pickedDay
+            return (
+              <g key={b.day} aria-hidden>
+                <rect
+                  x={X(b.t + 43_200_000) - dayW / 2}
+                  y={yb(b.v)}
+                  width={dayW}
+                  height={Math.max(0, h)}
+                  fill={ACTUAL.fill}
+                  opacity={pickedDay && !picked ? 0.45 : 1}
+                />
+                {h > 0 ? (
+                  <rect
+                    x={X(b.t + 43_200_000) - dayW / 2}
+                    y={yb(b.v)}
+                    width={dayW}
+                    height={2}
+                    fill={ACTUAL.edge}
+                  />
+                ) : null}
+                {b.spike ? (
+                  <text
+                    x={X(b.t + 43_200_000)}
+                    y={yb(b.v) - 3}
+                    textAnchor="middle"
+                    className="fill-warning text-2xs font-semibold"
+                  >
+                    !
+                  </text>
+                ) : null}
+              </g>
+            )
+          })}
+          <AxisLeft
+            scale={yb}
+            numTicks={2}
+            tickFormat={(v) => formatMoney(Number(v))}
+            stroke="transparent"
+            tickStroke="transparent"
+            tickLabelProps={() => ({ ...TICK, textAnchor: 'end', dx: -4, dy: 3 })}
+          />
+          <AxisBottom
+            top={barsH}
+            scale={x}
+            numTicks={Math.max(2, Math.min(8, Math.floor(innerW / 90)))}
+            tickFormat={(d) => formatDay((d as Date).getTime())}
+            stroke="var(--border)"
+            tickStroke="var(--border)"
+            tickLabelProps={() => ({ ...TICK, textAnchor: 'middle' })}
+          />
+        </Group>
+        <AxisLeft
+          scale={y}
+          numTicks={4}
+          tickFormat={(v) => formatMoney(Number(v))}
+          stroke="transparent"
+          tickStroke="transparent"
+          tickLabelProps={() => ({ ...TICK, textAnchor: 'end', dx: -4, dy: 3 })}
+        />
+
+        {/* One crosshair across both plots, and the picked day's outline. */}
+        {hovered ? (
+          <line
+            aria-hidden
+            x1={X(hovered.t + 43_200_000)}
+            x2={X(hovered.t + 43_200_000)}
+            y1={0}
+            y2={innerH}
+            stroke="var(--muted-foreground)"
+            strokeWidth={1}
+          />
+        ) : null}
+      </Group>
+      {hovered ? (
+        <Tip
+          left={Math.min(width - 190, MARGIN.left + X(hovered.t + 43_200_000) + 10)}
+          top={MARGIN.top}
+          title={formatDay(hovered.t)}
+          rows={[
+            [labels.bars, formatMoney(hovered.v)],
+            ...(actualAt ? [[labels.actual, formatMoney(actualAt.v)] as [string, string]] : []),
+            ...(hovered.spike ? [[labels.spike, ''] as [string, string]] : []),
+          ]}
+        />
+      ) : null}
+    </svg>
+  )
+}
+
+function Label({
+  x,
+  y,
+  anchor,
+  tone = 'var(--muted-foreground)',
+  children,
+}: {
+  x: number
+  y: number
+  anchor: 'start' | 'middle' | 'end'
+  tone?: string
+  children: string
+}) {
+  return (
+    <text
+      x={x}
+      y={y}
+      dy={3}
+      textAnchor={anchor}
+      fill={tone}
+      // A halo in the surface colour keeps the label legible over the marks (as ReferenceLine).
+      stroke="var(--card)"
+      strokeWidth={3}
+      paintOrder="stroke"
+      className="text-2xs"
+    >
+      {children}
+    </text>
+  )
+}
+
+function Tip({
+  left,
+  top,
+  title,
+  rows,
+}: {
+  left: number
+  top: number
+  title: string
+  rows: [string, string][]
+}) {
+  return (
+    <foreignObject x={left} y={top} width={180} height={24 + rows.length * 18} aria-hidden>
+      <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm">
+        <div className="font-medium">{title}</div>
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-3 tabular-nums">
+            <span className="text-muted-foreground">{k}</span>
+            <span>{v}</span>
+          </div>
+        ))}
+      </div>
+    </foreignObject>
+  )
+}
