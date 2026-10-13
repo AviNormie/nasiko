@@ -213,7 +213,12 @@ Secrets are encrypted env vars injected into agent containers at runtime. There 
     nasiko rm my-agent              # terminate and deregister
     nasiko rm my-agent -f           # force removal without confirmation
 
-**restart** destroys and recreates the container — it picks up any secrets you've changed since the last deploy. **stop/start** just pause and resume without changing configuration.
+**restart** picks up any secrets you've changed since the last deploy. On a runtime that can replace a running agent in place it does so one instance at a time, so the agent stays available and keeps its replica bounds; otherwise (the agent is stopped, a fresh image pull was requested, or the runtime cannot) it destroys and recreates the container. **stop/start** just pause and resume without changing configuration.
+
+### Scaling
+
+Every agent runs one replica; `nasiko scale <agent> <n>` sets a fixed count. Per-agent autoscaling
+is an enterprise feature.
 
 ### Cluster health
 
