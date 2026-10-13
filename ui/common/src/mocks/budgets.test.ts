@@ -1,5 +1,6 @@
 // @vitest-environment node
-// The budgets mock is the proposed R-L10 contract's reference behaviour (plans/feat-llm-router.md §5).
+// The budgets mock is the proposed R-L10 contract's reference behaviour (plans/feat-llm-router.md §5), now answered by the
+// 1.0 engine (docs/requirements/budgets.md); the assertions marked 1.0 follow its §12 changes.
 import { describe, expect, it } from 'vitest'
 import { buildAgentsState } from './agents'
 import {
@@ -29,8 +30,11 @@ describe('seeded budgets', () => {
     const st = budgetStatus(s, seed, agents, ADMIN_ID, now)
     expect(st.covers).toBe('routed_calls')
     const byId = new Map(listBudgets(s, ADMIN_ID).map((b) => [b.id, b]))
-    const [owner, stopped, ok] = st.data
-    expect(byId.get(owner!.budget_id)!.scope).toBe('owner')
+    // 1.0 orders status rows by scope, then label (§8.1).
+    const owner = st.data[0]!
+    const stopped = st.data.find((d) => byId.get(d.budget_id)!.action === 'stop')
+    const ok = st.data.find((d) => d !== owner && d !== stopped)
+    expect(byId.get(owner.budget_id)!.scope).toBe('owner')
     expect(owner).toMatchObject({ state: 'warning', crossed: 80, stopped: false })
     expect(stopped).toMatchObject({ state: 'exceeded', crossed: 100, stopped: true })
     expect(byId.get(stopped!.budget_id)!.action).toBe('stop')
@@ -188,15 +192,17 @@ describe('writes', () => {
     expect(c({ scope: 'owner', limit_usd: 5, thresholds: [50, 50] })).toThrow(
       'thresholds must be whole percents from 1 to 100',
     )
-    expect(c({ scope: 'team', limit_usd: 5 })).toThrow('scope must be owner or agent')
+    // 1.0 (§13): the five scopes.
+    expect(c({ scope: 'team', limit_usd: 5 })).toThrow(
+      'scope must be org, unit, owner, agent or session',
+    )
     expect(c({ scope: 'owner', limit_usd: 5, action: 'pause' })).toThrow(
       'action must be alert or stop',
     )
-    expect(c({ scope: 'agent', agent_id: other.id, limit_usd: 5 })).toThrow('not the agent owner')
-    expect(c({ scope: 'agent', agent_id: 'no-such-agent', limit_usd: 5 })).toThrow(
-      'not the agent owner',
-    )
-    expect(c({ scope: 'agent', limit_usd: 5 })).toThrow('not the agent owner')
+    // 1.0 (§5, §12): a target the caller can't read, or that doesn't exist, is one 404; a missing target is a 400.
+    expect(c({ scope: 'agent', agent_id: other.id, limit_usd: 5 })).toThrow('not found')
+    expect(c({ scope: 'agent', agent_id: 'no-such-agent', limit_usd: 5 })).toThrow('not found')
+    expect(c({ scope: 'agent', limit_usd: 5 })).toThrow('agent_id is required')
   })
 
   it('PUT is a guarded full replace; DELETE removes; an unknown id is a 404', () => {

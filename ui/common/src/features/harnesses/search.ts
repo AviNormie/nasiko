@@ -80,6 +80,9 @@ export const HARNESS_MOCK_VARIANTS = [
   // Budget page variants (plans/feat-budget-burn.md); same reason.
   'budgets-empty',
   'budgets-fail',
+  'budgets-absent',
+  'budgets-rl10-only',
+  'budgets-golden',
 ] as const
 
 const id = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))

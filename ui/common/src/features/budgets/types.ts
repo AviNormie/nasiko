@@ -83,25 +83,17 @@ const iso = z.string()
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 const uuid = z.string()
 
-export const SCOPES = ['org', 'unit', 'owner', 'agent', 'session'] as const
-export const scopeSchema = z.enum(SCOPES)
+const SCOPES = ['org', 'unit', 'owner', 'agent', 'session'] as const
+const scopeSchema = z.enum(SCOPES)
 export type Scope = z.infer<typeof scopeSchema>
-export const coversSchema = z.enum(['routed_calls', 'all_priced'])
+const coversSchema = z.enum(['routed_calls', 'all_priced'])
 export type Covers = z.infer<typeof coversSchema>
 const actionSchema = z.enum(['alert', 'stop'])
 const stateSchema = z.enum(['ok', 'warning', 'exceeded'])
-export const DIMENSIONS = [
-  'agent',
-  'owner',
-  'unit',
-  'model',
-  'operation',
-  'session',
-  'source',
-] as const
-export const dimensionSchema = z.enum(DIMENSIONS)
+const DIMENSIONS = ['agent', 'owner', 'unit', 'model', 'operation', 'session', 'source'] as const
+const dimensionSchema = z.enum(DIMENSIONS)
 export type Dimension = z.infer<typeof dimensionSchema>
-export const EVENT_KINDS = [
+const EVENT_KINDS = [
   'threshold',
   'forecast',
   'forecast_cleared',
@@ -112,7 +104,6 @@ export const EVENT_KINDS = [
   'period_change_scheduled',
   'fiscal_year_changed',
 ] as const
-export type EventKind = (typeof EVENT_KINDS)[number]
 /** A known kind, or any other string (a newer server's kind, ignored by the UI). */
 const kindOf = <T extends readonly [string, ...string[]]>(known: T) =>
   z.union([z.enum(known), z.string()])
@@ -128,9 +119,8 @@ const one = <T extends z.ZodType>(row: T) => z.looseObject({ data: row })
 export const capabilitiesSchema = one(
   z.looseObject({ version: z.string(), features: z.array(z.string()) }),
 )
-export type Capabilities = z.infer<typeof capabilitiesSchema>['data']
 
-export const budgetV1Schema = z.looseObject({
+const budgetV1Schema = z.looseObject({
   id: uuid,
   scope: scopeSchema,
   agent_id: uuid.nullable(),
@@ -199,14 +189,13 @@ export const budgetSettingsSchema = one(
     updated_at: iso,
   }),
 )
-export type BudgetSettings = z.infer<typeof budgetSettingsSchema>['data']
 
 const sourcesSchema = z.looseObject({
   routed_usd: usd,
   traced_usd: usd,
   harness_estimate_usd: usd,
 })
-export const burnDaySchema = z.looseObject({
+const burnDaySchema = z.looseObject({
   date: day,
   cost_usd: usd,
   calls: z.number().int(),
@@ -231,7 +220,7 @@ const periodSchema = z.looseObject({
   used_usd: usd,
   unpriced_calls: z.number().int(),
 })
-export const budgetEventSchema = z.looseObject({
+const budgetEventSchema = z.looseObject({
   id: z.string(),
   at: iso,
   kind: kindOf(EVENT_KINDS),
@@ -248,7 +237,7 @@ export const budgetEventSchema = z.looseObject({
   effective_from: iso.nullable(),
 })
 export type BudgetEvent = z.infer<typeof budgetEventSchema>
-export const burnSchema = z.looseObject({
+const burnSchema = z.looseObject({
   scope: scopeSchema,
   id: z.string().nullable(),
   label: z.string(),
@@ -331,7 +320,7 @@ const breakdownKeySchema = z.looseObject({
   routed_input_tokens: z.number().int().optional(),
   routed_output_tokens: z.number().int().optional(),
 })
-export const breakdownSchema = z.looseObject({
+const breakdownSchema = z.looseObject({
   by: dimensionSchema,
   from: day,
   to: day,
@@ -357,7 +346,7 @@ export const breakdownSchema = z.looseObject({
 export type Breakdown = z.infer<typeof breakdownSchema>
 export const breakdownResponseSchema = one(breakdownSchema)
 
-export const changesSchema = z.looseObject({
+const changesSchema = z.looseObject({
   by: dimensionSchema,
   as_of: iso,
   covers: coversSchema,
@@ -383,7 +372,7 @@ export const changesSchema = z.looseObject({
 export type Changes = z.infer<typeof changesSchema>
 export const changesResponseSchema = one(changesSchema)
 
-export const hoursSchema = z.looseObject({
+const hoursSchema = z.looseObject({
   date: day,
   as_of: iso,
   covers: coversSchema,
@@ -399,7 +388,7 @@ export const hoursSchema = z.looseObject({
 export type Hours = z.infer<typeof hoursSchema>
 export const hoursResponseSchema = one(hoursSchema)
 
-export const traceRowSchema = z.looseObject({
+const traceRowSchema = z.looseObject({
   row_id: z.string(),
   as_of: iso,
   covers: coversSchema,
@@ -419,7 +408,7 @@ export type TraceRow = z.infer<typeof traceRowSchema>
 export const traceListSchema = list(traceRowSchema)
 
 const dayCost = z.looseObject({ date: day, cost_usd: usd })
-export const statusRowSchema = z.looseObject({
+const statusRowSchema = z.looseObject({
   budget_id: uuid,
   scope: scopeSchema,
   label: z.string(),
@@ -444,7 +433,7 @@ export const statusListSchema = list(statusRowSchema).extend({
   covers: z.literal('routed_calls').optional(),
 })
 
-export const atRiskRowSchema = z.looseObject({
+const atRiskRowSchema = z.looseObject({
   budget_id: uuid,
   scope: scopeSchema,
   target_id: z.string().nullable(),
@@ -474,7 +463,7 @@ export const atRiskRowSchema = z.looseObject({
 export type AtRiskRow = z.infer<typeof atRiskRowSchema>
 export const atRiskListSchema = list(atRiskRowSchema)
 
-export const unbudgetedRowSchema = z.looseObject({
+const unbudgetedRowSchema = z.looseObject({
   agent_id: uuid,
   label: z.string(),
   owner_id: uuid,
@@ -491,7 +480,7 @@ export const unbudgetedRowSchema = z.looseObject({
 export type UnbudgetedRow = z.infer<typeof unbudgetedRowSchema>
 export const unbudgetedListSchema = list(unbudgetedRowSchema)
 
-export const alertV1Schema = z.looseObject({
+const alertV1Schema = z.looseObject({
   id: z.string(),
   budget_id: uuid,
   label: z.string(),
