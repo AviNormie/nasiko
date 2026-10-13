@@ -53,6 +53,8 @@ import { copy } from './copy'
 import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import { isUnitScope, type HomeSearch, type Scope } from './search'
+import { useBurn, type ScopeRef } from '@/features/budgets/api'
+import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
 import {
   BAND_SKELETON_PX,
   PHONE_QUERY,
@@ -65,6 +67,8 @@ import { useBudgetStamp } from './useBudgetStamp'
 
 /** The chart band is its own chunk (PR2d, #63): the chart kit loads only when it draws. */
 const ChartBand = lazy(() => import('./components/ChartBand'))
+// Its own chunk too: the burn chart loads only once the burn read answered (plans/feat-budget-burn.md F10, D13).
+const BudgetBurnPanel = lazy(() => import('@/features/budgets/components/BudgetBurnPanel'))
 
 type SetSearch = (patch: Partial<HomeSearch>, opts?: { replace?: boolean }) => void
 
@@ -175,6 +179,43 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         days,
       })
     : null
+
+  // Budget burn (plans/feat-budget-burn.md F10, D13): the scope's burn read; the panel replaces Spend · Over time only
+  // once it answers. Fleet is the org's for a superuser (a member's Fleet is only what's shared with them).
+  const caps = useQuery(capabilitiesQuery)
+  const burnRef: ScopeRef | null =
+    scope === 'fleet'
+      ? me.is_superuser
+        ? { scope: 'org', id: null }
+        : null
+      : scope === 'yours'
+        ? { scope: 'owner', id: me.sub }
+        : unit
+          ? { scope: 'unit', id: scope.slice('unit:'.length) }
+          : null
+  const burn = useBurn(
+    burnRef ?? { scope: 'org', id: null },
+    { period: 'month' },
+    !!burnRef && mayHave(caps.data, 'burn'),
+  )
+  const burnPanel =
+    burnRef && burn.data ? (
+      <BudgetBurnPanel
+        burn={burn.data}
+        scopeRef={burnRef}
+        scopeName={
+          scope === 'fleet'
+            ? copy.budgetBurn.fleet
+            : scope === 'yours'
+              ? copy.budgetBurn.yours
+              : (home.org.level?.label ?? copy.budgetBurn.unit)
+        }
+        scopeParam={scope === 'fleet' || scope === 'yours' ? scope : undefined}
+        yours={scope === 'yours'}
+        viewerId={me.sub}
+        atRisk={mayHave(caps.data, 'at_risk')}
+      />
+    ) : null
 
   // The health bar narrows the table only (#62): the strip and the charts keep the whole scope.
   const health = search.health
@@ -427,6 +468,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
               ratingsPending={home.ratingsPending}
               health={health}
               onHealth={(h) => change({ health: h })}
+              burn={burnPanel}
             />
           </Suspense>
           {health ? (

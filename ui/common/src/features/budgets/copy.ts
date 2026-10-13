@@ -363,6 +363,19 @@ export const copy = {
   previewReset: 'Reset',
   reviewActions: 'Review actions',
 
+  // Home's Budget burn panel (F10, F12, ledger #79)
+  homeTitle: (scope: string) => `Budget burn · ${scope}`,
+  homeOpen: 'Open budgets',
+  homeOpenLabel: (scope: string) => `Open budgets: ${scope}`,
+  homeAtRisk: 'At risk',
+  homeAtRiskNone: 'Nothing reaches its limit before the reset.',
+  homeBilled: 'Calls billed to you',
+  homeAgents: 'Your agents’ spend',
+  homeAgentsNote: 'Every caller, this month',
+  homeOutside: (traced: string, harness: string) =>
+    `Outside this budget this month: ${traced} traced, ${harness} harness estimates`,
+  homeAtMost: 'At most a day',
+
   // Editing in place (F10)
   editBudget: 'Edit budget',
   adjustLimit: 'Adjust limit',

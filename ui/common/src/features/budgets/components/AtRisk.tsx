@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
 import { copy } from '../copy'
 import { Partial } from './Partial'
 import type { AtRiskRow } from '../types'
-import { CELL, HEAD, Label, ROW } from './tableStyles'
+import { CELL, CELL_STACKED, HEAD, Label, ROW, ROW_STACKED, StackedLabel } from './tableStyles'
 import { UsedBar } from './UsedBar'
 
 export function AtRisk({
@@ -77,79 +77,7 @@ export function AtRisk({
           {copy.atRiskEmpty(resetsAt ? fmtShortDay(resetsAt) : '')}
         </p>
       ) : (
-        <div className="rounded-lg border border-border">
-          <Table aria-labelledby={id} className="max-lg:block">
-            <TableHeader className="max-lg:sr-only">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className={HEAD}>{copy.colBudget}</TableHead>
-                <TableHead className={HEAD}>{copy.colOwner}</TableHead>
-                <TableHead className={HEAD}>{copy.colUsed}</TableHead>
-                <TableHead className={HEAD}>{copy.colProjected}</TableHead>
-                <TableHead className={HEAD}>{copy.colReaches}</TableHead>
-                {actions ? (
-                  <TableHead className={HEAD}>
-                    <span className="sr-only">{copy.colActions}</span>
-                  </TableHead>
-                ) : null}
-              </TableRow>
-            </TableHeader>
-            <TableBody className="max-lg:block">
-              {rows.map((r) => (
-                <TableRow key={r.budget_id} data-budget={r.budget_id} className={ROW}>
-                  <TableCell className={cn(CELL, 'min-w-0')}>
-                    <Name row={r} onOwner={onOwner} />
-                    <span className="block text-xs text-muted-foreground">
-                      {r.action === 'stop' ? copy.atRiskStops : copy.atRiskAlerts}
-                    </span>
-                  </TableCell>
-                  <TableCell className={cn(CELL, 'text-muted-foreground')}>
-                    <Label>{copy.colOwner}</Label>
-                    <Owner id={r.owner_id} label={r.owner_label} onOwner={onOwner} />
-                  </TableCell>
-                  <TableCell className={CELL}>
-                    <div className="flex items-center gap-2">
-                      <UsedBar
-                        used={r.used_usd}
-                        limit={r.limit_usd}
-                        state={r.state}
-                        stopped={r.stopped}
-                      />
-                      <span className="whitespace-nowrap">
-                        {copy.usedOf(fmtMoney(r.used_usd), fmtMoney(r.limit_usd))}
-                      </span>
-                      <span
-                        className={cn(
-                          'text-xs tabular-nums',
-                          r.used_usd > r.limit_usd ? 'text-destructive' : 'text-muted-foreground',
-                        )}
-                      >
-                        {r.limit_usd > 0 ? `${Math.round((r.used_usd / r.limit_usd) * 100)}%` : ''}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell className={cn(CELL, 'tabular-nums')}>
-                    <Label>{copy.colProjected}</Label>
-                    {/* A stopped budget spends nothing more until the reset: no projection (#68). */}
-                    {r.stopped || r.rank.projected_pct === null
-                      ? '—'
-                      : `${Math.round(r.rank.projected_pct)}%`}
-                  </TableCell>
-                  <TableCell className={CELL}>
-                    <Label>{copy.colReaches}</Label>
-                    {r.rank.reason === 'exceeded'
-                      ? r.stopped
-                        ? copy.atRiskRanOut
-                        : copy.atRiskExceeded
-                      : r.rank.runs_out_on
-                        ? fmtShortDay(r.rank.runs_out_on)
-                        : copy.atRiskNoRunOut}
-                  </TableCell>
-                  {actions ? <TableCell className={CELL}>{actions(r)}</TableCell> : null}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <AtRiskTable labelledBy={id} rows={rows} onOwner={onOwner} actions={actions} />
       )}
       {partial ? <Partial onRetry={onRetry} /> : null}
     </Panel>
@@ -212,5 +140,105 @@ export function Owner({
     >
       {label}
     </Button>
+  )
+}
+
+/**
+ * The At risk table alone: the page's panel, and Home's Budget burn panel with its top 3 (`compact`: the same columns
+ * minus Projected, plan F7).
+ */
+export function AtRiskTable({
+  labelledBy,
+  rows,
+  onOwner,
+  actions,
+  compact = false,
+}: {
+  labelledBy: string
+  rows: readonly AtRiskRow[]
+  onOwner: ((id: string) => void) | null
+  actions?: (row: AtRiskRow) => ReactNode
+  compact?: boolean
+}) {
+  // Narrow (Home's column): the stacked layout at every width, labels inline.
+  const ROW_ = compact ? ROW_STACKED : ROW
+  const CELL_ = compact ? CELL_STACKED : CELL
+  const Label_ = compact ? StackedLabel : Label
+  return (
+    <div className="rounded-lg border border-border">
+      <Table aria-labelledby={labelledBy} className={compact ? 'block' : 'max-lg:block'}>
+        <TableHeader className={compact ? 'sr-only' : 'max-lg:sr-only'}>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className={HEAD}>{copy.colBudget}</TableHead>
+            <TableHead className={HEAD}>{copy.colOwner}</TableHead>
+            <TableHead className={HEAD}>{copy.colUsed}</TableHead>
+            {compact ? null : <TableHead className={HEAD}>{copy.colProjected}</TableHead>}
+            <TableHead className={HEAD}>{copy.colReaches}</TableHead>
+            {actions ? (
+              <TableHead className={HEAD}>
+                <span className="sr-only">{copy.colActions}</span>
+              </TableHead>
+            ) : null}
+          </TableRow>
+        </TableHeader>
+        <TableBody className={compact ? 'block' : 'max-lg:block'}>
+          {rows.map((r) => (
+            <TableRow key={r.budget_id} data-budget={r.budget_id} className={ROW_}>
+              <TableCell className={cn(CELL_, 'min-w-0')}>
+                <Name row={r} onOwner={onOwner} />
+                <span className="block text-xs text-muted-foreground">
+                  {r.action === 'stop' ? copy.atRiskStops : copy.atRiskAlerts}
+                </span>
+              </TableCell>
+              <TableCell className={cn(CELL_, 'text-muted-foreground')}>
+                <Label_>{copy.colOwner}</Label_>
+                <Owner id={r.owner_id} label={r.owner_label} onOwner={onOwner} />
+              </TableCell>
+              <TableCell className={CELL_}>
+                <div className="flex items-center gap-2">
+                  <UsedBar
+                    used={r.used_usd}
+                    limit={r.limit_usd}
+                    state={r.state}
+                    stopped={r.stopped}
+                  />
+                  <span className="whitespace-nowrap">
+                    {copy.usedOf(fmtMoney(r.used_usd), fmtMoney(r.limit_usd))}
+                  </span>
+                  <span
+                    className={cn(
+                      'text-xs tabular-nums',
+                      r.used_usd > r.limit_usd ? 'text-destructive' : 'text-muted-foreground',
+                    )}
+                  >
+                    {r.limit_usd > 0 ? `${Math.round((r.used_usd / r.limit_usd) * 100)}%` : ''}
+                  </span>
+                </div>
+              </TableCell>
+              {compact ? null : (
+                <TableCell className={cn(CELL_, 'tabular-nums')}>
+                  <Label_>{copy.colProjected}</Label_>
+                  {/* A stopped budget spends nothing more until the reset: no projection (#68). */}
+                  {r.stopped || r.rank.projected_pct === null
+                    ? '—'
+                    : `${Math.round(r.rank.projected_pct)}%`}
+                </TableCell>
+              )}
+              <TableCell className={CELL_}>
+                <Label_>{copy.colReaches}</Label_>
+                {r.rank.reason === 'exceeded'
+                  ? r.stopped
+                    ? copy.atRiskRanOut
+                    : copy.atRiskExceeded
+                  : r.rank.runs_out_on
+                    ? fmtShortDay(r.rank.runs_out_on)
+                    : copy.atRiskNoRunOut}
+              </TableCell>
+              {actions ? <TableCell className={CELL_}>{actions(r)}</TableCell> : null}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   )
 }

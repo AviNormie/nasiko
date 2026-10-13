@@ -13,3 +13,10 @@ export const HEAD = 'h-auto px-1.5 py-2 text-xs text-muted-foreground first:pl-4
 export const Label = ({ children }: { children: string }) => (
   <span className="text-muted-foreground lg:hidden">{children}: </span>
 )
+
+/** The stacked layout at every width, for a narrow column (Home's top 3 At risk, plan F12). */
+export const ROW_STACKED = 'grid gap-1 px-3 py-2 text-sm hover:bg-transparent'
+export const CELL_STACKED = 'block p-0 whitespace-normal'
+export const StackedLabel = ({ children }: { children: string }) => (
+  <span className="text-muted-foreground">{children}: </span>
+)

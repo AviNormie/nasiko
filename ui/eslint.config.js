@@ -114,6 +114,8 @@ const PUBLIC = {
     'components/BudgetsSection',
     // Whether this server has budgets (F11): the router's Budgets tab, later Home and the hub.
     'availability',
+    // Home's Budget burn panel (F10, B4), lazy-loaded by the home.
+    'components/BudgetBurnPanel',
   ],
   // The hairline rows every Settings page is built from (EE uses them too).
   settings: ['components/SettingRow', 'components/Chosen', 'components/tileStyles'],
