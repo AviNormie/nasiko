@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiData, apiFetch, ApiError, type Checked } from '@/lib/api/client'
 import {
   alertListSchema,
+  priceListSchema,
   atRiskListSchema,
   breakdownResponseSchema,
   budgetResponseSchema,
@@ -26,6 +27,7 @@ import {
   type CreateBudgetBody,
   type Dimension,
   type Hours,
+  type Price,
   type Scope,
   type TraceRow,
   type UnbudgetedRow,
@@ -216,15 +218,14 @@ const readChanges = one<Changes>('burn/changes', changesResponseSchema)
 const readHours = one<Hours>('burn/hours', hoursResponseSchema)
 
 /** BG-3/BG-5: the scope's series for a period, with its budget (or null) inside. */
-export function useBurn(
-  ref: ScopeRef,
-  opts: {
-    period: 'month' | 'quarter'
-    from?: string | null
-    contributor?: { by: Dimension; key: string } | null
-  },
-  enabled: boolean,
-) {
+type BurnOpts = {
+  period: 'month' | 'quarter'
+  from?: string | null
+  contributor?: { by: Dimension; key: string } | null
+}
+
+/** A burn read as query options (the levers read several agents' at once with `useQueries`). */
+export function burnQuery(ref: ScopeRef, opts: BurnOpts) {
   const query = scopeQuery(ref, {
     period: opts.period,
     from: opts.from,
@@ -232,26 +233,27 @@ export function useBurn(
     contributor: opts.contributor?.key,
     by: opts.contributor?.by,
   })
-  return useQuery({
+  return {
     queryKey: budgetKeys.read('burn', query),
-    queryFn: ({ signal }) => readBurn(query, signal),
-    enabled,
+    queryFn: ({ signal }: { signal: AbortSignal }) => readBurn(query, signal),
     ...read,
-  })
+  }
+}
+
+export function useBurn(ref: ScopeRef, opts: BurnOpts, enabled: boolean) {
+  return useQuery({ ...burnQuery(ref, opts), enabled })
 }
 
 /** BG-4: daily spend by contributor, the top `top` plus Other. */
-export function useBreakdown(
-  ref: ScopeRef,
-  opts: {
-    by: Dimension
-    period: 'month' | 'quarter'
-    from?: string | null
-    to?: string | null
-    top?: number
-  },
-  enabled: boolean,
-) {
+type BreakdownOpts = {
+  by: Dimension
+  period: 'month' | 'quarter'
+  from?: string | null
+  to?: string | null
+  top?: number
+}
+
+export function breakdownQuery(ref: ScopeRef, opts: BreakdownOpts) {
   const query = scopeQuery(ref, {
     by: opts.by,
     period: opts.period,
@@ -259,12 +261,15 @@ export function useBreakdown(
     to: opts.to,
     top: opts.top,
   })
-  return useQuery({
+  return {
     queryKey: budgetKeys.read('breakdown', query),
-    queryFn: ({ signal }) => readBreakdown(query, signal),
-    enabled,
+    queryFn: ({ signal }: { signal: AbortSignal }) => readBreakdown(query, signal),
     ...read,
-  })
+  }
+}
+
+export function useBreakdown(ref: ScopeRef, opts: BreakdownOpts, enabled: boolean) {
+  return useQuery({ ...breakdownQuery(ref, opts), enabled })
 }
 
 /** BG-4b: ranked changes between two equal ranges, over every contributor. */
@@ -391,4 +396,16 @@ export const budgetV1Query = (id: string) => ({
 
 export function useBudgetV1(id: string | null, enabled: boolean) {
   return useQuery({ ...budgetV1Query(id ?? ''), enabled: enabled && !!id })
+}
+
+/** Model prices (BG-11, §10.2): the cheaper-model lever's inputs. Every page, since a lever needs the whole list. */
+export function usePrices(enabled: boolean) {
+  return useQuery({
+    queryKey: budgetKeys.read('prices', ''),
+    queryFn: async ({ signal }) =>
+      (await allPages<{ data: Price[] }>('/api/budgets/prices', signal, priceListSchema)).data,
+    enabled,
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+  })
 }
