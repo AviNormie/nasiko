@@ -16,6 +16,7 @@ import type { AlertV1 } from '../types'
 export function ScopeAlerts({
   alerts,
   partial,
+  missing = false,
   error,
   pending,
   onRetry,
@@ -23,6 +24,8 @@ export function ScopeAlerts({
 }: {
   alerts: readonly AlertV1[] | undefined
   partial: boolean
+  /** An R-L10 server's alerts lack 1.0's fields (label, kind, percent): one line instead (F11). */
+  missing?: boolean
   error: unknown
   pending: boolean
   onRetry: () => void
@@ -35,7 +38,9 @@ export function ScopeAlerts({
   })
   return (
     <Panel title={copy.alertsTitleV1} subtitle={copy.alertsSubtitleV1} labelledBy={id}>
-      {pending ? (
+      {missing ? (
+        <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>
+      ) : pending ? (
         <PanelSkeleton height={80} />
       ) : isEndpointAbsent(error) ? (
         <p className="text-xs text-muted-foreground">{copy.sectionMissing}</p>

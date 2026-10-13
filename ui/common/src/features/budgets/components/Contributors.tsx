@@ -56,7 +56,7 @@ export function Contributors({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">{copy.causesBy}</span>
-          {dimensions.length > 1 ? (
+          {dimensions.length > 1 && !missing ? (
             <ToggleGroup
               type="single"
               variant="outline"

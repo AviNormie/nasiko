@@ -310,7 +310,9 @@ function Body({
   // At risk, Unbudgeted and the alerts (F5, F7): the scope's own lists.
   const atRisk = useAtRisk(ref, can('at_risk'))
   const unbudgeted = useUnbudgeted(ref, kind, can('unbudgeted'))
-  const alerts = useScopeAlerts(ref, mayHave(caps, 'budgets'))
+  // An R-L10 server (the fallback) has neither the quarter read nor 1.0's alert fields.
+  const rl10 = caps === RL10_ONLY
+  const alerts = useScopeAlerts(ref, can('budgets') && !rl10)
   const own = useBudgetV1(burn.budget?.id ?? null, true)
   const limitsInside =
     own.data?.limits_inside_usd != null && own.data.limits_inside_count
@@ -446,7 +448,7 @@ function Body({
       {shareRead ? (
         <ShareStrip scope={burn} read={shareRead} agentId={by === 'agent' ? picked : null} />
       ) : (
-        <BurnStrip burn={burn} kind={words} quarterRead={quarterFrom} />
+        <BurnStrip burn={burn} kind={words} quarterRead={quarterFrom} showQuarter={!rl10} />
       )}
       <WhatChanged
         spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}
@@ -507,6 +509,7 @@ function Body({
       <ScopeAlerts
         alerts={alerts.data?.rows}
         partial={!!alerts.data?.partial}
+        missing={rl10}
         error={alerts.error}
         pending={pending(alerts)}
         onRetry={() => void alerts.refetch()}

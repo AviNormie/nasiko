@@ -18,11 +18,14 @@ export function BurnStrip({
   burn,
   kind,
   quarterRead,
+  showQuarter = true,
 }: {
   burn: Burn
   kind: 'month' | 'quarter'
   /** The same scope read from the quarter's first day (month budgets): feeds the quarter figure. */
   quarterRead?: Burn | null
+  /** The quarter figure can be read at all (not on an R-L10 server, which has this month only). */
+  showQuarter?: boolean
 }) {
   const quarter = kind === 'month' && quarterRead ? quarterInput(quarterRead) : null
   const f = figures(burn, { quarter })
@@ -89,7 +92,7 @@ export function BurnStrip({
                 : null}
           </span>
         </KpiTile>
-        {kind === 'month' && burn.budget ? (
+        {kind === 'month' && burn.budget && showQuarter ? (
           <KpiTile
             label={copy.stripQuarter}
             value={f.quarter ? range(f.quarter.low, f.quarter.high) : '—'}
