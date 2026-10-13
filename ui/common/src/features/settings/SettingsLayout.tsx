@@ -47,6 +47,7 @@ interface Row {
     | '/settings/optimization-tiers'
     | '/account/appearance'
     | '/account/password'
+    | '/account/shortcuts'
   section?: string
 }
 
@@ -85,6 +86,7 @@ export function SettingsLayout({
           rows: [
             { key: 'appearance', label: copy.appearance.label, to: '/account/appearance' },
             { key: 'password', label: copy.password.label, to: '/account/password' },
+            { key: 'shortcuts', label: copy.shortcuts.label, to: '/account/shortcuts' },
           ],
         },
       ]
@@ -130,7 +132,7 @@ export function SettingsLayout({
       ]
   const known = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)))
   const raw = (location.search as { section?: unknown }).section
-  // A sub-page (Secrets, Tiers, Appearance, Password) is current by its path; the workspace page by `?section=`.
+  // A sub-page (Secrets, Tiers, Appearance, Password, Shortcuts) is current by its path; the workspace page by `?section=`.
   const page = groups
     .flatMap((g) => g.rows)
     .find((r) => r.to === location.pathname && r.to !== '/settings')

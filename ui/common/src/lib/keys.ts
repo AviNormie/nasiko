@@ -1,5 +1,8 @@
 /** Keyboard rules shared by the shell and pages. */
 
+/** ⌘ rather than Ctrl for the modifier shortcuts. */
+export const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+
 /** True while the user is typing: a letter shortcut must not steal keys from a field. */
 export function isTypingTarget(target: EventTarget | null): boolean {
   return (
