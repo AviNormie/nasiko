@@ -18,10 +18,13 @@ import { Link } from '@tanstack/react-router'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { useChatSessions } from '@/features/chat/api'
 import { overviewNarrative } from '@/features/narrative/overview'
 import { meQuery, type Me } from '@/lib/api/auth'
@@ -33,14 +36,17 @@ import { useFleetHealth, useHarnessSummary, useNeedsYou, useOverviewSavings, use
 // import { Budget } from './components/Budget'
 import { FirstRun, FirstRunLead, FirstRunPreview } from './components/FirstRun'
 import { FleetHealth } from './components/FleetHealth'
-import { HarnessesLine } from './components/Harnesses'
+import { Harnesses, HarnessesLine } from './components/Harnesses'
+import { Headline } from './components/Headline'
+import { AgentsTile, RunsTile, SpendTile } from './components/Kpis'
+import { Savings } from './components/Savings'
+import { MonthBar } from './components/MonthBar'
 import { NeedsYou } from './components/NeedsYou'
 import { usePausedFlows } from '@/features/flows/paused'
 import { QuickActions } from './components/QuickActions'
 import { RecentChats } from './components/RecentChats'
 import { RecentSessions } from './components/RecentSessions'
 import { SetupGuide } from './components/SetupGuide'
-import { SummaryCard } from './components/SummaryCard'
 import { Spend } from './components/Spend'
 import { copy } from './copy'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES, type OverviewSearch } from './search'
@@ -78,6 +84,7 @@ function HeaderActions({
   return (
     <>
       <ToggleGroup
+        data-tour="overview-range"
         type="single"
         variant="outline"
         size="sm"
@@ -100,6 +107,8 @@ function HeaderActions({
         ))}
       </ToggleGroup>
       {setup ? <SetupGuide /> : null}
+      {/* No top bar here on desktop (phones keep it, with its own button). */}
+      <TourButton className="max-md:hidden" />
     </>
   )
 }
@@ -286,15 +295,32 @@ function Overview({
   const place = budgets ? PLACE.budgets : PLACE.none
   return (
     <Frame description={description} actions={actions}>
-      <SummaryCard
-        days={days}
-        narrative={narrative}
-        nothing={needs.empty}
-        spend={spend}
-        savings={savings}
-        fleet={fleet}
-        harnesses={harnesses}
-      />
+      {/* The summary as one card like TokenOps' SummaryHero: the headline on the left, the KPI tiles 2×2 on the right. */}
+      <Card
+        asChild
+        className="gap-0 overflow-hidden p-0 @[1100px]/overview:grid @[1100px]/overview:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"
+      >
+        <section data-tour="overview-summary" aria-labelledby="overview-summary-title">
+          <h2 id="overview-summary-title" className="sr-only">
+            {copy.summary}
+          </h2>
+          <div className="flex flex-col justify-center gap-4 p-5">
+            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary-text">
+              {copy.range.item(days)}
+            </Badge>
+            <Headline narrative={narrative} nothing={needs.empty} />
+            <MonthBar spend={spend} />
+            <Savings view={savings.view} isPending={savings.isPending} />
+          </div>
+          {/* The tiles drop their own card chrome here: the hairlines between them are the grid's gap. */}
+          <div className="grid grid-cols-1 gap-px border-t border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-2 @[1100px]/overview:border-t-0 @[1100px]/overview:border-l">
+            <SpendTile spend={spend} />
+            <RunsTile spend={spend} />
+            <AgentsTile fleet={fleet} />
+            <Harnesses data={harnesses} days={days} />
+          </div>
+        </section>
+      </Card>
       <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-4">
         <NeedsYou
           data={needsYou}

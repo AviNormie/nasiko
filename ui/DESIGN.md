@@ -118,6 +118,7 @@ Presets in `common/src/lib/motion.ts`; new motion uses the names, never raw numb
 | `--animate-mark-draw` | 1.6 s ease-in-out, alternating | the page loader (`PageLoader`, our take on Aceternity's LoaderThree): each bar of the Nasiko mark draws its outline, then fills, 40 ms apart (CSS); reduced motion shows the filled mark, still |
 | `--animate-float` | 7 s ease-in-out loop | the login showcase's layer stack bobs 8 px (CSS); still under reduced motion |
 | `--animate-orbit` / `--animate-flag-wave` | 3 s linear / 1.4 s ease-in-out loops | the sidebar's waitlist badge (`WaitlistCta`, our take on Aceternity's Moving Border): a glint circles the pill's edge and the flag's cloth waves (CSS); under reduced motion the glint is hidden and the flag still |
+| `spotlight` / `wordStagger` | spring (stiffness 320, damping 34) / 60 ms per word | the product tour (`features/tour/TourOverlay.tsx`): the spotlight glides between targets on the spring, its edge carries a glint on `--animate-orbit` (our take on Aceternity's Moving Border), and each title's words arrive on `--animate-word-in` one `wordStagger` apart (Aceternity's Text Generate Effect, `components/aceternity/text-generate-effect.tsx`); under reduced motion the spotlight jumps, the glint is hidden and the words stand still |
 
 `tw-animate-css` provides the `animate-in` / `slide-in-*` / `fade-*` utilities; a build test checks they are emitted.
 

@@ -253,7 +253,7 @@ function FlowBody({
       ) : null}
 
       {narrative.length ? (
-        <p className="text-base" data-testid="flow-narrative">
+        <p data-tour="flow-narrative" className="text-base" data-testid="flow-narrative">
           {narrative.map((sentence) => sentence.map((c) => c.text).join('')).join(' ')}
         </p>
       ) : null}
@@ -266,7 +266,7 @@ function FlowBody({
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div data-tour="flow-kpis" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiTile
           label={copy.kpi.status}
           compact
@@ -319,6 +319,7 @@ function FlowBody({
           actions={
             <>
               <ToggleGroup
+                data-tour="flow-view"
                 type="single"
                 variant="outline"
                 size="sm"

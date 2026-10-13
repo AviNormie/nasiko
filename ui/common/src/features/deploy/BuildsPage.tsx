@@ -74,7 +74,10 @@ export function BuildsPage({
   )
   // The table's toolbar: status on the left, search on the right.
   const filters = (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border p-2">
+    <div
+      data-tour="builds-filters"
+      className="flex flex-wrap items-center gap-2 border-b border-border p-2"
+    >
       <ToggleGroup
         type="single"
         variant="outline"
@@ -245,7 +248,7 @@ export function BuildsPage({
   return (
     <div className="mx-auto flex w-full max-w-page flex-col gap-4">
       {header}
-      <div className="rounded-lg border border-border">
+      <div data-tour="builds-panel" className="rounded-lg border border-border">
         {filters}
         {body}
       </div>

@@ -1,5 +1,5 @@
 import { skipToken, useQuery } from '@tanstack/react-query'
-import { createFileRoute, redirect, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
@@ -7,6 +7,7 @@ import { BuildToasts } from '@/features/deploy/components/BuildToasts'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { followedCount, subscribeFollower } from '@/features/deploy/follower'
 import { useGuideHiddenNav } from '@/features/onboarding/api'
+import { TourHost } from '@/features/tour/TourHost'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { isSignedOutLocally } from '@/lib/session'
@@ -47,18 +48,15 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const { navHidden, shellEnd: ShellEnd, shellSplit } = useSlots()
+  const navHidden = useSlots().navHidden
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
-  const path = useRouterState({ select: (s) => s.location.pathname })
   return (
     <AppShell
-      split={shellSplit}
       end={
         <>
           <BuildToasts />
-          {/* A layer's chrome beside every page (EE: the Weave dock). */}
-          {ShellEnd ? <ShellEnd path={path} /> : null}
+          <TourHost />
         </>
       }
       hidden={[...guideHidden, ...layerHidden]}

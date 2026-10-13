@@ -10,7 +10,8 @@
  *   editions have (the harness usage endpoint's bare vs coded 404, crash-guardian fields). A probe never stands in
  *   for the edition.
  */
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType } from 'react'
+import type { TourStep } from '@/lib/tour'
 import type { NavGroupId, NavItem } from './shell/nav'
 
 export type EditionId = 'oss' | 'ee' | 'mt'
@@ -55,6 +56,18 @@ interface OrgUnitFilterProps {
   onChange: (orgUnit: string | undefined) => void
 }
 
+/**
+ * The product tour of a layer's own pages (EE: Access control). Matched after the core's pages; its steps load only
+ * when it opens, so a layer's tour text stays out of its shell.
+ */
+export interface LayerTour {
+  /** Remembered as seen under this id: unique across the core's tours (`features/tour/logic.ts`) and every layer's. */
+  id: string
+  /** The pages it covers (pathname). */
+  match: RegExp
+  steps: () => Promise<readonly TourStep[]>
+}
+
 /** Every slot has an OSS fallback in the core; a slot is added in the PR whose layer first fills it. */
 export interface Slots {
   harnessOrgScope: HarnessOrgScope | null
@@ -64,7 +77,6 @@ export interface Slots {
   tokenopsOrgUnitFilter: ComponentType<OrgUnitFilterProps> | null
   topbarStart: ComponentType | null
   shellEnd: ComponentType<{ path: string }> | null
-  shellSplit: ComponentType<{ path: string; children: ReactNode }> | null
   /**
    * Rows a layer adds to /optimization's Workspace footer, after the core's tiers row (EE: Organization policy;
    * plans/feat-optimization-page.md R5B). Superusers only, like the footer. Each renders a `WorkspaceRow` or nothing.
@@ -72,6 +84,8 @@ export interface Slots {
   optimizationWorkspace: ComponentType | null
   /** Sidebar items to hide for this viewer (EE: Access control below `can_read_org`). */
   navHidden: NavHidden | null
+  /** Tours of the layer's own pages. */
+  tours: LayerTour[]
 }
 
 /**
@@ -99,9 +113,9 @@ export const OSS_SLOTS: Slots = {
   tokenopsOrgUnitFilter: null,
   topbarStart: null,
   shellEnd: null,
-  shellSplit: null,
   optimizationWorkspace: null,
   navHidden: null,
+  tours: [],
 }
 
 /** A layer's own sidebar item: any path its routes serve. */
@@ -133,6 +147,7 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     granteeKinds: [],
     connectorGranteeKinds: [],
     settingsSections: [],
+    tours: [],
   }
   for (const layer of layers) {
     const s = layer.slots ?? {}
@@ -140,11 +155,11 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     if (s.connectorGranteeKinds)
       out.connectorGranteeKinds = [...out.connectorGranteeKinds, ...s.connectorGranteeKinds]
     if (s.settingsSections) out.settingsSections = [...out.settingsSections, ...s.settingsSections]
+    if (s.tours) out.tours = [...out.tours, ...s.tours]
     if (s.harnessOrgScope !== undefined) out.harnessOrgScope = s.harnessOrgScope
     if (s.tokenopsOrgUnitFilter !== undefined) out.tokenopsOrgUnitFilter = s.tokenopsOrgUnitFilter
     if (s.topbarStart !== undefined) out.topbarStart = s.topbarStart
     if (s.shellEnd !== undefined) out.shellEnd = s.shellEnd
-    if (s.shellSplit !== undefined) out.shellSplit = s.shellSplit
     if (s.optimizationWorkspace !== undefined) out.optimizationWorkspace = s.optimizationWorkspace
     if (s.navHidden !== undefined) out.navHidden = s.navHidden
   }

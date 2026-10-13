@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { CircleHelp } from 'lucide-react'
 import { Fragment, use, useLayoutEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -8,7 +9,9 @@ import {
   BreadcrumbList,
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
+import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+import { askForTour } from '@/lib/tour'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { cn } from '@/lib/utils'
 import { copy } from './copy'
@@ -46,7 +49,11 @@ export function ShellTopBar({
           bare && 'md:hidden',
         )}
       >
-        <SidebarTrigger aria-label={copy.openMenu} className="size-11 md:hidden" />
+        <SidebarTrigger
+          data-tour="app-menu"
+          aria-label={copy.openMenu}
+          className="size-11 md:hidden"
+        />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {claims === 0 && item ? (
             <Crumbs
@@ -56,8 +63,14 @@ export function ShellTopBar({
           ) : null}
           <div ref={setCrumbs} className="contents" />
         </div>
-        <div ref={setActions} className="flex shrink-0 items-center gap-1.5 empty:hidden" />
         <div
+          data-tour="page-actions"
+          ref={setActions}
+          className="flex shrink-0 items-center gap-1.5 empty:hidden"
+        />
+        <TourButton />
+        <div
+          data-tour="page-stepper"
           ref={setStepper}
           className="flex shrink-0 items-center border-l border-border pl-2 empty:hidden"
         />
@@ -155,5 +168,26 @@ export function TopBar({
       ) : null}
       {stepper && slot.stepper ? createPortal(stepper, slot.stepper) : null}
     </>
+  )
+}
+
+/**
+ * Starts this page's tour (`?` does too): the tour feature answers `askForTour` (lib/tour.ts). In the bar, left of the
+ * Previous/Next arrows so they stay rightmost; Overview and New chat, which have no bar on desktop, show their own.
+ */
+export function TourButton({ className }: { className?: string }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      data-tour="tour-button"
+      title={`${copy.tour} (?)`}
+      aria-label={copy.tour}
+      aria-keyshortcuts="?"
+      onClick={askForTour}
+      className={cn('size-8 shrink-0 text-muted-foreground pointer-coarse:size-11', className)}
+    >
+      <CircleHelp aria-hidden />
+    </Button>
   )
 }

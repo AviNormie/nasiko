@@ -56,7 +56,7 @@ export function SummaryHero({
       asChild
       className="gap-0 overflow-hidden p-0 lg:grid lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
     >
-      <section aria-labelledby="summary-title">
+      <section data-tour="tokenops-summary" aria-labelledby="summary-title">
         <h2 id="summary-title" className="sr-only">
           Summary
         </h2>
