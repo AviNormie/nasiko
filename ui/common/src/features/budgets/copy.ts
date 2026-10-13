@@ -75,6 +75,16 @@ export const copy = {
     'Your budget counts every routed call billed to you, including your chats with other people’s agents.',
   budgetNoScopes: 'Every agent you own already has a budget, and so do you.',
   monthlyLimit: 'Monthly limit (USD)',
+  // Quarter budgets (B6, calendar quarters: §7 Q2).
+  quarterlyLimit: 'Quarterly limit (USD)',
+  periodField: 'Resets',
+  periodEveryMonth: 'Every month',
+  periodEveryQuarter: 'Every quarter (Jan, Apr, Jul, Oct)',
+  periodChangeFrom: (period: 'month' | 'quarter', date: string) =>
+    `Every ${period} from ${date}: the current period keeps its limit and resets as before.`,
+  periodPending: (period: 'month' | 'quarter', date: string) =>
+    `Scheduled: every ${period} from ${date}.`,
+  periodPendingCancel: 'Saving keeps the current period: the scheduled change is cancelled.',
   // A session budget (BG-10, plan F9): one period, the session itself.
   sessionLimit: 'Session limit (USD)',
   budgetDescriptionSession:

@@ -624,6 +624,7 @@ function Body({
         agentName={noName}
         resetsAt={burn.resets_at ?? burn.as_of}
         onClose={() => setEditor(null)}
+        quarters={mayHave(caps, 'quarter_periods')}
       />
       <DayPanel
         day={search.day ?? null}
