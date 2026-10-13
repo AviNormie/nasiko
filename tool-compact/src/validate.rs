@@ -1,17 +1,23 @@
-//! Validates decoded arguments against the original schema. Never rewrites a value: a call
-//! either passes untouched or is rejected.
+//! Validates decoded arguments against the original schema. Never changes a value the model
+//! wrote: a call either passes or is rejected. The one addition is [`fill_omitted_nullable`].
 
 use serde_json::{Map, Number, Value};
 
 use crate::schema::{Format, Kind, Object, Range, Ty};
 
 /// `Err((path, reason))` on the first violation.
+///
+/// A required field may be omitted when `null` is a valid value for it and the schema names no
+/// other default (see `Field::omittable`). Strict-mode schemas
+/// (OpenAI structured outputs, the OpenAI Agents SDK) list every property as required and
+/// express "optional" as "nullable"; the compact signature gives such a field no `?`, so a model
+/// that leaves it out has done what the prompt asked.
 pub(crate) fn object(
     args: &Map<String, Value>,
     obj: &Object,
     path: &str,
 ) -> Result<(), (String, String)> {
-    for f in obj.fields.iter().filter(|f| f.required) {
+    for f in obj.fields.iter().filter(|f| f.required && !f.omittable()) {
         if !args.contains_key(&f.name) {
             return Err((
                 path.to_string(),
@@ -28,6 +34,31 @@ pub(crate) fn object(
         }
     }
     Ok(())
+}
+
+/// Adds `null` for every required field the model omitted that the schema allows to be null,
+/// so the call carries every key its strict-mode schema lists. Recurses into nested objects and
+/// array items. Call only on arguments that already passed [`object`].
+pub(crate) fn fill_omitted_nullable(args: &mut Map<String, Value>, obj: &Object) {
+    for f in &obj.fields {
+        if let Some(v) = args.get_mut(&f.name) {
+            fill_ty(v, &f.ty);
+        } else if f.omittable() {
+            args.insert(f.name.clone(), Value::Null);
+        }
+    }
+}
+
+fn fill_ty(v: &mut Value, t: &Ty) {
+    match (&t.kind, v) {
+        (Kind::Object(obj), Value::Object(map)) => fill_omitted_nullable(map, obj),
+        (Kind::Array(items), Value::Array(list)) => {
+            for item in list {
+                fill_ty(item, items);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn ty(v: &Value, t: &Ty, path: &str) -> Result<(), (String, String)> {

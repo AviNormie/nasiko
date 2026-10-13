@@ -108,6 +108,17 @@ pub(crate) struct Field {
     pub(crate) ty: Ty,
 }
 
+impl Field {
+    /// A required field the model may leave out: `null` is a valid value and the schema names no
+    /// other default for it. With a non-null default an omission would mean "use that default",
+    /// and filling `null` would contradict it, so such a field stays required.
+    pub(crate) fn omittable(&self) -> bool {
+        self.required
+            && self.ty.allows_null()
+            && matches!(self.ty.default, None | Some(Value::Null))
+    }
+}
+
 /// An object with declared properties. Fields are ordered required-first, then by name, so the
 /// rendering is deterministic whatever map order the caller's JSON used.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +143,15 @@ impl Object {
 }
 
 impl Ty {
+    /// Whether `null` is a valid value. Mirrors `validate::ty`: an enum's members alone decide,
+    /// so `{"type":["string","null"],"enum":["a"]}` does not allow it.
+    pub(crate) fn allows_null(&self) -> bool {
+        match &self.kind {
+            Kind::Enum(values) => values.contains(&Value::Null),
+            _ => self.nullable,
+        }
+    }
+
     pub(crate) fn plain(kind: Kind) -> Ty {
         Ty {
             kind,

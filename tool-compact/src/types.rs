@@ -19,7 +19,8 @@ pub struct ToolDef {
 pub struct ToolCall {
     /// Name of a tool from the request.
     pub name: String,
-    /// The arguments object, exactly as the model wrote it.
+    /// The arguments object as the model wrote it, plus `null` for any required field that the
+    /// schema allows to be null and the model left out (see `validate::fill_omitted_nullable`).
     pub arguments: Map<String, Value>,
 }
 
