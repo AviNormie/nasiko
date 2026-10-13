@@ -5,30 +5,47 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type ReactNode } from 'react'
+import { Announcer } from '@/components/shared/announcer'
+import { useAnnounce } from '@/components/shared/announce'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { useUsers } from '@/features/agents/api'
 import { meQuery } from '@/lib/api/auth'
+import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { useSetSearch } from '@/lib/search'
 import { useReturnTick } from '@/lib/useReturnTick'
-import { useBreakdown, useBurn, useChanges, type ScopeRef } from './api'
+import {
+  useAtRisk,
+  useBreakdown,
+  useBudgetV1,
+  useBurn,
+  useChanges,
+  useScopeAlerts,
+  useUnbudgeted,
+  type ScopeRef,
+} from './api'
 import { capabilitiesQuery, mayHave, type Availability } from './availability'
-import { figures, quarterOf, spikes, type BurnMode } from './burn'
+import { figures, previewLine, projection, quarterOf, spikes, type BurnMode } from './burn'
 import { rememberBurnMode, storedBurnMode } from './burnMode'
 import { BurnCard } from './components/BurnCard'
 import { BurnStrip } from './components/BurnStrip'
+import { AtRisk } from './components/AtRisk'
 import { Contributors } from './components/Contributors'
 import { DayPanel } from './components/DayPanel'
+import { ScopeAlerts } from './components/ScopeAlerts'
 import { ShareStrip } from './components/ShareStrip'
+import { Unbudgeted } from './components/Unbudgeted'
 import { WhatChanged } from './components/WhatChanged'
+import { WhatIfPanel } from './components/WhatIf'
 import { ScopeSwitch } from './components/ScopeSwitch'
 import { copy } from './copy'
 import { resolveScope, scopeParam, scopeRef, type PageScope } from './scope'
 import type { BudgetsSearch } from './search'
 import { changesWindow, dimensionsFor, keyLabel, pickDimension, shareLine } from './causes'
 import { burnSentence } from './sentence'
+import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Burn } from './types'
 
 export function BudgetsPage({ search }: { search: BudgetsSearch }) {
@@ -59,10 +76,13 @@ export function BudgetsPage({ search }: { search: BudgetsSearch }) {
 
 function Frame({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mx-auto flex w-full max-w-page flex-col gap-4">
-      <PageHeader title={copy.pageTitle} actions={actions} />
-      {children}
-    </div>
+    // The page's one polite live region: previews and saves announce through it (F1 parity).
+    <Announcer testId="budgets-announcer">
+      <div className="mx-auto flex w-full max-w-page flex-col gap-4">
+        <PageHeader title={copy.pageTitle} actions={actions} />
+        {children}
+      </div>
+    </Announcer>
   )
 }
 
@@ -195,6 +215,45 @@ function Body({
     !!picked && mayHave(caps, 'contributor'),
   )
   const shareRead = picked && contributor.data?.contributor ? contributor.data : null
+
+  // What-if (F6): one preview at a time, so starting it clears a picked contributor and picking one closes it (4A).
+  const announce = useAnnounce()
+  const [whatIfState, setWhatIfState] = useState<WhatIfState>(WHAT_IF_CLOSED)
+  const preview = whatIfInputs(burn, whatIfState)
+  const lastDay = burn.resets_at ? fmtShortDay(Date.parse(burn.resets_at) - 86_400_000) : ''
+  const onWhatIf = (next: WhatIfState) => {
+    setWhatIfState(next)
+    const inputs = whatIfInputs(burn, next)
+    if (inputs && picked) setSearch({ contributor: undefined }, { replace: true })
+    const p = projection(burn)
+    if (inputs && p)
+      announce(
+        copy.whatIfAnnounce(
+          fmtMoney(burn.used_usd + p.pace * (1 + inputs.paceChange) * p.daysLeft),
+          lastDay,
+        ),
+      )
+  }
+  const previewPoints = preview
+    ? previewLine(
+        burn,
+        burn.budget ? mode : 'up',
+        (projection(burn)?.pace ?? 0) * (1 + preview.paceChange),
+        preview.limit ?? undefined,
+      )
+    : null
+
+  // At risk, Unbudgeted and the alerts (F5, F7): the scope's own lists.
+  const atRisk = useAtRisk(ref, mayHave(caps, 'at_risk'))
+  const unbudgeted = useUnbudgeted(ref, kind, mayHave(caps, 'unbudgeted'))
+  const alerts = useScopeAlerts(ref, mayHave(caps, 'budgets'))
+  const own = useBudgetV1(burn.budget?.id ?? null, true)
+  const limitsInside =
+    own.data?.limits_inside_usd != null && own.data.limits_inside_count
+      ? { usd: own.data.limits_inside_usd, count: own.data.limits_inside_count }
+      : null
+  const pending = (q: { isPending: boolean; fetchStatus: string }) =>
+    q.isPending && q.fetchStatus !== 'idle'
   const week = changesWindow(burn)
   const changes = useChanges(ref, week ? { by, ...week } : null, mayHave(caps, 'changes'))
   const noWeek = !week || figures(burn).week.sameDaysLastWeek === null
@@ -224,6 +283,8 @@ function Body({
             : null
         }
         onClearShare={() => setSearch({ contributor: undefined }, { replace: true })}
+        preview={previewPoints}
+        whatIf={<WhatIfPanel burn={burn} state={whatIfState} onChange={onWhatIf} />}
         footer={
           <Contributors
             breakdown={breakdown.data}
@@ -234,7 +295,10 @@ function Body({
             dimensions={dimensions}
             onBy={(d) => setSearch({ by: d, contributor: undefined }, { replace: true })}
             picked={picked}
-            onPick={(key) => setSearch({ contributor: key === picked ? undefined : key })}
+            onPick={(key) => {
+              setWhatIfState((w) => (w.open ? { ...w, limit: '', pace: 0 } : w))
+              setSearch({ contributor: key === picked ? undefined : key })
+            }}
             fileName={`budget-contributors-${slug}-${date}.csv`}
           />
         }
@@ -254,6 +318,28 @@ function Body({
         by={by}
         onPickDay={pickDay}
         onOwner={onOwner}
+      />
+      <AtRisk
+        rows={atRisk.data}
+        error={atRisk.error}
+        pending={pending(atRisk)}
+        onRetry={() => void atRisk.refetch()}
+        resetsAt={burn.resets_at}
+        limitsInside={limitsInside}
+        onOwner={onOwner}
+      />
+      <Unbudgeted
+        rows={unbudgeted.data}
+        error={unbudgeted.error}
+        pending={pending(unbudgeted)}
+        onRetry={() => void unbudgeted.refetch()}
+        onOwner={onOwner}
+      />
+      <ScopeAlerts
+        alerts={alerts.data}
+        error={alerts.error}
+        pending={pending(alerts)}
+        onRetry={() => void alerts.refetch()}
       />
       <DayPanel
         day={search.day ?? null}

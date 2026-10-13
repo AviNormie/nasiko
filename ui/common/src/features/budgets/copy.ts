@@ -220,6 +220,74 @@ export const copy = {
   dayMissing: 'This view needs a newer OpenRuntime server.',
   dayHour: (h: number) => `${String(h).padStart(2, '0')}:00`,
 
+  // What-if (F6): nothing is saved.
+  whatIfTitle: 'What if…',
+  whatIfHint: 'Try a different limit or pace',
+  whatIfLimit: 'Limit',
+  whatIfPace: 'Pace change',
+  whatIfPaceValue: (pct: number) =>
+    pct === 0 ? 'Same pace' : `${pct > 0 ? '+' : '−'}${Math.abs(pct)}%`,
+  whatIfProjected: (amount: string, day: string) => `Projected spend ${amount} by ${day}`,
+  whatIfRunsOut: (day: string, stops: boolean) =>
+    stops ? `Runs out around ${day}` : `Exceeds the limit around ${day}`,
+  whatIfWithin: 'Stays within the limit to the reset',
+  whatIfAllowance: (perDay: string, days: number) =>
+    `${perDay} a day for the next ${days} ${days === 1 ? 'day' : 'days'}`,
+  whatIfAllowanceNone: 'No allowance left',
+  whatIfNeedsProjection: 'What-if needs a projection: 3 days of spend.',
+  whatIfNeedsBudget: 'What-if needs a budget to compare against.',
+  whatIfReset: 'Reset',
+  whatIfAnnounce: (amount: string, day: string) =>
+    `Preview, not applied: projected spend ${amount} by ${day}.`,
+  whatIfProblem: {
+    limit_required: 'Enter a limit in dollars.',
+    limit_positive: 'The limit must be more than $0.',
+    limit_too_large: 'The limit must be $1,000,000,000 or less.',
+    pace_out_of_range: 'The pace change must be between −50% and +50%.',
+  },
+
+  // At risk and Unbudgeted (F7)
+  atRiskTitle: 'At risk',
+  atRiskFailed: 'at risk budgets',
+  atRiskEmpty: (reset: string) => `Nothing exceeds its limit before ${reset}.`,
+  atRiskLimitsInside: (amount: string, n: number) =>
+    `${amount} in limits set on ${n} ${n === 1 ? 'budget' : 'budgets'} inside it (routed calls only)`,
+  colBudget: 'Budget',
+  colOwner: 'Owner',
+  colUsed: 'Used of limit',
+  colProjected: 'Projected',
+  colReaches: 'Reaches the limit',
+  atRiskStops: 'stops calls',
+  atRiskAlerts: 'alert only',
+  atRiskRanOut: 'Ran out',
+  atRiskExceeded: 'Exceeded',
+  atRiskNoRunOut: 'Not before the reset',
+  atRiskSession: 'Session',
+  unbudgetedTitle: 'Unbudgeted',
+  unbudgetedSubtitle: 'Agents with spend this period and no agent budget',
+  unbudgetedFailed: 'unbudgeted agents',
+  unbudgetedEmpty: 'Every agent with spend this period has a budget.',
+  colAgent: 'Agent',
+  colSpend: 'Spend',
+  colSplit: 'Routed · traced · harness est.',
+  unbudgetedHarness: 'Its calls don’t go through the router',
+  sectionMissing: 'This list needs a newer OpenRuntime server.',
+
+  // Alerts (F5; moved from the router)
+  alertsTitleV1: 'Alerts',
+  alertsSubtitleV1: 'Thresholds crossed and forecasts, newest first',
+  alertsFailed: 'alerts',
+  alertsEmpty: 'No alerts this period.',
+  alertThreshold: (label: string, pct: number, amount: string, stopped: boolean) =>
+    stopped
+      ? `${label} reached ${pct}% (${amount}); calls stopped`
+      : `${label} crossed ${pct}% (${amount})`,
+  alertForecast: (label: string, pct: number, crosses: string | null, at: string) =>
+    crosses
+      ? `${label} will pass ${pct}% around ${crosses} (projected on ${at})`
+      : `${label} is projected to pass ${pct}% (projected on ${at})`,
+  alertForecastCleared: (label: string, pct: number) => `${label}’s forecast for ${pct}% cleared`,
+
   setBudget: 'Set a budget',
   setFleetBudget: 'Set a fleet budget',
 

@@ -31,6 +31,8 @@ export function BurnCard({
   share,
   onClearShare,
   footer,
+  preview,
+  whatIf,
 }: {
   burn: Burn
   mode: BurnMode
@@ -48,6 +50,10 @@ export function BurnCard({
   onClearShare?: () => void
   /** Under the chart: the contributors list. */
   footer?: ReactNode
+  /** A what-if or lever's dashed "Preview, not applied" line (F4, F6). */
+  preview?: BurnChartPoint[] | null
+  /** The card's last row: What if… (F6). */
+  whatIf?: ReactNode
 }) {
   const id = useId()
   const [table, setTable] = useState(false)
@@ -127,12 +133,14 @@ export function BurnCard({
           formatDay={(t) => fmtShortDay(t)}
           pickedDay={pickedDay}
           onPickDay={onPickDay}
+          preview={preview}
         />
       )}
       {share && shown === 'down' ? (
         <p className="text-xs text-muted-foreground">{copy.shareBurnUpHint(share.name)}</p>
       ) : null}
       {footer}
+      {whatIf}
     </Panel>
   )
 }

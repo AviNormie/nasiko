@@ -170,6 +170,53 @@ describe('/budgets', () => {
     expect(within(sheet).getByText('$4.00')).toBeInTheDocument()
   })
 
+  it('At risk follows the server’s order (budgets.md §14.6); “ran out” only where calls stopped', async () => {
+    renderApp('/budgets')
+    const table = await screen.findByRole('table', { name: copy.atRiskTitle })
+    const rows = within(table).getAllByRole('row').slice(1)
+    expect(rows.map((r) => within(r).getAllByRole('cell')[0]!.textContent)).toEqual([
+      `Code Reviewer${copy.atRiskStops}`,
+      `Pricing Engine${copy.atRiskAlerts}`,
+      `Dev${copy.atRiskAlerts}`,
+      `Platform${copy.atRiskAlerts}`,
+    ])
+    expect(rows[0]).toHaveTextContent(copy.atRiskRanOut)
+    expect(rows[0]).toHaveTextContent('230%')
+    expect(rows[1]).toHaveTextContent('Oct 17')
+    expect(rows[3]).toHaveTextContent('Oct 22')
+  })
+
+  it('Unbudgeted names agents with spend and no budget; a harness without routed calls says why', async () => {
+    renderApp('/budgets')
+    const table = await screen.findByRole('table', { name: copy.unbudgetedTitle })
+    const rows = within(table).getAllByRole('row').slice(1)
+    expect(rows[0]).toHaveTextContent('Support Bot')
+    expect(rows[0]).toHaveTextContent('≥ $14.00')
+    expect(rows[1]).toHaveTextContent('Claude Code')
+    expect(rows[1]).toHaveTextContent(copy.unbudgetedHarness)
+  })
+
+  it('the alerts list moved here: thresholds, stops and forecasts for every budget in scope', async () => {
+    renderApp('/budgets')
+    const list = await screen.findByRole('list', { name: copy.alertsTitleV1 })
+    // It ran out twice: on Oct 9, then again on Oct 13 after its limit was raised.
+    expect(within(list).getAllByText(/Code Reviewer reached 100% .*calls stopped/)).toHaveLength(2)
+    expect(within(list).getAllByText(/will pass 100% around/).length).toBeGreaterThan(0)
+  })
+
+  it('what-if previews a limit, announces it, and clears a picked contributor (one preview at a time)', async () => {
+    const { router } = renderApp(`/budgets?scope=owner:${I.dev}&contributor=${I.pricing}`)
+    await sentence()
+    await userEvent.click(screen.getByRole('button', { name: /^What if…/ }))
+    await userEvent.type(screen.getByLabelText(copy.whatIfLimit), '250')
+    expect(await screen.findByText(/^Projected spend \$[\d.,]+ by Oct 31$/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('budgets-announcer')).toHaveTextContent(/^Preview, not applied/),
+    )
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('contributor'))
+    expect(screen.getByText(copy.burnPreview)).toBeInTheDocument()
+  })
+
   const axeClean = async () => {
     const result = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
