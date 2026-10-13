@@ -2084,7 +2084,7 @@ export function settingsView(w: World) {
     ...(w.edition === 'ee'
       ? { team_identity: w.settings.team_identity, unit_leads_write: w.settings.unit_leads_write }
       : {}),
-    fiscal_year_first_month: w.settings.fiscal.at(-1)!.month,
+    // Not in 1.0 (plan §7 Q2: calendar quarters): the engine keeps the fiscal rule for a later version, unserved.
     updated_at: iso(w.settings.updated_at),
   }
 }
@@ -2161,7 +2161,6 @@ export function capabilities(w: World) {
     'scope_status',
     'session_budgets',
     'prices',
-    'fiscal_year',
     ...(w.edition === 'ee' ? ['unit_budgets', 'team_identity'] : []),
   ]
   return { version: '1.0', features }

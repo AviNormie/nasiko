@@ -2,7 +2,13 @@
 // Unit-lead writes (plans/feat-budget-burn.md §7 Q4, answered 2026-10-13; budgets.md §5, §6.8): an org setting, off by
 // default; EE only (OSS refuses the field); while on, a unit lead writes the units they lead, and still nothing else.
 import { describe, expect, it } from 'vitest'
-import { createBudget, settingsView, updateSettings, worldFromScenario } from './budgetEngine'
+import {
+  capabilities,
+  createBudget,
+  settingsView,
+  updateSettings,
+  worldFromScenario,
+} from './budgetEngine'
 import { budgetScenario, GOLDEN_ANCHOR, SCENARIO_IDS as I } from './seed-budgets'
 
 const NOW = Date.parse(GOLDEN_ANCHOR)
@@ -56,5 +62,14 @@ describe('unit_leads_write', () => {
     expect(
       codeOf(() => createBudget(w, v, { scope: 'org', limit_usd: 10, action: 'alert' }, NOW)),
     ).toBe('scope_not_found')
+  })
+})
+
+describe('1.0 serves no fiscal-year setting (§7 Q2, calendar quarters; B6 QA)', () => {
+  it('the settings read has no fiscal_year_first_month, and no server lists fiscal_year', () => {
+    for (const edition of ['oss', 'ee'] as const) {
+      expect(settingsView(world(edition))).not.toHaveProperty('fiscal_year_first_month')
+      expect(capabilities(world(edition)).features).not.toContain('fiscal_year')
+    }
   })
 })
