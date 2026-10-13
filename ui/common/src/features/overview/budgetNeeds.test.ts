@@ -41,6 +41,7 @@ describe('budget needs (F8)', () => {
     expect(
       budgetView({
         label: 'Dev',
+        agentId: null,
         crossed: 100,
         state: 'exceeded',
         over: 12.5,
@@ -93,6 +94,7 @@ describe('B4 review regressions (#82)', () => {
   it('the detail names the budget’s period and what it covers', () => {
     const b = {
       label: 'Dev',
+      agentId: null,
       crossed: 80,
       state: 'warning' as const,
       over: null,

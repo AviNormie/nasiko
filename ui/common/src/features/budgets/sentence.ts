@@ -5,6 +5,7 @@
  */
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { currentLimit, figures, projection, runOut } from './burn'
+import { needsLevers } from './levers'
 import { copy } from './copy'
 import type { Burn } from './types'
 
@@ -39,4 +40,23 @@ export function burnSentence(b: Burn, kind: 'month' | 'quarter'): string {
   return f.allowance
     ? `${pace} ${copy.sentenceAllowance(fmtMoney(f.allowance.perDay), f.allowance.days, floor)}`
     : pace
+}
+
+/** "October" for a month budget, "the period" otherwise: what the lever estimates assume follows the last 7 days. */
+export function restOf(b: Burn): string {
+  if (b.period !== 'month' || !b.resets_at) return 'the period'
+  return new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' }).format(
+    Date.parse(b.resets_at) - 86_400_000,
+  )
+}
+
+/**
+ * Whether a budget needs its reader (F8, the hub's Needs you): stopped or over its limit is action; past an alert mark
+ * or projected past its limit before the reset is watch; none without a budget or on track.
+ */
+export function burnNeed(b: Burn): 'action' | 'watch' | null {
+  if (!b.budget) return null
+  if (b.budget.stopped || b.budget.state === 'exceeded') return 'action'
+  if (b.budget.state === 'warning' || needsLevers(b, projection(b))) return 'watch'
+  return null
 }

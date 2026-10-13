@@ -1,30 +1,25 @@
 /**
- * The layers on this agent (plans/feat-agent-centric.md PR1c; design "Layer cards"): Routing, Tools, Optimization and
- * Budget, one figure each and a link to the page that owns it. A fixed four-slot row that hides the slots this viewer
+ * The layers on this agent (plans/feat-agent-centric.md PR1c; design "Layer cards"): Routing, Tools and Optimization,
+ * one figure each and a link to the page that owns it (Budget became its own section, `HubBudget.tsx`). A fixed three-slot row that hides the slots this viewer
  * can't read and reflows; a not-configured card says so and links to set it up.
  *
  * | Card | Owner / superuser | Others |
  * | Routing | model and config (`RoutingCard`'s rule: routing reads are owner/superuser only) | hidden |
  * | Tools | connectors and tools blocked by rule (configured, never observed blocks) | hidden (managers only) |
  * | Optimization | Token optimization, the owner's history strategy, window tokens saved | Token optimization only |
- * | Budget | % of this agent's monthly budget: a preview (R-L10 is proposed), mock mode only | hidden |
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { relTime } from '@/features/agents/format'
 import type { AgentView } from '@/features/agents/normalize'
 import { useAgentBlockedTools, useAgentConnectors } from '@/features/mcp/api'
 import { strategyQuery } from '@/features/optimization/api'
 import { copy as optCopy } from '@/features/optimization/copy'
-import { useBudgets, useBudgetStatus } from '@/features/budgets/api'
 import { useAgentRouting } from '@/features/router/api'
 import { configPin, routingSentence } from '@/features/router/routing'
 import { meQuery } from '@/lib/api/auth'
-import { isPreview } from '@/lib/env'
-import { fmtMoney, fmtTokens } from '@/lib/format'
+import { fmtTokens } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { SavedTotal } from '../api'
 import { copy } from '../copy'
@@ -56,7 +51,6 @@ export function LayerCards({
       {reader && !agent.isHarness ? <RoutingSlot id={agent.id} /> : null}
       {agent.canManage ? <ToolsSlot id={agent.id} /> : null}
       <OptimizationSlot agent={agent} owner={owner} saved={saved} extra={optimizationExtra} />
-      {reader && !agent.isHarness && isPreview('budgets') ? <BudgetSlot id={agent.id} /> : null}
     </section>
   )
 }
@@ -185,47 +179,6 @@ function OptimizationSlot({
       <Link to="/optimization" className={LINK}>
         {copy.cards.optimizationOpen}
       </Link>
-    </Slot>
-  )
-}
-
-function BudgetSlot({ id }: { id: string }) {
-  const budgets = useBudgets(true)
-  const budget = budgets.data?.find((b) => b.agent_id === id)
-  const status = useBudgetStatus(!!budget)
-  const st = budget ? status.data?.data.find((s) => s.budget_id === budget.id) : undefined
-  if (budgets.isError || status.isError) return null
-  return (
-    <Slot
-      title={copy.cards.budget}
-      badge={
-        <Badge variant="outline" className="text-3xs">
-          {copy.rail.preview}
-        </Badge>
-      }
-    >
-      {budgets.isPending ? (
-        <Line>…</Line>
-      ) : budget && st ? (
-        <>
-          <Figure>
-            {budget.limit_usd > 0 ? `${Math.round((st.used_usd / budget.limit_usd) * 100)}%` : '—'}
-          </Figure>
-          <Line>{copy.cards.budgetUse(fmtMoney(st.used_usd), fmtMoney(budget.limit_usd))}</Line>
-          <Line>
-            {copy.cards.budgetUpdated(relTime(new Date(status.dataUpdatedAt).toISOString()))}
-          </Line>
-        </>
-      ) : budget ? (
-        <Line>…</Line>
-      ) : (
-        <>
-          <Line>{copy.cards.budgetNone}</Line>
-          <Link to="/router" hash="router-budgets" className={LINK}>
-            {copy.cards.budgetSetUp}
-          </Link>
-        </>
-      )}
     </Slot>
   )
 }

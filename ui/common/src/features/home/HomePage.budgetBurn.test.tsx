@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { copy as budgetCopy } from '@/features/budgets/copy'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { configureMocks } from '@/mocks/handlers'
-import { GOLDEN_ANCHOR } from '@/mocks/seed-budgets'
+import { GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { copy } from './copy'
@@ -22,7 +22,8 @@ afterEach(() =>
   }),
 )
 
-const T = { timeout: 8000 }
+// The first render pays for the React Compiler's Babel pass; under a full parallel run that takes a while.
+const T = { timeout: 15_000 }
 const burnPanel = async (scope: string) =>
   (await screen.findByRole('heading', { name: budgetCopy.homeTitle(scope) }, T)).closest('section')!
 
@@ -58,13 +59,15 @@ describe('Home’s Budget burn', () => {
     expect(within(p).getByText(budgetCopy.homeAtRisk)).toBeInTheDocument()
   })
 
-  it('Needs you: a budget past its projected limit says when, and opens /budgets', async () => {
+  it('Needs you: a budget past its projected limit says when; an agent’s opens its hub’s Budget section', async () => {
     configureMocks({ now: () => Date.parse(GOLDEN_ANCHOR), budgetVariants: ['budgets-golden'] })
     renderApp('/?scope=fleet')
     const row = await screen.findByText(/budget exceeds its limit around Oct 17/, undefined, T)
     const item = row.closest('li')!
     expect(
-      within(item).getByRole('link', { name: overviewCopy.needs.budgetsLabel('Pricing Engine') }),
-    ).toHaveAttribute('href', '/budgets')
+      within(item).getByRole('link', {
+        name: overviewCopy.needs.agentBudgetLabel('Pricing Engine'),
+      }),
+    ).toHaveAttribute('href', `/agents/${I.pricing}#hub-budget`)
   })
 })

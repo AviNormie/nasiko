@@ -35,6 +35,7 @@ export function needsFromAtRisk(
       {
         id: r.budget_id,
         label: own ? copy.needs.yourBudget : r.label,
+        agentId: r.scope === 'agent' ? r.target_id : null,
         crossed: r.crossed,
         state: r.state === 'exceeded' ? 'exceeded' : 'warning',
         over: r.used_usd > r.limit_usd ? r.used_usd - r.limit_usd : null,
@@ -68,6 +69,7 @@ export function needFromOwnStatus(row: StatusRow, label: string): BudgetItem | n
   return {
     id: row.budget_id,
     label,
+    agentId: null,
     crossed: row.crossed,
     state: row.state === 'exceeded' ? 'exceeded' : 'warning',
     over: row.used_usd > row.limit_usd ? row.used_usd - row.limit_usd : null,
@@ -97,6 +99,7 @@ function needsFromStatus(
     return [
       {
         id: b.id,
+        agentId: b.agent_id,
         // Only the viewer's own owner budget is "Your monthly" (home/api's guard).
         label: b.agent_id
           ? agentLabel(b.agent_id) || copy.needs.anAgent

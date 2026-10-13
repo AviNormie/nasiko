@@ -13,7 +13,13 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { fmtShortDay } from '@/lib/format'
 import { chartModel, tableRows, type BurnMode } from '../burn'
 import { stackBars } from '../causes'
-import { burnAxisMoney, burnChartData, burnChartLabels } from '../chartData'
+import {
+  burnAxisMoney,
+  burnChartData,
+  burnChartLabels,
+  withExtraMarkers,
+  type ExtraMarker,
+} from '../chartData'
 import { copy } from '../copy'
 import type { Breakdown, Burn } from '../types'
 import { BurnTable } from './BurnTable'
@@ -33,6 +39,7 @@ export function BurnCard({
   footer,
   preview,
   whatIf,
+  extraMarkers,
 }: {
   burn: Burn
   mode: BurnMode
@@ -54,13 +61,19 @@ export function BurnCard({
   preview?: BurnChartPoint[] | null
   /** The card's last row: What if… (F6). */
   whatIf?: ReactNode
+  /** An agent's own changes beside the budget's events (the hub's markers, F1). */
+  extraMarkers?: readonly ExtraMarker[]
 }) {
   const id = useId()
   const [table, setTable] = useState(false)
   // Without a budget there is nothing to burn down: the chart is burn-up (F1).
   const shown: BurnMode = burn.budget ? mode : 'up'
   const m = chartModel(burn, shown, { end: domainEnd })
-  const base = stackBars(burnChartData(m), breakdown)
+  const own = burnChartData(m)
+  const base = stackBars(
+    extraMarkers ? withExtraMarkers(own, extraMarkers, burn.events) : own,
+    breakdown,
+  )
   // The share line is spend, so it draws on Burn-up only; Burndown says where to find it.
   const data = share && shown === 'up' ? { ...base, share: share.line } : base
   return (

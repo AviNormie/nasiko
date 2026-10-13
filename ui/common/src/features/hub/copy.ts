@@ -52,6 +52,7 @@ export const copy = {
     previousError: "The previous window couldn't load, so Compare draws nothing.",
   },
 
+  budgetSection: 'this agent’s budget',
   rail: {
     label: 'Changes',
     showing: 'Showing recorded deploys and the latest crash',
@@ -110,6 +111,9 @@ export const copy = {
     checked: (parts: string[]) => `Checked ${parts.join(', ')}.`,
     partRequests: 'pending requests',
     partStatus: 'its health (rated on the last 7 days)',
+    partBudget: 'its budget',
+    budgetBadge: 'Budget',
+    reviewBudget: 'Review the budget',
     // An empty sample starts at the agent's creation or 7 days back, so it means this agent had none in 7 days (QA).
     partSessions: (checked: number, found: number, scanned: number) =>
       scanned === 0
@@ -133,6 +137,7 @@ export const copy = {
       status: "Its health couldn't be rated",
       statusIncomplete: "Its health couldn't be fully rated (a cost input is missing)",
       sessions: "Its sessions couldn't be checked",
+      budget: "Its budget couldn't be checked",
     },
   },
 
@@ -180,11 +185,6 @@ export const copy = {
     historyBy: (name: string) => `History: ${name}`,
     savedIn: (tokens: string, basis: string) => `${tokens} tokens saved in this window (${basis})`,
     optimizationOpen: 'Open Optimization',
-    budget: 'Budget',
-    budgetUse: (used: string, limit: string) => `${used} of ${limit} this month`,
-    budgetNone: 'No budget set',
-    budgetSetUp: 'Set a budget',
-    budgetUpdated: (rel: string) => `budget use · updated ${rel}`,
   },
 
   ledger: {

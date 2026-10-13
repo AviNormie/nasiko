@@ -116,6 +116,10 @@ const PUBLIC = {
     'availability',
     // Home's Budget burn panel (F10, B4), lazy-loaded by the home.
     'components/BudgetBurnPanel',
+    // The hub's Budget section (B5), lazy-loaded by the hub.
+    'components/AgentBudgetSection',
+    // The budget's sentence and whether it needs its reader: the hub's Needs you row (B5).
+    'sentence',
     // The projection rule (§4.6): Needs you rates the viewer's own budget the way At risk ranks the rest (B4 review).
     'projection',
   ],

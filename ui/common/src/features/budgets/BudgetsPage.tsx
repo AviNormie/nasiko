@@ -66,7 +66,7 @@ import {
   shareLine,
 } from './causes'
 import { leverPreview } from './levers'
-import { burnSentence } from './sentence'
+import { burnSentence, restOf } from './sentence'
 import { useLevers } from './useLevers'
 import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Budget, Burn } from './types'
@@ -665,12 +665,4 @@ function useFallbackBurn(enabled: boolean, self: string) {
     error: list.error ?? status.error,
     retry: () => void (list.isError ? list.refetch() : status.refetch()),
   }
-}
-
-/** "October" for a month budget, "the quarter" otherwise: what the lever estimates assume follows the last 7 days. */
-function restOf(b: Burn): string {
-  if (b.period !== 'month' || !b.resets_at) return 'the period'
-  return new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' }).format(
-    Date.parse(b.resets_at) - 86_400_000,
-  )
 }

@@ -13,6 +13,7 @@ const base: HubNeedsInput = {
   requests: ok({ count: 0, firstChat: null, firstRequest: null, unproven: 0 }),
   status: ok({ rating: 'healthy', reason: null, incomplete: false }),
   sessions: sessionsOk(),
+  budget: { state: 'absent' },
 }
 
 describe('hub Needs you', () => {
@@ -23,6 +24,7 @@ describe('hub Needs you', () => {
       requests: true,
       status: true,
       sessions: { found: 3, checked: 3, failed: 0, scanned: 25, ambiguous: false },
+      budget: false,
     })
     expect(hubNeeds({ ...base, sessions: { state: 'loading' } }).clear).toBe(false)
     expect(hubNeeds({ ...base, sessions: { state: 'loading' } }).coverage).toBeNull()
@@ -82,6 +84,7 @@ describe('hub Needs you', () => {
         requests: ok({ count: 2, firstChat: 'c1', firstRequest: 'r1', unproven: 0 }),
         status: ok({ rating, reason: 'Crashed', incomplete: false }),
         sessions: ok({ found: 5, checked: 4, failed: 1, scanned: 25, ambiguous: true }),
+        budget: { state: 'absent' },
       }).rows
     expect(run('action').map((r) => r.kind)).toEqual(['status', 'requests', 'sessions'])
     expect(run('watch').map((r) => r.kind)).toEqual(['requests', 'status', 'sessions'])
@@ -154,5 +157,22 @@ describe('the hub session sample', () => {
       start,
     )
     expect(rows).toHaveLength(1)
+  })
+
+  it('this agent’s budget (B5): stopped or over is action after health, a projected one watch; nothing when on track', () => {
+    const run = (level: 'action' | 'watch' | null, rating: 'action' | 'watch' = 'action') =>
+      hubNeeds({
+        ...base,
+        status: ok({ rating, reason: 'Crashed', incomplete: false }),
+        requests: ok({ count: 1, firstChat: 'c1', firstRequest: 'r1', unproven: 0 }),
+        budget: ok({ level, sentence: 'Ran out Oct 12; calls are stopped until Nov 1.' }),
+      })
+    expect(run('action').rows.map((r) => r.kind)).toEqual(['status', 'budget', 'requests'])
+    expect(run('watch', 'watch').rows.map((r) => r.kind)).toEqual(['requests', 'status', 'budget'])
+    expect(run(null).rows.some((r) => r.kind === 'budget')).toBe(false)
+    expect(run(null).coverage?.budget).toBe(true)
+    const failed = hubNeeds({ ...base, budget: { state: 'failed' } })
+    expect(failed.failed).toEqual(['budget'])
+    expect(failed.clear).toBe(false)
   })
 })

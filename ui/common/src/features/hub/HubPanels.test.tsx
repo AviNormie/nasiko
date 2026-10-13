@@ -11,6 +11,7 @@ import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { agentNamed } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
+import { copy as budgetCopy } from '@/features/budgets/copy'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -192,19 +193,17 @@ describe('flows errors', () => {
 })
 
 describe('layer cards', () => {
-  it('the owner sees Routing, Tools, Optimization and the Budget preview', async () => {
+  it('the owner sees Routing, Tools and Optimization; Budget is its own section (B5)', async () => {
     renderApp(url())
     const cards = await screen.findByRole('region', { name: copy.cards.title })
-    for (const t of [
-      copy.cards.routing,
-      copy.cards.tools,
-      copy.cards.optimization,
-      copy.cards.budget,
-    ])
+    for (const t of [copy.cards.routing, copy.cards.tools, copy.cards.optimization])
       expect(
         await within(cards).findByRole('heading', { name: new RegExp(`^${t}`) }),
       ).toBeInTheDocument()
-    expect(within(cards).getByText(copy.rail.preview)).toBeInTheDocument()
+    expect(within(cards).queryByRole('heading', { name: budgetCopy.hubTitle })).toBeNull()
+    expect(
+      await screen.findByRole('region', { name: budgetCopy.hubTitle }, { timeout: 8000 }),
+    ).toBeInTheDocument()
   })
 
   it('a coding harness’s owner sees Tools and Optimization, never Routing or Budget', async () => {
@@ -219,7 +218,7 @@ describe('layer cards', () => {
       .map((h) => h.textContent)
     expect(titles).toContain(copy.cards.optimization)
     expect(titles).not.toContain(copy.cards.routing)
-    expect(titles.some((t) => t?.startsWith(copy.cards.budget))).toBe(false)
+    expect(titles).not.toContain(budgetCopy.hubTitle)
     rec.stop()
     expect(rec.urls.filter((u) => u.pathname.endsWith('/llm-config'))).toEqual([])
   })
