@@ -28,6 +28,7 @@ import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
 import type { ResolvedWindow } from '@/features/tokenops/window'
 import { ApiError, apiData, withQuery } from '@/lib/api/client'
+import { isEndpointAbsent } from '@/lib/api/detect'
 import { isPreview } from '@/lib/env'
 import { isHarness } from '@/features/agents/status'
 import { usePendingRequests } from '@/features/chat/api'
@@ -243,11 +244,15 @@ function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
   // Both reads poll together: a limit changed elsewhere, or a new budget, shows with the next status.
   const list = useBudgets(on && any, BUDGET_POLL_MS)
   const status = useBudgetStatus(on && !!list.data?.length, BUDGET_POLL_MS)
-  const absent = (e: unknown) => e instanceof ApiError && e.status === 404
   // A failed probe can't say budgets are off: it reads as failed ("Budgets couldn't load").
-  const off = !any || caps.data?.kind === 'absent' || absent(list.error) || absent(status.error)
+  // Only a bare 404 means the route is absent; a coded one is an answer.
+  const off =
+    !any ||
+    caps.data?.kind === 'absent' ||
+    isEndpointAbsent(list.error) ||
+    isEndpointAbsent(status.error)
   // A 401 or 403 ends the poll: the figures will never refresh, so they read as failed even when some are kept.
-  const denied = [list.error, status.error].some((e) => budgetPollEnds(e) && !absent(e))
+  const denied = [list.error, status.error].some((e) => budgetPollEnds(e) && !isEndpointAbsent(e))
   const failed =
     caps.isError || denied || (list.isError && !list.data) || (status.isError && !status.data)
   const stale = list.isError || status.isError

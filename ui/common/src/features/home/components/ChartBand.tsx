@@ -64,6 +64,8 @@ export interface ChartBandProps {
   /** The Budget burn panel (plans/feat-budget-burn.md F10, D13): the first row when its burn read answered; then Spend
    *  keeps By agent only (the panel's chart is the scope's spend over the month). */
   burn?: ReactNode
+  /** The scope's burn read is still out: its row is held (a skeleton) and Over time waits, so neither flashes. */
+  burnPending?: boolean
 }
 
 const SPEND = seriesAt(0)
@@ -78,7 +80,11 @@ export default function ChartBand(p: ChartBandProps) {
       aria-label={copy.charts.label}
       className="grid grid-cols-1 gap-3 @[880px]/overview:grid-cols-2"
     >
-      {p.burn ? <Suspense fallback={<PanelSkeleton height={CHART_H} />}>{p.burn}</Suspense> : null}
+      {p.burn ? (
+        <Suspense fallback={<BurnRowSkeleton />}>{p.burn}</Suspense>
+      ) : p.burnPending ? (
+        <BurnRowSkeleton />
+      ) : null}
       <SpendPanel {...p} />
       <div className="[&>section]:h-full">
         <CostPerformance
@@ -96,12 +102,21 @@ export default function ChartBand(p: ChartBandProps) {
   )
 }
 
+/** The burn panel's row while it loads: full width, like the panel. */
+function BurnRowSkeleton() {
+  return (
+    <div className="@[880px]/overview:col-span-2">
+      <PanelSkeleton height={CHART_H} />
+    </div>
+  )
+}
+
 // ─── Spend ─────────────────────────────────────────────
 
 function SpendPanel(p: ChartBandProps) {
   const [view, setView] = useState<'time' | 'agent'>('time')
   // With the Budget burn panel above, Over time is that panel's job (D13).
-  const overTime = p.superuser && !p.burn
+  const overTime = p.superuser && !p.burn && !p.burnPending
   const time = overTime && view === 'time'
   const bars = topBars(p.rows, 'spend', BAND_BARS)
   const known = p.spendStatus === 'ok' || p.spendStatus === 'stale'

@@ -32,7 +32,8 @@ export interface NeedsInput {
   agents: SourceState<{ id: string; name: string; reason: string; budget: boolean }[]> & {
     incomplete?: boolean
   }
-  budgets: SourceState<BudgetItem[]>
+  /** `incomplete`: a later page failed, so the rows are real but the source can't vouch for "nothing else". */
+  budgets: SourceState<BudgetItem[]> & { incomplete?: boolean }
   sessions: SourceState<{ failed: number; checked: number; agents: string[] }>
 }
 
@@ -51,6 +52,9 @@ export interface BudgetItem {
   /** The day it is projected to reach its limit (At risk), before the reset. */
   runsOutOn: string | null
   resetsAt: string | null
+  /** For the detail line: what period and population it counts (a fleet budget counts all priced spend). */
+  period: 'month' | 'quarter' | 'session'
+  covers: 'routed_calls' | 'all_priced'
 }
 
 export type NeedRow =
@@ -118,7 +122,12 @@ export function mergeNeeds(i: NeedsInput): Needs {
 
   const states = ORDER.map((id) => [id, i[id].state] as const)
   const failed = states
-    .filter(([id, s]) => s === 'failed' || (id === 'agents' && i.agents.incomplete))
+    .filter(
+      ([id, s]) =>
+        s === 'failed' ||
+        (id === 'agents' && i.agents.incomplete) ||
+        (id === 'budgets' && i.budgets.incomplete),
+    )
     .map(([id]) => id)
   const loading = states.some(([, s]) => s === 'loading')
   return {
@@ -151,7 +160,9 @@ export function budgetView(b: Omit<BudgetItem, 'id'>): { title: string; detail: 
     return {
       title: copy.needs.budget(b.label, 'exceeded', b.crossed),
       detail:
-        b.over !== null ? copy.needs.budgetOverBy(fmtMoney(b.over), null) : copy.needs.budgetDetail,
+        b.over !== null
+          ? copy.needs.budgetOverBy(fmtMoney(b.over), null)
+          : copy.needs.budgetDetailFor(b.period, b.covers),
     }
   if (b.runsOutOn)
     return {
@@ -160,6 +171,6 @@ export function budgetView(b: Omit<BudgetItem, 'id'>): { title: string; detail: 
     }
   return {
     title: copy.needs.budget(b.label, 'warning', b.crossed),
-    detail: copy.needs.budgetDetail,
+    detail: copy.needs.budgetDetailFor(b.period, b.covers),
   }
 }

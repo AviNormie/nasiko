@@ -275,6 +275,8 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
           stops: false,
           runsOutOn: null,
           resetsAt: null,
+          period: 'month' as const,
+          covers: 'routed_calls' as const,
         },
       ]),
       sessions: ok({ failed: 3, checked: 25, agents: ['X'] }),

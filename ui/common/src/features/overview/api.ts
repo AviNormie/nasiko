@@ -100,7 +100,8 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
   const caps = useQuery({ ...capabilitiesQuery, enabled: on })
   const budgetsOn = caps.data?.kind === 'available'
   const budgets = useBudgets(on && budgetsOn)
-  const budgetsAbsent = !budgetsOn || isEndpointAbsent(budgets.error)
+  // Absent only when the probe or the list says so: a probe still loading or failed is not "no budgets".
+  const budgetsAbsent = caps.data?.kind === 'absent' || isEndpointAbsent(budgets.error)
   // Only once the list answered: on a server without budgets (bare 404) no status request goes out.
   const budgetStatus = useBudgetStatus(on && budgets.isSuccess)
   const deployedCount = useMemo(
@@ -122,6 +123,7 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
       prev.isError ||
       d30.isError ||
       (fleetSeries && ts.isError) ||
+      caps.isError ||
       (budgets.isError && !budgetsAbsent) ||
       budgetStatus.isError)
 
@@ -200,7 +202,11 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     [cur.data],
   )
   const budgetsSettled =
-    budgetsAbsent || budgets.isError || budgetStatus.isSuccess || budgetStatus.isError
+    budgetsAbsent ||
+    caps.isError ||
+    budgets.isError ||
+    budgetStatus.isSuccess ||
+    budgetStatus.isError
   const ratingsPending =
     on &&
     (cur.isPending ||
@@ -222,7 +228,7 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     retry: () => void dir.refetch(),
     retryCost: () => {
       // Never the fleet series for a member: Retry must not send the request the gate withholds.
-      for (const q of [cur, prev, d30, ...(fleetSeries ? [ts] : []), budgets, budgetStatus])
+      for (const q of [cur, prev, d30, ...(fleetSeries ? [ts] : []), caps, budgets, budgetStatus])
         if (q.isError) void q.refetch()
     },
   }
@@ -264,7 +270,8 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   const dir = { byId: fleet.byId }
   // Budgets (plans/feat-budget-burn.md F8): the viewer's scope's At risk, or R-L10's own list on an older server.
   const shownAsAgent = (agentId: string) =>
-    !!fleet.summary?.byId.get(agentId)?.reasons.some((r) => r.code === 'budgetStopped')
+    // The agent row shows only its first reason: a stop listed lower down isn't said there.
+    fleet.summary?.byId.get(agentId)?.reasons[0]?.code === 'budgetStopped'
   const agentLabel = (agentId: string) => {
     const a = dir.byId.get(agentId)
     return a?.display_name || a?.name

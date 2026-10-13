@@ -134,6 +134,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     void qc.invalidateQueries({ queryKey: ['builds', 'agent'] })
     // An edition's org levels too (units and members change elsewhere: Access control, the IdP sync).
     void qc.invalidateQueries({ queryKey: ['home', 'org'] })
+    // The Budget burn panel's burn and At risk (Needs you's budget rows too).
+    void qc.invalidateQueries({ queryKey: ['budgets', 'v1'] })
   }, [returnTick, qc])
 
   // Scope: the URL, else the stored choice, else the persona's default once it settles (scope.ts).
@@ -198,6 +200,9 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     { period: 'month' },
     !!burnRef && mayHave(caps.data, 'burn'),
   )
+  // Until the probe and the burn answer, the panel's row is held and Over time waits (D13: no swap mid-look).
+  const burnPending =
+    !!burnRef && (caps.isPending || (mayHave(caps.data, 'burn') && burn.isPending))
   const burnPanel =
     burnRef && burn.data ? (
       <BudgetBurnPanel
@@ -469,6 +474,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
               health={health}
               onHealth={(h) => change({ health: h })}
               burn={burnPanel}
+              burnPending={burnPending}
             />
           </Suspense>
           {health ? (

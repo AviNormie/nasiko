@@ -79,6 +79,8 @@ describe('Needs you rows', () => {
                 stops: false,
                 runsOutOn: null,
                 resetsAt: null,
+                period: 'month' as const,
+                covers: 'routed_calls' as const,
               },
               {
                 id: 'b2',
@@ -90,6 +92,8 @@ describe('Needs you rows', () => {
                 stops: false,
                 runsOutOn: null,
                 resetsAt: null,
+                period: 'month' as const,
+                covers: 'routed_calls' as const,
               },
             ],
           },
