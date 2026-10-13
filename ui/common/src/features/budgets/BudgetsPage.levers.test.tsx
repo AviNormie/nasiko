@@ -7,7 +7,8 @@ import { configureMocks } from '@/mocks/handlers'
 import { GOLDEN_ANCHOR } from '@/mocks/seed-budgets'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
-import { recordRequestBodies } from '@/test/setup'
+import { routingAnswer } from '@/test/routing'
+import { recordRequestBodies, server } from '@/test/setup'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -98,6 +99,9 @@ describe('levers', () => {
   })
 
   it('a cheaper model pins only that agent; token optimization turns on its switch', async () => {
+    // The seed's agents route through an Anthropic config while their traces are OpenAI's: answer as an OpenAI config,
+    // so a gpt-4o-mini pin fits (a mismatch withholds the lever, regression-1).
+    server.use(routingAnswer('openai', null))
     const rec = recordRequestBodies()
     renderApp('/budgets?scope=yours')
     const panel = await rows()

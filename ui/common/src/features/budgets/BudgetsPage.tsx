@@ -293,7 +293,7 @@ function Body({
     setLeverId(null)
     if (picked) setSearch({ contributor: undefined }, { replace: true })
   }
-  const levers = useLevers(burn, ref, kind, caps, !rl10)
+  const levers = useLevers(burn, ref, caps, viewer, !rl10)
   const leverById = (id: string | null) =>
     levers.list.state === 'levers'
       ? ([...levers.list.reduce, ...levers.list.adjust].find((l) => l.id === id) ?? null)
@@ -471,7 +471,9 @@ function Body({
             onBy={(d) => setSearch({ by: d, contributor: undefined }, { replace: true })}
             picked={picked}
             onPick={(key) => {
+              // One preview at a time: picking a contributor ends the others, it doesn't just hide them.
               setWhatIfState((w) => (w.open ? { ...w, limit: '', pace: 0 } : w))
+              setLeverId(null)
               setSearch({ contributor: key === picked ? undefined : key })
             }}
             fileName={`budget-contributors-${slug}-${date}.csv`}
@@ -512,7 +514,11 @@ function Body({
               <LeverAction
                 lever={l}
                 burn={burn}
-                onRaise={(limit) => editOwn(limit)}
+                onRaise={(limit) => {
+                  // The editor takes over: its save is the write, so the preview ends here.
+                  setLeverId(null)
+                  editOwn(limit)
+                }}
                 onApplied={() => setLeverId(null)}
               />
             ) : null

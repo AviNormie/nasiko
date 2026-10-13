@@ -355,6 +355,10 @@ export const copy = {
     stop: 'Calls now stop at the limit.',
   },
   leverFailed: 'That didn’t apply.',
+  leverModelProvider: (now: string, to: string) =>
+    `This agent now routes through a ${now} config, so a ${to} model can’t be pinned. Nothing changed.`,
+  leverModelAlready: (name: string, model: string) =>
+    `${name} already routes to ${model}. Nothing changed.`,
   previewNotApplied: (amount: string, pct: string) => `Preview, not applied: ${amount} (${pct})`,
   previewReset: 'Reset',
   reviewActions: 'Review actions',
