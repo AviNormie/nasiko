@@ -206,8 +206,16 @@ function Body({
   const subject = who.kind === 'you' ? (src ? sentenceName(src, agentName) : null) : label
   const reset = fmtShortDay(resetsAt)
   // A quarter budget's words (B6): the descriptions say "monthly" for the default period.
+  // An existing budget's limit applies now, to the period in force (§4.3): its words follow that period, not a change
+  // scheduled for the next boundary.
+  const limitPeriod = src ? src.period : period
   const perPeriod = (t: string) =>
-    period === 'quarter' ? t.replace('A monthly limit', 'A quarterly limit') : t
+    limitPeriod === 'quarter'
+      ? t
+          .replace('A monthly limit', 'A quarterly limit')
+          .replace('until the month resets', 'until the quarter resets')
+          .replace('this month', 'this quarter')
+      : t
   const errs = fieldErrors(schema, form)
   const limitErr = errs.limit
   const thrErr = errs.thresholds
@@ -372,7 +380,11 @@ function Body({
                 <p className="text-xs text-muted-foreground">
                   {period === src.period
                     ? copy.periodPendingCancel
-                    : copy.periodChangeFrom(period, fmtShortDay(nextBoundary(resetsAt)))}
+                    : copy.periodChangeFrom(
+                        period,
+                        fmtShortDay(nextBoundary(resetsAt)),
+                        src.period,
+                      )}
                 </p>
               ) : src?.next_period_change ? (
                 <p className="text-xs text-muted-foreground">
@@ -389,7 +401,7 @@ function Body({
             <FieldLabel htmlFor={`${ids}-limit`}>
               {who.kind === 'session'
                 ? copy.sessionLimit
-                : period === 'quarter'
+                : limitPeriod === 'quarter'
                   ? copy.quarterlyLimit
                   : copy.monthlyLimit}
             </FieldLabel>
@@ -511,7 +523,7 @@ function Body({
                         ? copy.alertOnlyHint
                         : who.kind === 'session'
                           ? copy.stopHintSession
-                          : copy.stopHint}
+                          : perPeriod(copy.stopHint)}
                     </span>
                   </Label>
                 </div>

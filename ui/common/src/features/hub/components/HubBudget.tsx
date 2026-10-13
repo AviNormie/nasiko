@@ -11,10 +11,11 @@ import { lazy, Suspense, useEffect } from 'react'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import type { AgentView } from '@/features/agents/normalize'
 import { useBurn } from '@/features/budgets/api'
+import type { Viewer } from '@/features/budgets/scope'
+import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import { capabilitiesQuery, mayHave, type Availability } from '@/features/budgets/availability'
 import type { Burn } from '@/features/budgets/types'
 import { resolveWindow } from '@/features/tokenops/window'
-import { meQuery } from '@/lib/api/auth'
 import { isEndpointAbsent } from '@/lib/api/detect'
 import { useReturnTick } from '@/lib/useReturnTick'
 import { useHubMarkers, type MarkersState } from '../api'
@@ -27,8 +28,9 @@ const SECTION_SKELETON_PX = 360
 const PACE_CHANGES = new Set(['compress_change', 'route_change'])
 
 export function HubBudget({ agent }: { agent: AgentView }) {
-  const me = useQuery(meQuery).data
-  const reader = !!me && (me.sub === agent.ownerId || me.is_superuser)
+  // The budgets viewer (B6): its owner, a superuser or EE org admin, or finance (who reads it and writes nothing).
+  const viewer = useBudgetsViewer().viewer
+  const reader = !!viewer && (viewer.id === agent.ownerId || viewer.superuser || !!viewer.finance)
   const caps = useQuery({ ...capabilitiesQuery, enabled: reader })
   const on = reader && mayHave(caps.data, 'burn')
   const burn = useBurn({ scope: 'agent', id: agent.id }, { period: 'month' }, on)
@@ -38,7 +40,7 @@ export function HubBudget({ agent }: { agent: AgentView }) {
   useEffect(() => {
     if (tick) void qc.invalidateQueries({ queryKey: ['budgets', 'v1'] })
   }, [tick, qc])
-  if (!reader || !me) return null
+  if (!reader || !viewer) return null
   if (caps.isPending || (on && burn.isPending))
     return <PanelSkeleton height={SECTION_SKELETON_PX} />
   // A failed probe can't say budgets are off: a failure with Retry (F13), never an absent section.
@@ -61,14 +63,7 @@ export function HubBudget({ agent }: { agent: AgentView }) {
     )
   // A harness's direct provider calls aren't routed: no routed call this period, nothing to budget here (F9).
   if (!burn.data || (agent.isHarness && burn.data.calls === 0)) return null
-  return (
-    <Loaded
-      burn={burn.data}
-      agent={agent}
-      viewer={{ id: me.sub, superuser: me.is_superuser }}
-      caps={caps.data}
-    />
-  )
+  return <Loaded burn={burn.data} agent={agent} viewer={viewer} caps={caps.data} />
 }
 
 function Loaded({
@@ -79,7 +74,7 @@ function Loaded({
 }: {
   burn: Burn
   agent: AgentView
-  viewer: { id: string; superuser: boolean }
+  viewer: Viewer
   caps: Availability
 }) {
   const win = resolveWindow(

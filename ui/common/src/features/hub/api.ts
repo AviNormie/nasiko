@@ -23,6 +23,7 @@ import { displayStatus } from '@/features/agents/status'
 import { budgetKeys, useBurn } from '@/features/budgets/api'
 import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
 import { burnNeed, burnSentence } from '@/features/budgets/sentence'
+import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import {
   historyPages,
   useChatHistory,
@@ -585,7 +586,10 @@ function useBudgetNeed(
   agent: { id: string; ownerId: string; isHarness: boolean },
   me: { sub: string; is_superuser: boolean } | undefined,
 ): { state: HubNeedsInput['budget']; retry: () => void } {
-  const reader = !!me && (me.sub === agent.ownerId || me.is_superuser)
+  // The Budget section's own reader rule (B6): its owner, a superuser or EE org admin, or finance.
+  const viewer = useBudgetsViewer().viewer
+  const reader =
+    !!me && !!viewer && (viewer.id === agent.ownerId || viewer.superuser || !!viewer.finance)
   const caps = useQuery({ ...capabilitiesQuery, enabled: reader })
   const on = reader && mayHave(caps.data, 'burn')
   const burn = useBurn({ scope: 'agent', id: agent.id }, { period: 'month' }, on)

@@ -79,9 +79,16 @@ import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Budget, Burn } from './types'
 
 export function BudgetsPage({ search }: { search: BudgetsSearch }) {
-  const who = useBudgetsViewer()
   const caps = useQuery(capabilitiesQuery)
+  const who = useBudgetsViewer(caps.data?.kind === 'available')
   if (who.pending || caps.isPending) return <PageLoader />
+  // A wrong viewer would show the wrong scopes: say the role couldn't be read rather than guess (B6 review).
+  if (who.error)
+    return (
+      <Frame>
+        <PanelError error={who.error} onRetry={who.retry} what={copy.roleFailed} />
+      </Frame>
+    )
   if (caps.isError)
     return (
       <Frame>
@@ -354,6 +361,9 @@ function Body({
   const openEdit = async (budgetId: string, label: string, limit?: number) => {
     try {
       const b = await qc.fetchQuery({ ...budgetV1Query(budgetId), staleTime: 0 })
+      // The editor only for a budget this viewer may change (§5): a row offered on a guess never opens a 403.
+      const target = b.scope === 'unit' ? b.unit_id : b.owner_id
+      if (!canWrite(b.scope, target, viewer)) return void toast.error(copy.editNotAllowed)
       setEditor({
         kind: 'edit',
         budget: toSheetBudget(b),
@@ -603,10 +613,13 @@ function Body({
         pending={pending(alerts)}
         onRetry={() => void alerts.refetch()}
         actions={(a) =>
-          // Units and sessions aren't edited here (B5, B6).
-          (viewer.superuser || pageScope.kind === 'yours') &&
-          a.scope !== 'unit' &&
-          a.scope !== 'session' ? (
+          // Who might write it (the click re-checks the record): never finance; a unit's alert for an admin or a lead
+          // the org lets write (B6); sessions are set on their ledger (B5).
+          !viewer.finance &&
+          a.scope !== 'session' &&
+          (a.scope === 'unit'
+            ? viewer.superuser || !!viewer.writeUnits?.size
+            : viewer.superuser || pageScope.kind === 'yours') ? (
             <LinkButton
               className="text-xs"
               aria-label={copy.viewBudgetFor(a.label)}

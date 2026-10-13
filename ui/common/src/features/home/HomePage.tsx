@@ -188,7 +188,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
   // once it answers. Fleet is the org's for a fleet reader (a superuser, or EE's org admin or finance, B6); a member's
   // Fleet is only what's shared with them. Yours is the account the budgets viewer speaks for.
   const caps = useQuery(capabilitiesQuery)
-  const budgetsViewer = useBudgetsViewer().viewer
+  const budgetsViewer = useBudgetsViewer(caps.data?.kind === 'available').viewer
   const burnRef: ScopeRef | null =
     scope === 'fleet'
       ? (budgetsViewer ? readsFleet(budgetsViewer) : me.is_superuser)
@@ -222,7 +222,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         // A unit opens its own scope on /budgets (B6); every scope Home shows is one /budgets reads.
         scopeParam={scope ?? undefined}
         yours={scope === 'yours'}
-        viewerId={me.sub}
+        viewerId={budgetsViewer?.id ?? me.sub}
         atRisk={mayHave(caps.data, 'at_risk')}
       />
     ) : null

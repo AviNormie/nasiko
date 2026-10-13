@@ -63,7 +63,15 @@ export function ScopeSwitch({
               value={scope.kind === 'unit' ? scope.id : ''}
               onValueChange={(id) => onScope({ kind: 'unit', id })}
             >
-              <SelectTrigger size="sm" className="w-44 text-xs" aria-label={copy.scopeUnitPick}>
+              <SelectTrigger
+                size="sm"
+                className="w-44 text-xs"
+                aria-label={
+                  scope.kind === 'unit'
+                    ? `${copy.scopeUnitPick}: ${units.find((u) => u.id === scope.id)?.path ?? ''}`
+                    : copy.scopeUnitPick
+                }
+              >
                 <SelectValue placeholder={copy.scopeUnit} />
               </SelectTrigger>
               <SelectContent>
@@ -80,7 +88,15 @@ export function ScopeSwitch({
               value={scope.kind === 'owner' ? scope.id : ''}
               onValueChange={(id) => onScope({ kind: 'owner', id })}
             >
-              <SelectTrigger size="sm" className="w-40 text-xs" aria-label={copy.scopeOwnerPick}>
+              <SelectTrigger
+                size="sm"
+                className="w-40 text-xs"
+                aria-label={
+                  scope.kind === 'owner'
+                    ? `${copy.scopeOwnerPick}: ${owners.find((o) => o.id === scope.id)?.name ?? ''}`
+                    : copy.scopeOwnerPick
+                }
+              >
                 <SelectValue placeholder={copy.scopeOwner} />
               </SelectTrigger>
               <SelectContent>
