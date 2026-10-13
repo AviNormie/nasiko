@@ -40,6 +40,7 @@ export function BurnCard({
   preview,
   whatIf,
   extraMarkers,
+  expected,
 }: {
   burn: Burn
   mode: BurnMode
@@ -63,6 +64,8 @@ export function BurnCard({
   whatIf?: ReactNode
   /** An agent's own changes beside the budget's events (the hub's markers, F1). */
   extraMarkers?: readonly ExtraMarker[]
+  /** The dotted "expected" line after a change that moved the pace (F13), with its legend key. */
+  expected?: { line: BurnChartPoint[]; label: string } | null
 }) {
   const id = useId()
   const [table, setTable] = useState(false)
@@ -136,12 +139,14 @@ export function BurnCard({
           labels={{
             ...burnChartLabels(m, { stops: burn.budget?.action === 'stop', summary: sentence }),
             share: share ? copy.shareLine(share.name) : undefined,
+            expected: expected?.label,
           }}
           formatMoney={burnAxisMoney}
           formatDay={(t) => fmtShortDay(t)}
           pickedDay={pickedDay}
           onPickDay={onPickDay}
           preview={preview}
+          expected={expected?.line ?? null}
         />
       )}
       {share && shown === 'down' ? (

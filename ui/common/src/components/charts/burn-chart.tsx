@@ -68,6 +68,8 @@ export interface BurnChartLabels {
   over: string | null
   runOut: string | null
   preview: string
+  /** Lab: the "expected" line's legend key (F13), when one is drawn. */
+  expected?: string
   bars: string
   spike: string
   /** The chart's accessible description: the page's sentence (F12). */
@@ -83,6 +85,8 @@ export interface BurnChartProps {
   formatDay: (t: number) => string
   /** A dashed "Preview, not applied" line (a lever or what-if). */
   preview?: BurnChartPoint[] | null
+  /** Lab: a dotted "expected" line after a change that moved the pace (F13). */
+  expected?: BurnChartPoint[] | null
   pickedDay?: string | null
   onPickDay?: (day: string) => void
   className?: string
@@ -92,6 +96,7 @@ export interface BurnChartProps {
 
 const ACTUAL = seriesAt(0)
 const PREVIEW = seriesAt(2)
+const EXPECTED = seriesAt(3)
 const SHARE = seriesAt(1)
 /** A stacked part's colours: the stack's position, Other in the Other colour. */
 const partSeries = (stack: readonly { key: string }[], key: string) =>
@@ -110,7 +115,7 @@ const GAP = 14
 const TICK = { fill: 'var(--muted-foreground)', fontSize: 11 }
 
 export function BurnChart(props: BurnChartProps) {
-  const { labels, data, preview } = props
+  const { labels, data, preview, expected } = props
   return (
     <figure aria-label={labels.summary} className={props.className}>
       <div role="presentation" className={props.compact ? 'h-56' : 'h-72 md:h-80'}>
@@ -142,6 +147,11 @@ export function BurnChart(props: BurnChartProps) {
         {preview?.length ? (
           <Key dashed color={PREVIEW.edge}>
             {labels.preview}
+          </Key>
+        ) : null}
+        {expected?.length && labels.expected ? (
+          <Key dashed color={EXPECTED.edge}>
+            {labels.expected}
           </Key>
         ) : null}
         {data.share?.length && labels.share ? <Key color={SHARE.edge}>{labels.share}</Key> : null}
@@ -199,6 +209,7 @@ function Plot({
   formatMoney,
   formatDay,
   preview,
+  expected,
   pickedDay,
   onPickDay,
   compact,
@@ -216,7 +227,7 @@ function Plot({
 
   // UTC, like the day bars and the labels: a local-time scale puts ticks at the viewer's midnight.
   const x = scaleUtc({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
-  const extra = [...(preview ?? []), ...(data.share ?? [])].map((p) => p.v)
+  const extra = [...(preview ?? []), ...(expected ?? []), ...(data.share ?? [])].map((p) => p.v)
   const lowY = Math.min(0, data.minY, ...extra)
   const highY = Math.max(data.maxY, ...extra) * 1.06 || 1
   const y = scaleLinear({ domain: [lowY, highY], range: [burnH, 0], nice: true })
@@ -394,6 +405,17 @@ function Plot({
             stroke={PREVIEW.edge}
             strokeWidth={2}
             strokeDasharray="6 4"
+            aria-hidden
+          />
+        ) : null}
+        {expected?.length ? (
+          <LinePath
+            data={expected}
+            x={(d) => X(d.t)}
+            y={(d) => y(d.v)}
+            stroke={EXPECTED.edge}
+            strokeWidth={2}
+            strokeDasharray="2 4"
             aria-hidden
           />
         ) : null}

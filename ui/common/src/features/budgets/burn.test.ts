@@ -9,6 +9,7 @@ import {
   chartModel,
   cheaperModelEstimate,
   compressionEstimate,
+  expectedLine,
   figures,
   previewLine,
   projection,
@@ -365,5 +366,44 @@ describe('B2 review: what-if over the limit already', () => {
     expect(w.exceeded).toBe(true)
     expect(w.runOut).toBeNull()
     expect(whatIf(price(), { limit: 200 })!.exceeded).toBe(false)
+  })
+})
+
+describe('the expected line after a change (F13, ledger #84)', () => {
+  const at = Date.parse('2026-10-12T10:00:00Z')
+  const DAY = 86_400_000
+
+  it('runs from the change to the reset at the pace of the 7 complete days before it', () => {
+    const b = price()
+    const before = b.daily.filter((d) => d.date >= '2026-10-05' && d.date <= '2026-10-11')
+    const pace = before.reduce((s, d) => s + d.cost_usd, 0) / 7
+    const used =
+      b.daily.filter((d) => d.date < '2026-10-12').reduce((s, d) => s + d.cost_usd, 0) +
+      (pace * 10) / 24
+    const up = expectedLine(b, 'up', at)!
+    expect(up[0]).toEqual({ t: at, v: used })
+    expect(up[1]!.t).toBe(Date.parse(b.resets_at!))
+    expect(up[1]!.v).toBeCloseTo(used + (pace * (Date.parse(b.resets_at!) - at)) / DAY, 9)
+    // Burndown: what's left of the limit.
+    expect(expectedLine(b, 'down', at)![0]!.v).toBeCloseTo(100 - used, 9)
+  })
+
+  it('ends once 3 complete days of new data exist, and needs 3 complete days before the change', () => {
+    const b = price()
+    // Oct 10: Oct 11, 12 and 13 are complete by Oct 14.
+    expect(expectedLine(b, 'up', Date.parse('2026-10-10T09:00:00Z'))).toBeNull()
+    expect(expectedLine(b, 'up', Date.parse('2026-10-11T09:00:00Z'))).not.toBeNull()
+    // Read without the previous month, a change on Oct 3 has only Oct 1 and 2 behind it.
+    const early = {
+      ...read('agent', I.pricing),
+      as_of: '2026-10-04T12:00:00Z',
+      previous: null,
+    }
+    expect(expectedLine(early, 'up', Date.parse('2026-10-03T09:00:00Z'))).toBeNull()
+    // Outside the period or after its as_of: nothing.
+    expect(expectedLine(b, 'up', Date.parse('2026-09-20T00:00:00Z'))).toBeNull()
+    expect(expectedLine(b, 'up', NOW + DAY)).toBeNull()
+    // A stopped budget is projected nowhere (#68), the expected line included.
+    expect(expectedLine(read('agent', I.reviewer), 'up', at)).toBeNull()
   })
 })
