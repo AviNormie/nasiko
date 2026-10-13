@@ -120,6 +120,9 @@ const PUBLIC = {
     'components/AgentBudgetSection',
     // The session ledger's budget (B5, F9), lazy-loaded by the ledger.
     'components/SessionBurn',
+    // Who reads budgets and which scopes (B6): Home and Needs you follow /budgets' viewer.
+    'scope',
+    'useBudgetsViewer',
     // The budget's sentence and whether it needs its reader: the hub's Needs you row (B5).
     'sentence',
     // The projection rule (§4.6): Needs you rates the viewer's own budget the way At risk ranks the rest (B4 review).
