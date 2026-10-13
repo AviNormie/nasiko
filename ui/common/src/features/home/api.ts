@@ -22,6 +22,7 @@ import { useAgentsDirectory, useUsers } from '@/features/agents/api'
 import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
 import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/budgets/api'
+import { capabilitiesQuery } from '@/features/budgets/availability'
 import type { Budget, BudgetStatus } from '@/features/budgets/types'
 import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
@@ -212,6 +213,8 @@ export interface HomeBudgets {
   own: RowBudget | null
   /** When the status was last read (the X5 clock and the "updated" stamp). */
   updatedAt: number
+  /** Mock data (a preview of the contract): the page labels it so. A live server's budgets are not a preview. */
+  preview: boolean
 }
 
 /** Whole cents: a recomputed sum like 0.1 + 0.7 must still meet a $0.80 limit. */
@@ -234,25 +237,31 @@ function rowBudget(b: Budget, st: BudgetStatus, now: Date): RowBudget {
 
 function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
   const preview = isPreview('budgets')
+  // On a server the availability probe says has budgets (plans/feat-budget-burn.md F11), mock or live.
+  const caps = useQuery({ ...capabilitiesQuery, enabled: any })
+  const on = caps.data?.kind === 'available'
   // Both reads poll together: a limit changed elsewhere, or a new budget, shows with the next status.
-  const list = useBudgets(preview && any, BUDGET_POLL_MS)
-  const status = useBudgetStatus(preview && !!list.data?.length, BUDGET_POLL_MS)
+  const list = useBudgets(on && any, BUDGET_POLL_MS)
+  const status = useBudgetStatus(on && !!list.data?.length, BUDGET_POLL_MS)
   const absent = (e: unknown) => e instanceof ApiError && e.status === 404
-  const off = !preview || absent(list.error) || absent(status.error)
+  // A failed probe can't say budgets are off: it reads as failed ("Budgets couldn't load").
+  const off = !any || caps.data?.kind === 'absent' || absent(list.error) || absent(status.error)
   // A 401 or 403 ends the poll: the figures will never refresh, so they read as failed even when some are kept.
   const denied = [list.error, status.error].some((e) => budgetPollEnds(e) && !absent(e))
-  const failed = denied || (list.isError && !list.data) || (status.isError && !status.data)
+  const failed =
+    caps.isError || denied || (list.isError && !list.data) || (status.isError && !status.data)
   const stale = list.isError || status.isError
   const state: BudgetsState = off
     ? 'off'
     : failed
       ? 'failed'
-      : list.isPending || (!!list.data?.length && status.isPending)
+      : caps.isPending || list.isPending || (!!list.data?.length && status.isPending)
         ? 'loading'
         : stale
           ? 'stale'
           : 'ok'
-  if (!budgetsShown(state) || !list.data) return { state, byAgent: null, own: null, updatedAt: 0 }
+  if (!budgetsShown(state) || !list.data)
+    return { state, byAgent: null, own: null, updatedAt: 0, preview }
   // The status' own read time: the elapsed days and its daily series must agree (router budgets' rule).
   const now = new Date(status.dataUpdatedAt)
   const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
@@ -265,7 +274,7 @@ function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
     // Only the viewer's own: a list that also carries other people's owner budgets never labels theirs "Your budget".
     else if (b.scope === 'owner' && b.owner_id === meSub) own = rowBudget(b, st, now)
   }
-  return { state, byAgent, own, updatedAt: status.dataUpdatedAt }
+  return { state, byAgent, own, updatedAt: status.dataUpdatedAt, preview }
 }
 
 /** Row reads in flight across the page (eng "Home execution table": `ROW_READS`). */

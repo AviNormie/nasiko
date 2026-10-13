@@ -16,7 +16,7 @@ import { rememberRailView } from '@/features/chat/rememberTarget'
 import { cn } from '@/lib/utils'
 import type { NeedsYou as NeedsYouData } from '../api'
 import { copy } from '../copy'
-import type { NeedRow, Severity } from '../needs'
+import { budgetView, type NeedRow, type Severity } from '../needs'
 import { CHECKED_TICK_MS, LAST_WEEK, NEEDS_VISIBLE_ROWS } from '../tuning'
 import { Card, CardError, CardSkeleton, SourceFailed, TOUCH } from './Card'
 
@@ -221,7 +221,7 @@ function Row({
       detail = row.reason
       action = row.budget ? (
         <Action>
-          <Link to="/router" hash="router-budgets" aria-label={copy.needs.budgetsLabel(row.name)}>
+          <Link to="/budgets" aria-label={copy.needs.budgetsLabel(row.name)}>
             {copy.needs.budgets}
           </Link>
         </Action>
@@ -238,17 +238,19 @@ function Row({
         </Action>
       )
       break
-    case 'budget':
-      title = copy.needs.budget(row.label, row.state, row.crossed)
-      detail = copy.needs.budgetDetail
+    case 'budget': {
+      const v = budgetView(row)
+      title = v.title
+      detail = v.detail
       action = (
         <Action>
-          <Link to="/router" hash="router-budgets" aria-label={copy.needs.budgetsLabel(row.label)}>
+          <Link to="/budgets" aria-label={copy.needs.budgetsLabel(row.label)}>
             {copy.needs.budgets}
           </Link>
         </Action>
       )
       break
+    }
     case 'sessions':
       title = copy.needs.sessions(row.failed, row.checked)
       detail = row.agents.join(', ')

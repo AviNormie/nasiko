@@ -533,9 +533,11 @@ function Strip({
           <KpiTile
             label={copy.budget.own}
             aside={
-              <Badge variant="outline" className="text-3xs">
-                {copy.budget.preview}
-              </Badge>
+              budgets.preview ? (
+                <Badge variant="outline" className="text-3xs">
+                  {copy.budget.preview}
+                </Badge>
+              ) : null
             }
             // Floored, so 99.6% never reads as a full 100% while under the limit; a floor (≥) with unpriced calls.
             value={
@@ -567,8 +569,8 @@ function Strip({
             : budgets.state === 'failed'
               ? copy.budget.failed
               : budgets.state === 'stale'
-                ? `${copy.budget.stale} · ${copy.budget.note(stamp)}`
-                : copy.budget.note(stamp)}
+                ? `${copy.budget.stale} · ${(budgets.preview ? copy.budget.note : copy.budget.liveNote)(stamp)}`
+                : (budgets.preview ? copy.budget.note : copy.budget.liveNote)(stamp)}
         </p>
         {asOf ? <p className="m-0">{copy.strip.asOf(fmtLocalTime(asOf))}</p> : null}
       </div>

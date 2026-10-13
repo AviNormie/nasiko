@@ -207,9 +207,11 @@ function BudgetHeader({ budgets }: { budgets: HomeBudgets }) {
   return (
     <span className="flex flex-col items-start gap-0.5 py-1">
       {copy.table.budget}
-      <Badge aria-hidden variant="outline" className="text-3xs">
-        {copy.budget.preview}
-      </Badge>
+      {budgets.preview ? (
+        <Badge aria-hidden variant="outline" className="text-3xs">
+          {copy.budget.preview}
+        </Badge>
+      ) : null}
       {updated ? (
         <span aria-hidden className="font-normal">
           {updated}

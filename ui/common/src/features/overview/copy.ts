@@ -73,6 +73,18 @@ export const copy = {
         ? `${label} budget is over its limit`
         : `${label} budget is at ${crossed ?? 0}%`,
     budgetDetail: 'This month, routed calls',
+    // plans/feat-budget-burn.md F8: how much over and whether calls stop; when it reaches its limit ("runs out" only
+    // where calls stop, design 1C).
+    budgetStopped: (label: string) => `${label} budget ran out: calls are stopped`,
+    budgetOverBy: (amount: string, until: string | null) =>
+      until ? `Over by ${amount} · calls stopped until ${until}` : `Over by ${amount} this period`,
+    budgetRunsOut: (label: string, day: string, stops: boolean) =>
+      stops
+        ? `${label} budget runs out around ${day}`
+        : `${label} budget exceeds its limit around ${day}`,
+    budgetProjected: 'Projected from the last 7 days',
+    budgetStoppedUntil: (until: string | null) =>
+      until ? `Calls stopped until ${until}` : 'Calls stopped',
     sessions: (failed: number, checked: number) =>
       `${failed} of the ${checked} latest sessions checked failed`,
     seeSessions: 'See sessions',
