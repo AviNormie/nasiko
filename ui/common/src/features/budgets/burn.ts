@@ -49,6 +49,9 @@ function limitAt(b: Burn, t: number): number | null {
   return s?.limit_usd ?? steps.at(-1)?.limit_usd ?? null
 }
 
+/** The limit in force at the read's `as_of`, or null without a budget. */
+export const currentLimit = (b: Burn) => limitAt(b, Date.parse(b.as_of))
+
 // ─── the projection and its band (§5) ───────────────────────────────────────
 
 interface Band {
@@ -145,7 +148,7 @@ export interface Figures {
   projected: { low: number; high: number; lowPct: number | null; highPct: number | null } | null
   quarter: QuarterProjection | null
   /** Per day left including today; null without a budget; 0 past the limit ("none left"). */
-  allowance: { perDay: number; none: boolean } | null
+  allowance: { perDay: number; none: boolean; days: number } | null
   /** Session budgets: spend per turn, the last 5 turns vs the session's average (F2). */
   perTurn: { last5: number; average: number } | null
 }
@@ -217,7 +220,7 @@ export function figures(b: Burn, opts: { quarter?: QuarterInput | null } = {}): 
 export function allowance(used: number, limit: number, asOf: number, resetsAt: number) {
   const days = Math.max(1, Math.round((dayStart(resetsAt - 1) - dayStart(asOf)) / DAY_MS) + 1)
   const left = Math.max(0, limit - used)
-  return { perDay: left / days, none: left === 0 }
+  return { perDay: left / days, none: left === 0, days }
 }
 
 // ─── the quarter (§5) ───────────────────────────────────────────────────────
@@ -241,6 +244,30 @@ export interface QuarterProjection {
  * Closed months (actual) + this month's band + each remaining month at the band's daily rates; % of the sum of the
  * month limits, where each future month assumes today's limit.
  */
+/** The calendar quarter around `t` (UTC; fiscal quarters are B6, plan §7 Q2). */
+export function quarterOf(t: number): { start: number; end: number } {
+  const d = new Date(t)
+  const q = Math.floor(d.getUTCMonth() / 3) * 3
+  return { start: Date.UTC(d.getUTCFullYear(), q, 1), end: Date.UTC(d.getUTCFullYear(), q + 3, 1) }
+}
+
+/**
+ * The quarter figure's inputs from a read that starts at the quarter's first day (`period=quarter` on a month budget):
+ * its closed months, each with the limit in force at its start. null unless the read covers the whole quarter so far.
+ */
+export function quarterInput(b: Burn): QuarterInput | null {
+  if (!b.budget || b.resets_at === null) return null
+  const q = quarterOf(Date.parse(b.as_of))
+  if (parseDay(b.from) > q.start) return null
+  const current = Date.parse(b.period_start)
+  return {
+    ...q,
+    closed: b.periods
+      .filter((p) => Date.parse(p.period_start) >= q.start && Date.parse(p.period_start) < current)
+      .map((p) => ({ used: p.used_usd, limit: limitAt(b, Date.parse(p.period_start)) })),
+  }
+}
+
 export function quarterProjection(b: Burn, p: BurnProjection, q: QuarterInput): QuarterProjection {
   const resets = b.resets_at ? Date.parse(b.resets_at) : q.end
   const restDays = Math.max(0, (q.end - resets) / DAY_MS)
@@ -325,7 +352,7 @@ export interface WhatIf {
   pace: number
   projected: number
   runOut: number | null
-  allowance: { perDay: number; none: boolean }
+  allowance: { perDay: number; none: boolean; days: number }
 }
 
 /** A different limit and/or pace (−50% … +50%) with the same rule; nothing is saved. null without a projection. */
@@ -445,7 +472,7 @@ export interface ChartModel {
  * The kit chart's data. `preview` adds a dashed projected line (a lever or what-if), in the mode's units, never
  * written anywhere.
  */
-export function chartModel(b: Burn, mode: BurnMode): ChartModel {
+export function chartModel(b: Burn, mode: BurnMode, opts: { end?: number } = {}): ChartModel {
   const asOf = Date.parse(b.as_of)
   // A session has no reset: it runs from its start to its end (or now), by turn (plan F9).
   const session = b.resets_at === null && b.session ? b.session : null
@@ -455,6 +482,8 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
     : session?.ended_at
       ? Math.min(Date.parse(session.ended_at), asOf)
       : asOf
+  // The x axis can run past this period (a month budget viewed by quarter); the projection still ends at the reset.
+  const domainEnd = Math.max(end, opts.end ?? end)
   const periods = b.periods.map((p) => ({
     start: Date.parse(p.period_start),
     end: p.resets_at ? Date.parse(p.resets_at) : end,
@@ -541,7 +570,7 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
 
   const steps = (b.budget?.limits ?? []).map((s) => ({
     from: Math.max(Date.parse(s.from), from),
-    to: s.to ? Date.parse(s.to) : end,
+    to: s.to ? Date.parse(s.to) : domainEnd,
     limit: s.limit_usd,
     thresholds: s.thresholds,
     stops: s.action === 'stop',
@@ -590,7 +619,7 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
     mode,
     floor: b.unpriced_calls > 0,
     start: from,
-    end,
+    end: domainEnd,
     actual,
     pace,
     band,

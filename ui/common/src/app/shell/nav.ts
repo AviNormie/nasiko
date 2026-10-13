@@ -17,6 +17,7 @@ import {
   Plug,
   Settings,
   SquareTerminal,
+  Wallet,
   Waypoints,
   Workflow,
   type LucideIcon,
@@ -48,6 +49,7 @@ export interface NavItem {
     | '/sessions'
     | '/flows'
     | '/tokenops'
+    | '/budgets'
     | '/optimization'
     | '/harnesses'
     | '/settings'
@@ -81,6 +83,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // One request's orchestration (plans/feat-flows.md F1): its own 7-day window, so it doesn't carry the shared one.
   { to: '/flows', label: copy.nav.flows, icon: Network, group: 'observe', shared: false },
   { to: '/tokenops', label: copy.nav.tokenops, icon: DollarSign, group: 'observe', shared: true },
+  // Budget burn (plans/feat-budget-burn.md F10): hidden until the budgets probe answers (`_app`), no shared window.
+  { to: '/budgets', label: copy.nav.budgets, icon: Wallet, group: 'observe', shared: false },
   // What context optimization saves and your settings for it (plans/feat-optimization-page.md P7, P2).
   {
     to: '/optimization',

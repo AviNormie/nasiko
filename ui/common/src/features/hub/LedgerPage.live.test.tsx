@@ -32,6 +32,10 @@ describe('the ledger, live', () => {
     expect(screen.queryByText(copy.rail.preview)).toBeNull()
     expect(screen.queryByRole('heading', { name: c.budgets.title })).toBeNull()
     rec.stop()
-    expect(rec.urls.filter((u) => u.pathname.startsWith('/api/budgets'))).toEqual([])
+    // The shell's once-per-session availability probe (plans/feat-budget-burn.md F11) is the only budgets request.
+    const probe = (u: URL) =>
+      u.pathname === '/api/budgets/capabilities' ||
+      (u.pathname === '/api/budgets' && u.searchParams.get('limit') === '1')
+    expect(rec.urls.filter((u) => u.pathname.startsWith('/api/budgets') && !probe(u))).toEqual([])
   })
 })

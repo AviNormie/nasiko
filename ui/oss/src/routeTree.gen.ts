@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './../../common/src/routes/__root'
 import { Route as AppRouteImport } from './../../common/src/routes/_app'
 import { Route as LoginRouteImport } from './../../common/src/routes/login'
 import { Route as AppIndexRouteImport } from './../../common/src/routes/_app/index'
+import { Route as AppBudgetsRouteImport } from './../../common/src/routes/_app/budgets'
 import { Route as AppDeployRouteImport } from './../../common/src/routes/_app/deploy'
 import { Route as AppHarnessesRouteImport } from './../../common/src/routes/_app/harnesses'
 import { Route as AppOptimizationRouteImport } from './../../common/src/routes/_app/optimization'
@@ -20,7 +21,6 @@ import { Route as AppStatusRouteImport } from './../../common/src/routes/_app/st
 import { Route as AppTokenopsRouteImport } from './../../common/src/routes/_app/tokenops'
 import { Route as AppAccountAppearanceRouteImport } from './../../common/src/routes/_app/account.appearance'
 import { Route as AppAccountPasswordRouteImport } from './../../common/src/routes/_app/account.password'
-import { Route as AppAccountShortcutsRouteImport } from './../../common/src/routes/_app/account.shortcuts'
 import { Route as AppAgentsIndexRouteImport } from './../../common/src/routes/_app/agents.index'
 import { Route as AppAgentsAgentIdRouteImport } from './../../common/src/routes/_app/agents.$agentId'
 import { Route as AppAgentsMineRouteImport } from './../../common/src/routes/_app/agents.mine'
@@ -61,6 +61,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppBudgetsRoute = AppBudgetsRouteImport.update({
+  id: '/budgets',
+  path: '/budgets',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDeployRoute = AppDeployRouteImport.update({
   id: '/deploy',
   path: '/deploy',
@@ -99,11 +104,6 @@ const AppAccountAppearanceRoute = AppAccountAppearanceRouteImport.update({
 const AppAccountPasswordRoute = AppAccountPasswordRouteImport.update({
   id: '/account/password',
   path: '/account/password',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppAccountShortcutsRoute = AppAccountShortcutsRouteImport.update({
-  id: '/account/shortcuts',
-  path: '/account/shortcuts',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
@@ -236,6 +236,7 @@ const AppWorkflowsRunsRoute = AppWorkflowsRunsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/budgets': typeof AppBudgetsRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -244,7 +245,6 @@ export interface FileRoutesByFullPath {
   '/tokenops': typeof AppTokenopsRoute
   '/account/appearance': typeof AppAccountAppearanceRoute
   '/account/password': typeof AppAccountPasswordRoute
-  '/account/shortcuts': typeof AppAccountShortcutsRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/agents/mine': typeof AppAgentsMineRoute
   '/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -273,6 +273,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/budgets': typeof AppBudgetsRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -282,7 +283,6 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/account/appearance': typeof AppAccountAppearanceRoute
   '/account/password': typeof AppAccountPasswordRoute
-  '/account/shortcuts': typeof AppAccountShortcutsRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/agents/mine': typeof AppAgentsMineRoute
   '/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -313,6 +313,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/budgets': typeof AppBudgetsRoute
   '/_app/deploy': typeof AppDeployRoute
   '/_app/harnesses': typeof AppHarnessesRoute
   '/_app/optimization': typeof AppOptimizationRoute
@@ -322,7 +323,6 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/account/appearance': typeof AppAccountAppearanceRoute
   '/_app/account/password': typeof AppAccountPasswordRoute
-  '/_app/account/shortcuts': typeof AppAccountShortcutsRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/agents/mine': typeof AppAgentsMineRoute
   '/_app/builds/$buildId': typeof AppBuildsBuildIdRoute
@@ -354,6 +354,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/budgets'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -362,7 +363,6 @@ export interface FileRouteTypes {
     | '/tokenops'
     | '/account/appearance'
     | '/account/password'
-    | '/account/shortcuts'
     | '/agents/$agentId'
     | '/agents/mine'
     | '/builds/$buildId'
@@ -391,6 +391,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/budgets'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -400,7 +401,6 @@ export interface FileRouteTypes {
     | '/'
     | '/account/appearance'
     | '/account/password'
-    | '/account/shortcuts'
     | '/agents/$agentId'
     | '/agents/mine'
     | '/builds/$buildId'
@@ -430,6 +430,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/budgets'
     | '/_app/deploy'
     | '/_app/harnesses'
     | '/_app/optimization'
@@ -439,7 +440,6 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/account/appearance'
     | '/_app/account/password'
-    | '/_app/account/shortcuts'
     | '/_app/agents/$agentId'
     | '/_app/agents/mine'
     | '/_app/builds/$buildId'
@@ -493,6 +493,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/budgets': {
+      id: '/_app/budgets'
+      path: '/budgets'
+      fullPath: '/budgets'
+      preLoaderRoute: typeof AppBudgetsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/deploy': {
@@ -549,13 +556,6 @@ declare module '@tanstack/react-router' {
       path: '/account/password'
       fullPath: '/account/password'
       preLoaderRoute: typeof AppAccountPasswordRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/account/shortcuts': {
-      id: '/_app/account/shortcuts'
-      path: '/account/shortcuts'
-      fullPath: '/account/shortcuts'
-      preLoaderRoute: typeof AppAccountShortcutsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/': {
@@ -737,6 +737,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppBudgetsRoute: typeof AppBudgetsRoute
   AppDeployRoute: typeof AppDeployRoute
   AppHarnessesRoute: typeof AppHarnessesRoute
   AppOptimizationRoute: typeof AppOptimizationRoute
@@ -746,7 +747,6 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAccountAppearanceRoute: typeof AppAccountAppearanceRoute
   AppAccountPasswordRoute: typeof AppAccountPasswordRoute
-  AppAccountShortcutsRoute: typeof AppAccountShortcutsRoute
   AppAgentsAgentIdRoute: typeof AppAgentsAgentIdRoute
   AppAgentsMineRoute: typeof AppAgentsMineRoute
   AppBuildsBuildIdRoute: typeof AppBuildsBuildIdRoute
@@ -775,6 +775,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppBudgetsRoute: AppBudgetsRoute,
   AppDeployRoute: AppDeployRoute,
   AppHarnessesRoute: AppHarnessesRoute,
   AppOptimizationRoute: AppOptimizationRoute,
@@ -784,7 +785,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAccountAppearanceRoute: AppAccountAppearanceRoute,
   AppAccountPasswordRoute: AppAccountPasswordRoute,
-  AppAccountShortcutsRoute: AppAccountShortcutsRoute,
   AppAgentsAgentIdRoute: AppAgentsAgentIdRoute,
   AppAgentsMineRoute: AppAgentsMineRoute,
   AppBuildsBuildIdRoute: AppBuildsBuildIdRoute,

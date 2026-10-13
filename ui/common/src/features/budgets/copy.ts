@@ -105,6 +105,72 @@ export const copy = {
   budgetDeleted: (name: string | null) =>
     name ? `Budget removed for ${name}.` : 'Your budget is removed.',
 
+  // The /budgets page (plan feat-budget-burn F10, F12). Templated sentences, no causal words (the hub's rule).
+  pageTitle: 'Budgets',
+  pageFailed: 'budgets',
+  pageMissing: 'Budgets need a newer OpenRuntime server',
+  pageMissingBody:
+    'This page uses the /api/budgets endpoints, which this server doesn’t have yet. Set VITE_NASIKO_MOCK=budgets,agents to preview it with mock data.',
+  scopeLabel: 'Scope',
+  scopeFleet: 'Fleet',
+  scopeYours: 'Yours',
+  scopeOwner: 'Owner…',
+  scopeOwnerPick: 'Choose an owner',
+  periodLabel: 'Period',
+  periodMonth: 'Month',
+  periodQuarter: 'Quarter',
+  burnModeLabel: 'Chart',
+  burnDown: 'Burndown',
+  burnUp: 'Burn-up',
+  showTable: 'Table',
+  showChart: 'Chart',
+  coverageRouted: (stops: boolean) => `Routed calls · ${stops ? 'Stops at limit' : 'Alert only'}`,
+  coverageAll: 'All priced spend · Alert only · Includes estimates',
+  coverageNone: (all: boolean) =>
+    all ? 'All priced spend · No budget' : 'Routed calls · No budget',
+  burnCard: 'Burn',
+  burnFailed: 'the burn chart',
+  periodWord: (p: 'month' | 'quarter') => p,
+  sentenceNoSpend: (p: 'month' | 'quarter') => `No spend yet this ${p}.`,
+  sentenceNoBudget: (used: string, p: 'month' | 'quarter') =>
+    `No budget: ${used} spent this ${p} so far.`,
+  sentenceNoBudgetPace: (amount: string, day: string, floor: boolean) =>
+    `On pace for ${floor ? 'at least ' : ''}${amount} by ${day}.`,
+  sentenceStopped: (day: string, reset: string) =>
+    `Ran out ${day}; calls are stopped until ${reset}.`,
+  sentenceOver: (amount: string, floor: boolean) => `Over by ${floor ? 'at least ' : ''}${amount}.`,
+  sentenceExceededOn: (day: string) => `Exceeded its limit ${day}.`,
+  sentencePace: (pct: string, day: string, floor: boolean) =>
+    `On pace to use ${floor ? 'at least ' : ''}${pct} by ${day}.`,
+  sentenceAllowance: (perDay: string, days: number, floor: boolean) =>
+    `To stay within budget: ${floor ? 'at most ' : ''}${perDay} a day for the next ${days} ${days === 1 ? 'day' : 'days'}.`,
+  sentenceUsed: (pct: string, floor: boolean) => `${floor ? 'At least ' : ''}${pct} used.`,
+  sentenceTooEarly: 'A projection needs 3 days of spend.',
+  // The strip (F2)
+  stripLabel: 'Burn figures',
+  stripToday: 'Today so far',
+  stripTodayVs: (avg: string) => `vs ${avg} a day (7-day average)`,
+  stripWeek: 'This week so far',
+  stripWeekVs: (last: string) => `vs ${last} the same days last week`,
+  stripWeekNoCompare: 'No full week to compare yet',
+  stripToDate: (p: 'month' | 'quarter') => `${p === 'month' ? 'Month' : 'Quarter'} to date`,
+  stripOfLimit: (pct: string, limit: string) => `${pct} of ${limit}`,
+  stripProjected: (p: 'month' | 'quarter') => `Projected ${p} end`,
+  stripProjectedRange: (low: string, high: string) => (low === high ? low : `${low} to ${high}`),
+  stripQuarter: 'Projected quarter end',
+  stripQuarterNote: 'Assumes this month’s limit for the months ahead',
+  stripAllowance: 'Daily allowance left',
+  stripAllowanceNone: 'None left',
+  stripAllowanceFor: (days: number) => `for the next ${days} ${days === 1 ? 'day' : 'days'}`,
+  stripAtMost: (v: string) => `at most ${v}`,
+  stripNoProjection: 'Needs 3 days of spend',
+  stripAsOf: (time: string) => `As of ${time} UTC`,
+  stripUnpriced: (n: number) =>
+    `${n} ${n === 1 ? 'call has' : 'calls have'} no price yet: spend is at least this`,
+
+  setBudget: 'Set a budget',
+  setFleetBudget: 'Set a fleet budget',
+
   // Budget burn (plan feat-budget-burn F1, design 4B, 5C, 1C)
   burnLeft: 'Left of the limit',
   burnSpent: 'Spent',
