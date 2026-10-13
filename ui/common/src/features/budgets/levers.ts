@@ -52,6 +52,11 @@ export interface LeverInput {
   /** Token optimization's measured cost reduction and how many agents it was measured on; null with no measurement. */
   measured: { pct: number; agents: number } | null
   prices: readonly Price[] | null
+  /**
+   * The budget record's action now (§6.3), when read: a write lands after the burn read's `as_of`, so the burn can
+   * still show the version before it; a budget that already stops gets no stop lever.
+   */
+  action?: 'alert' | 'stop'
 }
 
 type ReduceLever =
@@ -116,6 +121,7 @@ export function leverList(input: LeverInput): LeverList {
   if (
     !b.budget.stopped &&
     b.budget.action !== 'stop' &&
+    input.action !== 'stop' &&
     b.scope !== 'org' &&
     b.scope !== 'unit' &&
     b.scope !== 'session'

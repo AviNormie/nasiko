@@ -32,6 +32,8 @@ export function useLevers(
   caps: Availability,
   viewer: { id: string; superuser: boolean },
   enabled: boolean,
+  /** The budget record's action now (it can be newer than the burn read). */
+  action?: 'alert' | 'stop',
 ) {
   const wanted = enabled && !!b.budget && needsLevers(b, projection(b))
   const period: 'month' | 'quarter' = b.period === 'quarter' ? 'quarter' : 'month'
@@ -137,7 +139,7 @@ export function useLevers(
       prices.isLoading ||
       savings.isLoading)
   return {
-    list: leverList({ burn: b, agents, measured, prices: prices.data ?? null }),
+    list: leverList({ burn: b, agents, measured, prices: prices.data ?? null, action }),
     loading,
   }
 }

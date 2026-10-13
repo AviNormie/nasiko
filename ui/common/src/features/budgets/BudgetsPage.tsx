@@ -253,10 +253,13 @@ function Body({
   const sentence = burnSentence(burn, words)
   const quarterFrom =
     kind === 'quarter' && burn.budget && burn.period === 'month' ? burn : quarterRead
+  // The record's action now: a write lands after the burn read's `as_of`, which can still show the version before.
+  const own = useBudgetV1(burn.budget?.id ?? null, true)
+  const action = own.data?.action ?? burn.budget?.action
   const coverage = burn.budget
     ? burn.covers === 'all_priced'
       ? copy.coverageAll
-      : copy.coverageRouted(burn.budget.action === 'stop')
+      : copy.coverageRouted(action === 'stop')
     : copy.coverageNone(burn.covers === 'all_priced')
   // A month budget viewed by quarter draws the whole quarter (its months as steps, F1 Period).
   const domainEnd =
@@ -293,7 +296,7 @@ function Body({
     setLeverId(null)
     if (picked) setSearch({ contributor: undefined }, { replace: true })
   }
-  const levers = useLevers(burn, ref, caps, viewer, !rl10)
+  const levers = useLevers(burn, ref, caps, viewer, !rl10, own.data?.action)
   const leverById = (id: string | null) =>
     levers.list.state === 'levers'
       ? ([...levers.list.reduce, ...levers.list.adjust].find((l) => l.id === id) ?? null)
@@ -335,7 +338,6 @@ function Body({
   const atRisk = useAtRisk(ref, can('at_risk'))
   const unbudgeted = useUnbudgeted(ref, kind, can('unbudgeted'))
   const alerts = useScopeAlerts(ref, can('budgets') && !rl10)
-  const own = useBudgetV1(burn.budget?.id ?? null, true)
   const limitsInside =
     own.data?.limits_inside_usd != null && own.data.limits_inside_count
       ? { usd: own.data.limits_inside_usd, count: own.data.limits_inside_count }
