@@ -160,6 +160,14 @@ pub async fn seed_agents_if_configured(state: &AppState) {
             },
         };
 
+        let scaling = state.agent_scaling.begin_deploy(agent.id).await;
+        let replica_bounds = match scaling.bounds().await {
+            Ok(bounds) => bounds,
+            Err(e) => {
+                warn!(agent = %agent_name, error = %e, "failed to read the seed agent's replica bounds");
+                continue;
+            }
+        };
         let mut env = HashMap::new();
         env.insert("PORT".into(), AGENT_PORT.to_string());
         if !openai_key.is_empty() {
@@ -198,7 +206,7 @@ pub async fn seed_agents_if_configured(state: &AppState) {
             vec![AGENT_PORT],
             env,
             &state.config.agent_default_memory,
-            state.config.agent_max_replicas,
+            replica_bounds,
             // SEED_AGENTS has no --writable equivalent yet.
             false,
             None,
@@ -221,7 +229,7 @@ pub async fn seed_agents_if_configured(state: &AppState) {
         )
         .await;
 
-        match state.runtime.deploy(&spec).await {
+        match scaling.deploy(&spec).await {
             Ok(status) => {
                 info!(agent = %agent_name, ?status, "seed agent deployed");
                 let agent_url =
@@ -504,6 +512,11 @@ async fn deploy_internal_agent(
     image: &str,
     force_pull: bool,
 ) -> Result<(), String> {
+    let scaling = state.agent_scaling.begin_deploy(agent_id).await;
+    let replica_bounds = scaling
+        .bounds()
+        .await
+        .map_err(|e| format!("failed to read the replica bounds: {e}"))?;
     let mut env = state.agent_env(agent_id).await;
     env.insert("PORT".into(), AGENT_PORT.to_string());
     // Without the gateway credential, McpInjector still sets MCP_GATEWAY_URL but has
@@ -525,7 +538,7 @@ async fn deploy_internal_agent(
         vec![AGENT_PORT],
         env,
         &state.config.agent_default_memory,
-        state.config.agent_max_replicas,
+        replica_bounds,
         false,
         None,
         owner_id,
@@ -540,11 +553,7 @@ async fn deploy_internal_agent(
     )
     .await;
 
-    let status = state
-        .runtime
-        .deploy(&spec)
-        .await
-        .map_err(|e| e.to_string())?;
+    let status = scaling.deploy(&spec).await.map_err(|e| e.to_string())?;
     info!(agent = %agent_name, ?status, "internal agent deployed");
     let agent_url =
         crate::agents::resolve_agent_url(&state.runtime, &status, &spec.container_id).await;

@@ -223,14 +223,15 @@ fn bounded_listing(candidates: &str, order: &str, sealed: &str, budget_param: &s
 
 /// Records that the agent keeps its tasks durably. Idempotent, and a no-op for an agent that
 /// already is, so an SDK registering at every start does not rewrite the agent row each time.
-pub(super) async fn mark_durable(db: &PgPool, agent_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
+/// `true` only when this call changed the agent from memory to durable.
+pub(super) async fn mark_durable(db: &PgPool, agent_id: Uuid) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query(
         "UPDATE agents SET state_mode = 'durable' WHERE id = $1 AND state_mode <> 'durable'",
     )
     .bind(agent_id)
     .execute(db)
     .await?;
-    Ok(())
+    Ok(updated.rows_affected() == 1)
 }
 
 /// Records that the agent keeps its tasks in memory again, as every deploy starts it: a new image

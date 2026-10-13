@@ -351,11 +351,9 @@ pub struct Config {
     /// (KEDA ScaledObject). MCP_UPLOAD_MAX_REPLICAS, default 1 (matches
     /// agents; set higher when KEDA is installed). Ignored by DockerRuntime.
     pub mcp_upload_max_replicas: u32,
-    /// Maximum replica count for deployed agent pods under Kubernetes (KEDA
-    /// ScaledObject) — same mechanism and same global-ceiling shape as
-    /// `mcp_upload_max_replicas` above, just for regular agents instead of
-    /// MCP connectors. AGENT_MAX_REPLICAS, default 1 (no autoscaling unless
-    /// explicitly raised). Ignored by DockerRuntime.
+    /// AGENT_MAX_REPLICAS, default 1. No longer read for agent deploys: every agent deploys
+    /// through `AgentScaling` (OSS: one replica; EE: its per-agent autoscaling). Kept so a
+    /// server and an install of different versions still agree on the key during an upgrade.
     pub agent_max_replicas: u32,
     /// Number of agent/connector image builds the build worker runs
     /// concurrently. BUILD_CONCURRENCY, default 4. Clamped to 1..=16: each

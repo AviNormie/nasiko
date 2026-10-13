@@ -74,8 +74,10 @@ async fn register(
     StateJson(request): StateJson<RegisterRequest>,
 ) -> Result<StatusCode, StateError> {
     request.check()?;
-    if request.stores_tasks() {
-        repo::mark_durable(&state.db, agent_id).await?;
+    // Becoming durable can make the agent eligible to autoscale, and it was deployed while it
+    // was not, so its bounds are re-applied now rather than at its next deploy.
+    if request.stores_tasks() && repo::mark_durable(&state.db, agent_id).await? {
+        state.agent_scaling.agent_became_durable(agent_id);
     }
     tracing::info!(
         %agent_id,
