@@ -268,6 +268,7 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
         {
           id: 'bud',
           label: 'Your monthly',
+          agentId: null,
           crossed: 80,
           state: 'warning' as const,
           over: null,

@@ -72,6 +72,7 @@ describe('Needs you rows', () => {
               {
                 id: 'b1',
                 label: copy.needs.yourBudget,
+                agentId: null,
                 crossed: 80,
                 state: 'warning',
                 over: null,
@@ -85,6 +86,7 @@ describe('Needs you rows', () => {
               {
                 id: 'b2',
                 label: 'Helper',
+                agentId: 'a3',
                 crossed: null,
                 state: 'exceeded',
                 over: null,
@@ -111,10 +113,11 @@ describe('Needs you rows', () => {
     expect(href(copy.needs.reviewLabel('Deploy chat'))).toBe('/chat/s1')
     expect(href(copy.needs.openWaiting)).toBe('/chat')
     expect(href(copy.needs.openAgentLabel('Crashy'))).toBe('/agents/a1')
-    expect(href(copy.needs.budgetsLabel('Spender'))).toBe('/budgets')
+    // A stopped agent budget opens the agent's Budget section on its hub (B5).
+    expect(href(copy.needs.agentBudgetLabel('Spender'))).toBe('/agents/a2#hub-budget')
     expect(within(list).getByText('Your monthly budget is at 80%')).toBeInTheDocument()
     expect(within(list).getByText('Helper budget is over its limit')).toBeInTheDocument()
-    expect(href(copy.needs.budgetsLabel('Helper'))).toBe('/budgets')
+    expect(href(copy.needs.agentBudgetLabel('Helper'))).toBe('/agents/a3#hub-budget')
     expect(within(list).getByText(copy.needs.sessions(3, 25))).toBeInTheDocument()
     expect(href(copy.needs.seeFailing)).toMatch(/^\/sessions\?(?=.*preset=7d)(?=.*lane=failing)/)
     // Severity is said by an icon with a label, most urgent sources first.

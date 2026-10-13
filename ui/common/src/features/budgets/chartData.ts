@@ -6,6 +6,7 @@ import type { BurnChartData, BurnChartLabels } from '@/components/charts/burn-ch
 import { fmtMoney, fmtMoneyAxis, fmtShortDay } from '@/lib/format'
 import type { ChartModel } from './burn'
 import { copy } from './copy'
+import { DAY_MS } from './projection'
 import type { BudgetEvent } from './types'
 
 /** One event's line in a flag's list (design 7B). Unknown kinds (a newer server's) are left out. */
@@ -34,6 +35,44 @@ export function eventLabel(e: BudgetEvent): string | null {
       return copy.eventFiscal(e.effective_from ? fmtShortDay(e.effective_from) : '—')
     default:
       return null
+  }
+}
+
+/**
+ * A change from outside the budget drawn as a flag on an agent's chart (F1 "Change markers"): the hub's deploys,
+ * routing and optimization changes and its latest crash. `budgetStop` marks the event log's own record of a stop.
+ */
+export interface ExtraMarker {
+  at: number
+  label: string
+  budgetStop?: boolean
+}
+
+/** Within this of the budget's own `stopped` event, the event log's stop is the same stop (BG-3 wins, F1). */
+const SAME_STOP_MS = 60_000
+
+/**
+ * The chart's flags with `extra` merged in, one flag per UTC day (F1: events in a day merge, "+3"). Only changes inside
+ * the chart's x axis draw; the event log's stop is dropped when the budget recorded the same stop.
+ */
+export function withExtraMarkers(
+  data: BurnChartData,
+  extra: readonly ExtraMarker[],
+  events: readonly BudgetEvent[],
+): BurnChartData {
+  const stops = events.filter((e) => e.kind === 'stopped').map((e) => Date.parse(e.at))
+  const byDay = new Map(data.markers.map((m) => [m.day, [...m.labels]]))
+  for (const x of extra) {
+    if (x.at < data.start || x.at > data.end) continue
+    if (x.budgetStop && stops.some((t) => Math.abs(t - x.at) <= SAME_STOP_MS)) continue
+    const day = new Date(x.at).toISOString().slice(0, 10)
+    byDay.set(day, [...(byDay.get(day) ?? []), x.label])
+  }
+  return {
+    ...data,
+    markers: [...byDay]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, labels]) => ({ day, t: Date.parse(`${day}T00:00:00Z`) + DAY_MS / 2, labels })),
   }
 }
 

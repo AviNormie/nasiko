@@ -65,6 +65,7 @@ import {
 } from '../timeline'
 import { BUILDS_READ, LANE_HEIGHT } from '../tuning'
 import { BucketPanel } from './BucketPanel'
+import { HubBudget } from './HubBudget'
 import { LayerCards } from './LayerCards'
 import { NeedsPanel } from './NeedsPanel'
 import { RecentRuns } from './RecentRuns'
@@ -394,6 +395,7 @@ function Timeline({
         flows={flows}
       />
       <LayerCards agent={agent} saved={savedTotal} optimizationExtra={optimizationExtra} />
+      <HubBudget agent={agent} />
     </section>
   )
 }

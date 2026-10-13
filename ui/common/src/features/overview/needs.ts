@@ -41,6 +41,8 @@ export interface NeedsInput {
 export interface BudgetItem {
   id: string
   label: string
+  /** An agent budget's agent: the row opens that agent's Budget section on its hub (B5). */
+  agentId: string | null
   crossed: number | null
   state: 'warning' | 'exceeded'
   /** Dollars over its limit, when it is. */

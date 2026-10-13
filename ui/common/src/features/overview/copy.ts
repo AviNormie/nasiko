@@ -66,6 +66,9 @@ export const copy = {
     openAgentLabel: (name: string) => `Open ${name}`,
     budgets: 'Budgets',
     budgetsLabel: (name: string) => `Budgets for ${name}`,
+    // An agent budget's row opens the agent's own Budget section (B5).
+    agentBudget: 'Budget',
+    agentBudgetLabel: (name: string) => `Budget for ${name}`,
     anAgent: 'An agent',
     yourBudget: 'Your monthly',
     budget: (label: string, state: 'warning' | 'exceeded', crossed: number | null) =>

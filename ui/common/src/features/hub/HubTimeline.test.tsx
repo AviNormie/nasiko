@@ -291,7 +291,8 @@ describe('buckets', () => {
     const { router } = renderApp(url('?slice=2020-01-01T00:00:00.000Z/2020-01-02T00:00:00.000Z'))
     await lanes()
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('slice'))
-    await userEvent.click(screen.getByRole('button', { name: copy.bar.table }))
+    // The timeline's Table comes first; the Budget section's burn card has its own (B5).
+    await userEvent.click(screen.getAllByRole('button', { name: copy.bar.table })[0]!)
     const table = await screen.findByRole('table', { name: copy.table.label })
     const selects = within(table).getAllByRole('button', { name: /^Select / })
     expect(selects.length).toBeGreaterThanOrEqual(30)

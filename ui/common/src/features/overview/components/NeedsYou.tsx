@@ -221,8 +221,14 @@ function Row({
       detail = row.reason
       action = row.budget ? (
         <Action>
-          <Link to="/budgets" aria-label={copy.needs.budgetsLabel(row.name)}>
-            {copy.needs.budgets}
+          <Link
+            to="/agents/$agentId"
+            params={{ agentId: row.id }}
+            search={{}}
+            hash="hub-budget"
+            aria-label={copy.needs.agentBudgetLabel(row.name)}
+          >
+            {copy.needs.agentBudget}
           </Link>
         </Action>
       ) : (
@@ -242,7 +248,19 @@ function Row({
       const v = budgetView(row)
       title = v.title
       detail = v.detail
-      action = (
+      action = row.agentId ? (
+        <Action>
+          <Link
+            to="/agents/$agentId"
+            params={{ agentId: row.agentId }}
+            search={{}}
+            hash="hub-budget"
+            aria-label={copy.needs.agentBudgetLabel(row.label)}
+          >
+            {copy.needs.agentBudget}
+          </Link>
+        </Action>
+      ) : (
         <Action>
           <Link to="/budgets" aria-label={copy.needs.budgetsLabel(row.label)}>
             {copy.needs.budgets}

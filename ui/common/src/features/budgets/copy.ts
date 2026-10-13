@@ -365,6 +365,8 @@ export const copy = {
 
   // Home's Budget burn panel (F10, F12, ledger #79)
   homeTitle: (scope: string) => `Budget burn · ${scope}`,
+  // The hub's Budget section (B5).
+  hubTitle: 'Budget',
   homeOpen: 'Open budgets',
   homeOpenLabel: (scope: string) => `Open budgets: ${scope}`,
   homeAtRisk: 'At risk',

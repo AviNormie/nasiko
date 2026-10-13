@@ -19,6 +19,7 @@ export function NeedsPanel({ result, agentName }: { result: HubNeedsResult; agen
   const parts: string[] = []
   if (needs.coverage?.requests) parts.push(copy.needs.partRequests)
   if (needs.coverage?.status) parts.push(copy.needs.partStatus)
+  if (needs.coverage?.budget) parts.push(copy.needs.partBudget)
   const s = needs.coverage?.sessions
   if (s) parts.push(copy.needs.partSessions(s.checked, s.found, s.scanned))
   return (
@@ -70,6 +71,19 @@ function Row({ row, agentName }: { row: NeedRow; agentName: string }) {
         </Badge>
         <span>{row.reason}</span>
         <span className="text-xs text-muted-foreground">{copy.needs.ratedOn}</span>
+      </li>
+    )
+  if (row.kind === 'budget')
+    return (
+      <li className="flex flex-wrap items-center gap-2 py-2">
+        <Badge variant={row.level === 'action' ? 'destructive' : 'outline'}>
+          {copy.needs.budgetBadge}
+        </Badge>
+        <span>{row.sentence}</span>
+        {/* The Budget section on this page (B5). */}
+        <a href="#hub-budget" className={LINK}>
+          {copy.needs.reviewBudget}
+        </a>
       </li>
     )
   if (row.kind === 'requests')
