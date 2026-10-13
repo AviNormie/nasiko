@@ -65,6 +65,9 @@ enum ResumeReply {
     OtherJsonRpcError,
     /// The task continues and completes.
     Completed,
+    /// HTTP 200 `text/event-stream`, one partial frame, then the connection drops mid-body: the
+    /// agent may already have acted, so the outcome cannot be classified.
+    StreamBreaksMidBody,
 }
 
 #[derive(Clone)]
@@ -146,6 +149,17 @@ async fn fake_agent_handler(State(agent): State<FakeAgent>, body: Bytes) -> Resp
             "id": request_id,
             "error": { "code": -32603, "message": "Internal error" },
         })),
+        ResumeReply::StreamBreaksMidBody => Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from_stream(async_stream::stream! {
+                yield Ok::<_, std::io::Error>(Bytes::from_static(b"data: {\"jsonrpc\":"));
+                // Lets the headers and the partial frame reach the client before the drop, so
+                // the failure surfaces while the body is read, not while the request is sent.
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                yield Err(std::io::Error::other("connection dropped"));
+            }))
+            .unwrap(),
         ResumeReply::Completed => sse_response(&status_frame(nasiko_types::a2a::completed(
             &task_id,
             &context_id,
@@ -652,6 +666,28 @@ async fn a_json_rpc_error_that_is_not_task_not_found_is_still_recorded_as_delive
     assert_eq!(
         row.resume_status, "completed",
         "only a lost task gets the new outcome; any other agent error keeps its handling"
+    );
+
+    server.cleanup().await;
+}
+
+/// The reply broke after HTTP 200, so the agent may have acted: the row is quarantined rather than
+/// retried, and the transport error is kept so an operator can see why.
+#[tokio::test]
+#[serial]
+async fn a_stream_that_breaks_mid_body_records_why_the_outcome_is_unknown() {
+    let (row, _, calls, server) = resume_with(ResumeReply::StreamBreaksMidBody).await;
+
+    assert_eq!(row.resume_status, "delivery_outcome_unknown");
+    let reason = row.resume_last_error.expect("the reason must be recorded");
+    assert!(
+        reason.contains("agent stream broke"),
+        "unexpected reason: {reason}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "an unknown outcome is never retried"
     );
 
     server.cleanup().await;

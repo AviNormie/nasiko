@@ -278,6 +278,16 @@ async fn finish_resume_does_not_clobber_a_quarantined_row() {
         .expect("recovery sweep");
     assert_eq!(quarantined, 1);
     assert_eq!(db.resume_status_of(id).await, "delivery_outcome_unknown");
+    let reason: Option<String> =
+        sqlx::query_scalar("SELECT resume_last_error FROM hitl_requests WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await
+            .expect("fetch resume_last_error");
+    assert!(
+        reason.is_some_and(|r| r.contains("interrupted")),
+        "the sweep must say why the outcome is unknown"
+    );
 
     // A late-finishing zombie attempt must not be able to overwrite that.
     let result = repo::finish_resume(&db.pool, id, ResumeStatus::Completed, 1, None)

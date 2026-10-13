@@ -195,9 +195,10 @@ async fn fail_resume(state: &AppState, row: &HitlRequest, error: &str, failure: 
 }
 
 /// Takes the row out of the claimable pool as `delivery_outcome_unknown` because the agent may
-/// already have acted on the answer, so a retry could double-deliver it.
-async fn quarantine_unknown(state: &AppState, row: &HitlRequest) {
-    if let Err(e) = state.hitl_store.mark_resume_unknown(row.id).await {
+/// already have acted on the answer, so a retry could double-deliver it. `reason` is stored in
+/// `resume_last_error` so an operator can see why the outcome is unknown.
+async fn quarantine_unknown(state: &AppState, row: &HitlRequest, reason: &str) {
+    if let Err(e) = state.hitl_store.mark_resume_unknown(row.id, reason).await {
         tracing::error!(
             id = %row.id, %e,
             "hitl dispatcher: mark_resume_unknown itself failed - row stays reclaimable once its \
@@ -220,7 +221,12 @@ async fn complete_resume(state: &AppState, row: &HitlRequest) {
                 "hitl dispatcher: resume delivered but mark_resume_completed failed - marking \
                  delivery outcome unknown to avoid re-delivering to the agent"
             );
-            quarantine_unknown(state, row).await;
+            quarantine_unknown(
+                state,
+                row,
+                &format!("resume delivered but recording completion failed: {e}"),
+            )
+            .await;
         }
     }
 }
@@ -285,7 +291,15 @@ async fn deliver(state: AppState, row: HitlRequest) {
             attempts = row.resume_dispatch_attempts,
             "hitl dispatcher: giving up after repeated crash-interrupted attempts"
         );
-        quarantine_unknown(&state, &row).await;
+        quarantine_unknown(
+            &state,
+            &row,
+            &format!(
+                "gave up after {} crash-interrupted resume attempts",
+                row.resume_dispatch_attempts
+            ),
+        )
+        .await;
         return;
     }
     if row.origin == HitlOrigin::Maf {
@@ -568,23 +582,23 @@ async fn deliver(state: AppState, row: HitlRequest) {
         ResumeAttempt::TaskNotFound => {
             return finish_agent_lost_task(&state, &row, &flow_ctx, &agent_name, posts).await;
         }
-        ResumeAttempt::Unclassified => {
+        ResumeAttempt::Unclassified(reason) => {
             // By this point the HTTP response was already received - the agent has the resumed
             // message and may already have acted on it before the transport broke mid-body
-            // (`consume_sse_to_terminal`'s `chunk.ok()?`) or the reply failed to parse
-            // (`consume_json_to_terminal`'s `response.json().await.ok()?`). Unlike the true
+            // (`consume_sse_to_terminal`'s stream error) or the reply failed to parse
+            // (`consume_json_to_terminal`'s JSON parse error). Unlike the true
             // pre-flight failures above, retrying here would re-POST the human's answer to an
             // agent that may have already consumed and acted on it once, double-executing it.
             // Same reasoning as `mark_resume_completed`'s own failure handling just below:
             // `mark_resume_unknown` takes the row out of the claimable pool instead of leaving it
             // reclaimable once the lease expires.
             tracing::error!(
-                id = %row.id,
+                id = %row.id, %reason,
                 "hitl dispatcher: agent response could not be classified after the request was \
                  already sent - marking delivery outcome unknown rather than retrying, to avoid \
                  re-delivering to the agent"
             );
-            quarantine_unknown(&state, &row).await;
+            quarantine_unknown(&state, &row, &reason).await;
             return;
         }
     };
@@ -1012,8 +1026,9 @@ enum ResumeAttempt {
     SendFailed(String),
     /// The agent answered with a non-success HTTP status that says nothing about the task.
     HttpFailure(reqwest::StatusCode),
-    /// The request went out and was answered, but the body could not be read or parsed.
-    Unclassified,
+    /// The request went out and was answered, but the body could not be read or parsed; carries
+    /// why, for `resume_last_error`.
+    Unclassified(String),
 }
 
 /// Disposition, the raw payload that produced it, and the reply text, as the two body consumers
@@ -1066,9 +1081,9 @@ async fn post_resume(
         .await
     };
     match reply {
-        None => ResumeAttempt::Unclassified,
-        Some((_, Some(data), _)) if is_task_not_found(&data) => ResumeAttempt::TaskNotFound,
-        Some(reply) => ResumeAttempt::Reply(reply),
+        Err(reason) => ResumeAttempt::Unclassified(reason),
+        Ok((_, Some(data), _)) if is_task_not_found(&data) => ResumeAttempt::TaskNotFound,
+        Ok(reply) => ResumeAttempt::Reply(reply),
     }
 }
 
@@ -1081,7 +1096,7 @@ async fn post_resume(
 /// `TASK_STATE_COMPLETED` event itself carrying no text at all; capturing only the terminal
 /// event's own data would silently lose the reply for exactly that (common) case. Reuses
 /// `agent_proxy.rs`'s own accumulation logic (`artifact_chunk_text`/`task_reply_text`/
-/// `message_parts_text`) rather than re-deriving it. `None` only on a transport error mid-stream;
+/// `message_parts_text`) rather than re-deriving it. `Err` only on a transport error mid-stream;
 /// a stream that closes with no explicit terminal event is treated as `Completed`, mirroring
 /// `agent_stream`'s own "stream closed" == done assumption for well-behaved agents.
 async fn consume_sse_to_terminal(
@@ -1089,15 +1104,18 @@ async fn consume_sse_to_terminal(
     task_id: &str,
     context_id: &str,
     continuation: &ContinuationGuard,
-) -> Option<(StreamDisposition, Option<String>, Option<String>)> {
+) -> Result<ResumeReply, String> {
     let mut byte_stream = response.bytes_stream();
+    let mut bytes_read = 0usize;
     let mut buffer = String::new();
     let mut last_data: Option<String> = None;
     let mut artifact_text = String::new();
     let mut terminal_text: Option<String> = None;
 
     while let Some(chunk) = byte_stream.next().await {
-        let chunk = chunk.ok()?;
+        let chunk =
+            chunk.map_err(|e| format!("agent stream broke after {bytes_read} bytes: {e}"))?;
+        bytes_read += chunk.len();
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
         while let Some(line_end) = buffer.find('\n') {
@@ -1118,7 +1136,7 @@ async fn consume_sse_to_terminal(
             last_data = Some(data.to_string());
             // Not relayed: see `consume_json_to_terminal`'s note on the "task not found" reply.
             if is_task_not_found(data) {
-                return Some((StreamDisposition::Failed, last_data, None));
+                return Ok((StreamDisposition::Failed, last_data, None));
             }
             // The real agent event, verbatim — normalized to the exact same wire shape a live
             // turn's own `agent_stream()` already emits, so a reconnecting client's existing SSE
@@ -1143,7 +1161,7 @@ async fn consume_sse_to_terminal(
                 } else {
                     terminal_text
                 };
-                return Some((disposition, last_data, reply_text));
+                return Ok((disposition, last_data, reply_text));
             }
         }
     }
@@ -1153,7 +1171,7 @@ async fn consume_sse_to_terminal(
     } else {
         terminal_text
     };
-    Some((StreamDisposition::Completed, last_data, reply_text))
+    Ok((StreamDisposition::Completed, last_data, reply_text))
 }
 
 /// Non-streaming (`message/send`-style) reply path. On a JSON-RPC `error`, retries once with
@@ -1167,8 +1185,11 @@ async fn consume_json_to_terminal(
     answer: &str,
     build_req: impl Fn(&nasiko_types::a2a::JsonRpcRequest) -> reqwest::RequestBuilder,
     continuation: &ContinuationGuard,
-) -> Option<(StreamDisposition, Option<String>, Option<String>)> {
-    let mut body: serde_json::Value = response.json().await.ok()?;
+) -> Result<ResumeReply, String> {
+    let mut body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("agent reply was not valid JSON: {e}"))?;
 
     // Checked on the FIRST reply, before the `message/send` retry below: that retry is a different
     // request and may fail differently, which would mask the agent's "task not found". Not pushed
@@ -1186,13 +1207,13 @@ async fn consume_json_to_terminal(
 
     let data = body.to_string();
     if is_task_not_found(&data) {
-        return Some((StreamDisposition::Failed, Some(data), None));
+        return Ok((StreamDisposition::Failed, Some(data), None));
     }
     // Single reply, not a chunked stream — one push covers the whole non-streaming path, same
     // normalization as the streaming path above so a reconnect sees a consistent shape either way.
     continuation.push(normalize_agent_event(&data, task_id, context_id));
     if body.get("error").is_some() {
-        return Some((StreamDisposition::Failed, Some(data), None));
+        return Ok((StreamDisposition::Failed, Some(data), None));
     }
 
     let disposition = match nasiko_types::a2a::classify_stream_disposition(&data) {
@@ -1203,7 +1224,7 @@ async fn consume_json_to_terminal(
     // so `extract_text` on the whole body — same helper `agent_stream()`'s own non-streaming
     // branch uses — is enough here, unlike the streaming path above.
     let reply_text = nasiko_types::a2a::extract_text(body.get("result").unwrap_or(&body));
-    Some((disposition, Some(data), reply_text))
+    Ok((disposition, Some(data), reply_text))
 }
 
 /// Flip the `flow_steps` row this pause interrupted out of `awaiting_human` to `status` once the

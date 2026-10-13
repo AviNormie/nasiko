@@ -921,7 +921,8 @@ pub async fn recover_stuck_resumes(db: &PgPool, lease_minutes: i64) -> Result<u6
     let rows = sqlx::query_as::<_, HitlRequestRow>(
         r#"
         UPDATE hitl_requests
-           SET resume_status = 'delivery_outcome_unknown'
+           SET resume_status = 'delivery_outcome_unknown',
+               resume_last_error = 'resume attempt was interrupted and could not be confirmed'
          WHERE status IN ('resolved', 'rejected') AND resume_status = 'not_started'
            AND resume_claimed_at IS NOT NULL
            AND resume_claimed_at < now() - make_interval(mins => $1::int)
