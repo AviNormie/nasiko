@@ -188,6 +188,7 @@ export const copy = {
   },
 
   ledger: {
+    budgetSection: 'this session’s budget',
     trace: 'Trace',
     previewColumns:
       'Context, Memory, Controls applied and Budget use come from proposed server records.',

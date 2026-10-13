@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { burn as engineBurn, worldFromScenario } from '@/mocks/budgetEngine'
 import { budgetScenario, GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
-import { burnSentence } from './sentence'
+import { burnNeed, burnSentence, sessionSentence } from './sentence'
 
 const read = (scope: string, id: string | null, now = Date.parse(GOLDEN_ANCHOR)) =>
   engineBurn(
@@ -43,5 +43,26 @@ describe('burnSentence', () => {
     expect(burnSentence(read('agent', I.pricing, Date.UTC(2026, 9, 2, 12)), 'month')).toMatch(
       /used\. A projection needs 3 days of spend\.$/,
     )
+  })
+})
+
+describe('sessionSentence (F9) and burnNeed (F8)', () => {
+  it('a session says what it used over how many turns, against its limit; stopped only where calls stop', () => {
+    const s1 = read('session', I.s1)
+    expect(sessionSentence(s1)).toBe(
+      'Reached its $8.00 session limit; calls are stopped for this session.',
+    )
+    const open = { ...s1, budget: { ...s1.budget!, stopped: false, action: 'alert' as const } }
+    expect(sessionSentence(open)).toBe('Over its $8.00 session limit by $2.00.')
+    expect(sessionSentence({ ...open, used_usd: 6, turns: s1.turns!.slice(0, 2) })).toBe(
+      '$6.00 of its $8.00 session limit used (75%) over 2 turns.',
+    )
+    expect(sessionSentence({ ...s1, budget: null })).toBe('$10.00 over 3 turns; no session limit.')
+  })
+
+  it('a budget needs its reader when stopped or over (action), past a mark or projected past it (watch)', () => {
+    expect(burnNeed(read('agent', I.reviewer))).toBe('action')
+    expect(burnNeed(read('agent', I.pricing))).toBe('watch')
+    expect(burnNeed(read('owner', I.ana))).toBeNull()
   })
 })

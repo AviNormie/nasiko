@@ -3,7 +3,7 @@
  * chart's accessible summary. "Ran out" and "stopped" only where calls stop (design 1C); with unpriced calls the
  * figures are floors and the allowance a ceiling (F2). No causal words. Pure; `sentence.test.ts`.
  */
-import { fmtMoney, fmtShortDay } from '@/lib/format'
+import { fmtMoney, fmtMoneyFloor, fmtShortDay } from '@/lib/format'
 import { currentLimit, figures, projection, runOut } from './burn'
 import { needsLevers } from './levers'
 import { copy } from './copy'
@@ -59,4 +59,18 @@ export function burnNeed(b: Burn): 'action' | 'watch' | null {
   if (b.budget.stopped || b.budget.state === 'exceeded') return 'action'
   if (b.budget.state === 'warning' || needsLevers(b, projection(b))) return 'watch'
   return null
+}
+
+/**
+ * A session's sentence (F9): no reset and no projection, so what it used over how many turns, against its limit when it
+ * has one; stopped only where calls stop (design 1C).
+ */
+export function sessionSentence(b: Burn): string {
+  const turns = b.turns?.length ?? 0
+  const used = fmtMoneyFloor(b.used_usd, b.unpriced_calls > 0)
+  const limit = currentLimit(b)
+  if (!b.budget || limit === null) return copy.sessionNoLimit(used, turns)
+  if (b.budget.stopped) return copy.sessionStopped(fmtMoney(limit))
+  if (b.used_usd > limit) return copy.sessionOver(fmtMoney(limit), fmtMoney(b.used_usd - limit))
+  return copy.sessionUsed(used, fmtMoney(limit), Math.round((b.used_usd / limit) * 100), turns)
 }

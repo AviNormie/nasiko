@@ -64,7 +64,11 @@ function seedCalls(seed: Seed, agents: readonly MockAgent[]): WCall[] {
       agent_id: t.agent_id,
       billed_user_id: owner.get(t.agent_id) ?? null,
       flow_id: t.trace_id,
-      chat_session_id: t.session_id || null,
+      // The Sessions mock's chat session for the trace (`spanBuilder.ts`: one per agent per UTC day), so a session's
+      // ledger and its session budget are the same session.
+      chat_session_id: t.workflow_id
+        ? null
+        : `5eed-sess-${t.agent_name.replace(/^seed-/, '')}-${new Date(t.ts).toISOString().slice(0, 10)}`,
       turn_id: t.trace_id,
       model: `${t.provider}/${t.model}`,
       operation: t.workflow_id ? 'workflow' : 'chat',
@@ -77,6 +81,35 @@ function seedCalls(seed: Seed, agents: readonly MockAgent[]): WCall[] {
     .sort((a, b) => a.at - b.at || a.call_id.localeCompare(b.call_id))
 }
 
+/** Idle this long after its last call, a session has ended (BG-10's idle timeout, as the golden S1). */
+const SESSION_IDLE_MS = 60 * 60_000
+
+/**
+ * The chat sessions behind the seed's calls (BG-10: session budgets need them): one per `chat_session_id`, its user the
+ * billed user, its agent the first call's, from its first call to an hour after its last (open while that is ahead).
+ */
+function sessionsOf(calls: readonly WCall[], now: number): World['sessions'] {
+  const byId = new Map<string, WCall[]>()
+  for (const c of calls)
+    if (c.chat_session_id) byId.set(c.chat_session_id, [...(byId.get(c.chat_session_id) ?? []), c])
+  return [...byId].flatMap(([id, cs]) => {
+    const first = cs[0]!
+    const last = cs.at(-1)!
+    if (!first.billed_user_id || !first.agent_id) return []
+    const end = last.at + SESSION_IDLE_MS
+    return [
+      {
+        id,
+        title: '',
+        user_id: first.billed_user_id,
+        agent_id: first.agent_id,
+        started_at: first.at,
+        ended_at: end <= now ? end : null,
+      },
+    ]
+  })
+}
+
 export function buildBudgetState(
   seed: Seed,
   agents: readonly MockAgent[],
@@ -85,10 +118,11 @@ export function buildBudgetState(
   opts: { empty?: boolean } = {},
 ): BudgetMockStore {
   const owners = [...new Set([user, ...agents.map((a) => a.owner_id)])]
+  const calls = seedCalls(seed, agents)
   const w: World = {
     adminId: ADMIN_ID,
     edition: 'oss',
-    calls: seedCalls(seed, agents),
+    calls,
     budgets: [],
     users: owners.map((id) => ({
       id,
@@ -105,7 +139,7 @@ export function buildBudgetState(
     units: [],
     members: [],
     parents: [],
-    sessions: [],
+    sessions: sessionsOf(calls, now),
     meta: { exact_dedupe_from: null, membership_history_from: null },
     watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
     settings: {

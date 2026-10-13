@@ -75,6 +75,13 @@ export const copy = {
     'Your budget counts every routed call billed to you, including your chats with other people’s agents.',
   budgetNoScopes: 'Every agent you own already has a budget, and so do you.',
   monthlyLimit: 'Monthly limit (USD)',
+  // A session budget (BG-10, plan F9): one period, the session itself.
+  sessionLimit: 'Session limit (USD)',
+  budgetDescriptionSession:
+    'A limit on this session’s routed spend, with alerts as it crosses each mark. It lasts until the session ends.',
+  stopHintSession: 'The router refuses this session’s calls until it ends.',
+  stopConsequenceSession:
+    'Calls in this session get an error from then on. The session can’t continue until it ends or the limit is raised.',
   limitPositive: 'Enter an amount above $0.',
   alertAt: 'Alert at',
   alertAtHint: 'One in-app alert each time spend crosses a mark.',
@@ -365,6 +372,24 @@ export const copy = {
 
   // Home's Budget burn panel (F10, F12, ledger #79)
   homeTitle: (scope: string) => `Budget burn · ${scope}`,
+  // The session ledger's budget (B5, F9).
+  sessionTitle: 'Session budget',
+  sessionNoLimit: (used: string, turns: number) =>
+    `${used} over ${turns} ${turns === 1 ? 'turn' : 'turns'}; no session limit.`,
+  sessionUsed: (used: string, limit: string, pct: number, turns: number) =>
+    `${used} of its ${limit} session limit used (${pct}%) over ${turns} ${turns === 1 ? 'turn' : 'turns'}.`,
+  sessionOver: (limit: string, over: string) => `Over its ${limit} session limit by ${over}.`,
+  sessionStopped: (limit: string) =>
+    `Reached its ${limit} session limit; calls are stopped for this session.`,
+  sessionTurn: (n: number) => `Turn ${n}`,
+  sessionStart: 'Start',
+  sessionUsedLabel: 'This session',
+  sessionPerTurn: 'Per turn, last 5',
+  sessionPerTurnVs: (avg: string) => `vs ${avg} the session’s average`,
+  sessionLeft: 'Left of the limit',
+  sessionOverBy: 'Over by',
+  setSessionLimit: 'Set a session limit',
+  editSessionLimit: 'Edit session limit',
   // The hub's Budget section (B5).
   hubTitle: 'Budget',
   homeOpen: 'Open budgets',

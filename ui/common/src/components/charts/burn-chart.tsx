@@ -92,6 +92,11 @@ export interface BurnChartProps {
   className?: string
   /** The burn plot alone, shorter, without the daily bars (Home's Budget burn panel, plan F12). */
   compact?: boolean
+  /**
+   * Lab: `turns` makes x the session's turns (plan F9): `t` is a turn number (0 the session's start), ticks are whole
+   * turns, and `formatDay` labels them. Only with `compact` (a session has no daily bars).
+   */
+  axis?: 'time' | 'turns'
 }
 
 const ACTUAL = seriesAt(0)
@@ -213,6 +218,7 @@ function Plot({
   pickedDay,
   onPickDay,
   compact,
+  axis,
   width,
   height,
 }: BurnChartProps & { width: number; height: number }) {
@@ -227,13 +233,20 @@ function Plot({
 
   // UTC, like the day bars and the labels: a local-time scale puts ticks at the viewer's midnight.
   const x = scaleUtc({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
+  // Lab: a session's turns are a linear axis of whole turns (F9).
+  const turns = axis === 'turns'
+  const xTurn = scaleLinear({ domain: [data.start, data.end], range: [0, innerW] })
+  const maxTurnTicks = Math.max(2, Math.min(10, Math.floor(innerW / 60)))
+  const turnStep = Math.max(1, Math.ceil((data.end - data.start) / maxTurnTicks))
+  const turnTicks: number[] = []
+  for (let t = Math.ceil(data.start) || 1; t <= data.end; t += turnStep) turnTicks.push(t)
   const extra = [...(preview ?? []), ...(expected ?? []), ...(data.share ?? [])].map((p) => p.v)
   const lowY = Math.min(0, data.minY, ...extra)
   const highY = Math.max(data.maxY, ...extra) * 1.06 || 1
   const y = scaleLinear({ domain: [lowY, highY], range: [burnH, 0], nice: true })
   const barMax = Math.max(1e-9, ...data.bars.map((b) => b.v))
   const yb = scaleLinear({ domain: [0, barMax], range: [barsH, 0], nice: true })
-  const X = (t: number) => x(new Date(t))
+  const X = (t: number) => (turns ? xTurn(t) : x(new Date(t)))
   const dayW = Math.max(1, (X(data.start + 86_400_000) - X(data.start)) * 0.72)
   const sweep = reduce ? undefined : { initial: { pathLength: 0 }, animate: { pathLength: 1 } }
   const zeroY = y(0)
@@ -244,7 +257,8 @@ function Plot({
     t === null ? null : (data.bars.find((b) => t >= b.t && t < b.t + 86_400_000) ?? null)
   const timeAt = (svg: SVGSVGElement, clientX: number) => {
     const px = clientX - svg.getBoundingClientRect().left - MARGIN.left
-    return px >= 0 && px <= innerW ? x.invert(px).getTime() : null
+    if (px < 0 || px > innerW) return null
+    return turns ? xTurn.invert(px) : x.invert(px).getTime()
   }
   const hovered = dayAt(hover)
   const dimOthers = data.bars.some((b) => b.day === pickedDay)
@@ -492,9 +506,10 @@ function Plot({
         {compact ? (
           <AxisBottom
             top={burnH}
-            scale={x}
+            scale={turns ? xTurn : x}
             numTicks={Math.max(2, Math.min(8, Math.floor(innerW / 90)))}
-            tickFormat={(d) => formatDay((d as Date).getTime())}
+            tickValues={turns ? turnTicks : undefined}
+            tickFormat={(d) => formatDay(turns ? Number(d) : (d as Date).getTime())}
             stroke="var(--border)"
             tickStroke="var(--border)"
             tickLabelProps={() => ({ ...TICK, textAnchor: 'middle' })}

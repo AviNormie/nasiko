@@ -30,8 +30,13 @@ export interface Budget {
 }
 
 export interface CreateBudgetBody {
-  scope: BudgetScope
+  /** 1.0 adds `session` (BG-10): a limit on one chat session, until it ends. */
+  scope: BudgetScope | 'session'
   agent_id?: string | null
+  /** 1.0: the chat session, for a session budget. */
+  session_id?: string
+  /** 1.0: `session` for a session budget (its one period); month otherwise (the default). */
+  period?: 'session'
   /** 1.0: whose owner budget, when not the caller's (superuser, §6.4). */
   user_id?: string
   limit_usd: number

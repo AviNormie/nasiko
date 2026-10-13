@@ -32,10 +32,13 @@ describe('the ledger, live', () => {
     expect(screen.queryByText(copy.rail.preview)).toBeNull()
     expect(screen.queryByRole('heading', { name: c.budgets.title })).toBeNull()
     rec.stop()
-    // The shell's once-per-session availability probe (plans/feat-budget-burn.md F11) is the only budgets request.
-    const probe = (u: URL) =>
+    // Never the proposed AH-8 read. Budgets 1.0 reads (the session's burn, B5) go out only where the availability probe
+    // (plans/feat-budget-burn.md F11) says the server has them.
+    expect(rec.urls.filter((u) => u.pathname.startsWith('/api/budgets/session/'))).toEqual([])
+    const allowed = (u: URL) =>
       u.pathname === '/api/budgets/capabilities' ||
-      (u.pathname === '/api/budgets' && u.searchParams.get('limit') === '1')
-    expect(rec.urls.filter((u) => u.pathname.startsWith('/api/budgets') && !probe(u))).toEqual([])
+      (u.pathname === '/api/budgets' && u.searchParams.get('limit') === '1') ||
+      (u.pathname === '/api/budgets/burn' && u.searchParams.get('scope') === 'session')
+    expect(rec.urls.filter((u) => u.pathname.startsWith('/api/budgets') && !allowed(u))).toEqual([])
   })
 })
