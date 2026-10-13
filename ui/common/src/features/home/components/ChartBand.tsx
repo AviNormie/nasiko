@@ -7,7 +7,7 @@
  */
 import { useQueries } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { Suspense, useState, type ReactNode } from 'react'
 import { Bar as KitBar } from '@/components/charts/bar'
 import { BarChart } from '@/components/charts/bar-chart'
 import { BarXAxis } from '@/components/charts/bar-x-axis'
@@ -61,6 +61,9 @@ export interface ChartBandProps {
   ratingsPending: boolean
   health: HealthKey | undefined
   onHealth: (h: HealthKey | undefined) => void
+  /** The Budget burn panel (plans/feat-budget-burn.md F10, D13): the first row when its burn read answered; then Spend
+   *  keeps By agent only (the panel's chart is the scope's spend over the month). */
+  burn?: ReactNode
 }
 
 const SPEND = seriesAt(0)
@@ -75,6 +78,7 @@ export default function ChartBand(p: ChartBandProps) {
       aria-label={copy.charts.label}
       className="grid grid-cols-1 gap-3 @[880px]/overview:grid-cols-2"
     >
+      {p.burn ? <Suspense fallback={<PanelSkeleton height={CHART_H} />}>{p.burn}</Suspense> : null}
       <SpendPanel {...p} />
       <div className="[&>section]:h-full">
         <CostPerformance
@@ -96,7 +100,9 @@ export default function ChartBand(p: ChartBandProps) {
 
 function SpendPanel(p: ChartBandProps) {
   const [view, setView] = useState<'time' | 'agent'>('time')
-  const time = p.superuser && view === 'time'
+  // With the Budget burn panel above, Over time is that panel's job (D13).
+  const overTime = p.superuser && !p.burn
+  const time = overTime && view === 'time'
   const bars = topBars(p.rows, 'spend', BAND_BARS)
   const known = p.spendStatus === 'ok' || p.spendStatus === 'stale'
   const top = topSpenders(p.rows, BAND_STACK)
@@ -113,7 +119,7 @@ function SpendPanel(p: ChartBandProps) {
             : copy.charts.byAgentSubtitle
       }
       actions={
-        p.superuser ? (
+        overTime ? (
           <ToggleGroup
             type="single"
             variant="outline"

@@ -23,6 +23,7 @@ afterEach(() => {
     persona: null,
     superuser: null,
     onboarding: { persona: null, completed: true },
+    budgetVariants: [],
   })
 })
 
@@ -42,7 +43,9 @@ const dataRows = async () =>
     )
 
 describe('spend', () => {
+  // Over time shows where the Budget burn panel doesn't (plans/feat-budget-burn.md D13): on a server without budgets.
   it('a superuser sees spend over time, stacked from the top agents’ series plus the fleet’s on Fleet', async () => {
+    configureMocks({ budgetVariants: ['budgets-absent'] })
     const rec = recordRequests()
     renderApp('/?scope=fleet')
     const spend = await panel(copy.charts.spend(30))
@@ -64,6 +67,7 @@ describe('spend', () => {
   })
 
   it('Over time on Yours draws no Other: the fleet total isn’t the rest of the viewer’s agents', async () => {
+    configureMocks({ budgetVariants: ['budgets-absent'] })
     renderApp('/?scope=yours')
     const spend = await panel(copy.charts.spend(30))
     await waitFor(() => expect(within(spend).queryAllByRole('figure').length).toBe(1))

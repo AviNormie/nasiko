@@ -86,6 +86,8 @@ export interface BurnChartProps {
   pickedDay?: string | null
   onPickDay?: (day: string) => void
   className?: string
+  /** The burn plot alone, shorter, without the daily bars (Home's Budget burn panel, plan F12). */
+  compact?: boolean
 }
 
 const ACTUAL = seriesAt(0)
@@ -111,7 +113,7 @@ export function BurnChart(props: BurnChartProps) {
   const { labels, data, preview } = props
   return (
     <figure aria-label={labels.summary} className={props.className}>
-      <div role="presentation" className="h-72 md:h-80">
+      <div role="presentation" className={props.compact ? 'h-56' : 'h-72 md:h-80'}>
         <ParentSize>
           {({ width, height }) =>
             width > 10 && height > 10 ? <Plot {...props} width={width} height={height} /> : null
@@ -143,7 +145,7 @@ export function BurnChart(props: BurnChartProps) {
           </Key>
         ) : null}
         {data.share?.length && labels.share ? <Key color={SHARE.edge}>{labels.share}</Key> : null}
-        {data.stack?.length ? (
+        {props.compact ? null : data.stack?.length ? (
           data.stack.map((s) => (
             <span key={s.key} className="inline-flex items-center gap-1.5">
               <Swatch series={partSeries(data.stack ?? [], s.key)} /> {s.label}
@@ -199,6 +201,7 @@ function Plot({
   preview,
   pickedDay,
   onPickDay,
+  compact,
   width,
   height,
 }: BurnChartProps & { width: number; height: number }) {
@@ -207,7 +210,7 @@ function Plot({
   const [hover, setHover] = useState<number | null>(null)
   const innerW = Math.max(0, width - MARGIN.left - MARGIN.right)
   const innerH = Math.max(0, height - MARGIN.top - MARGIN.bottom)
-  const burnH = innerH * BURN_SHARE
+  const burnH = compact ? innerH : innerH * BURN_SHARE
   const barsTop = burnH + GAP
   const barsH = Math.max(0, innerH - barsTop)
 
@@ -464,80 +467,9 @@ function Plot({
         ))}
 
         {/* The daily bars, on the same x axis. */}
-        <Group top={barsTop}>
-          {data.bars.map((b) => {
-            const h = barsH - yb(b.v)
-            const picked = b.day === pickedDay
-            const opacity = dimOthers && !picked ? 0.45 : 1
-            const left = X(b.t + 43_200_000) - dayW / 2
-            const stack = data.stack ?? []
-            let base = 0
-            return (
-              <g key={b.day} aria-hidden>
-                {b.parts && stack.length ? (
-                  // Bottom up in stack order; each part's top edge in its own colour.
-                  stack.map((s) => {
-                    const v = b.parts?.find((p) => p.key === s.key)?.v ?? 0
-                    if (v <= 0) return null
-                    const y0 = yb(base)
-                    base += v
-                    const y1 = yb(base)
-                    const series = partSeries(stack, s.key)
-                    return (
-                      <g key={s.key} opacity={opacity}>
-                        <rect
-                          x={left}
-                          y={y1}
-                          width={dayW}
-                          height={Math.max(0, y0 - y1)}
-                          fill={series.fill}
-                        />
-                        <rect x={left} y={y1} width={dayW} height={1.5} fill={series.edge} />
-                      </g>
-                    )
-                  })
-                ) : (
-                  <rect
-                    x={left}
-                    y={yb(b.v)}
-                    width={dayW}
-                    height={Math.max(0, h)}
-                    fill={ACTUAL.fill}
-                    opacity={opacity}
-                  />
-                )}
-                {h > 0 && !(b.parts && stack.length) ? (
-                  <rect
-                    x={X(b.t + 43_200_000) - dayW / 2}
-                    y={yb(b.v)}
-                    width={dayW}
-                    height={2}
-                    fill={ACTUAL.edge}
-                  />
-                ) : null}
-                {b.spike ? (
-                  <text
-                    x={X(b.t + 43_200_000)}
-                    y={yb(b.v) - 3}
-                    textAnchor="middle"
-                    className="fill-warning text-2xs font-semibold"
-                  >
-                    !
-                  </text>
-                ) : null}
-              </g>
-            )
-          })}
-          <AxisLeft
-            scale={yb}
-            numTicks={2}
-            tickFormat={(v) => formatMoney(Number(v))}
-            stroke="transparent"
-            tickStroke="transparent"
-            tickLabelProps={() => ({ ...TICK, textAnchor: 'end', dx: -4, dy: 3 })}
-          />
+        {compact ? (
           <AxisBottom
-            top={barsH}
+            top={burnH}
             scale={x}
             numTicks={Math.max(2, Math.min(8, Math.floor(innerW / 90)))}
             tickFormat={(d) => formatDay((d as Date).getTime())}
@@ -545,7 +477,90 @@ function Plot({
             tickStroke="var(--border)"
             tickLabelProps={() => ({ ...TICK, textAnchor: 'middle' })}
           />
-        </Group>
+        ) : (
+          <Group top={barsTop}>
+            {data.bars.map((b) => {
+              const h = barsH - yb(b.v)
+              const picked = b.day === pickedDay
+              const opacity = dimOthers && !picked ? 0.45 : 1
+              const left = X(b.t + 43_200_000) - dayW / 2
+              const stack = data.stack ?? []
+              let base = 0
+              return (
+                <g key={b.day} aria-hidden>
+                  {b.parts && stack.length ? (
+                    // Bottom up in stack order; each part's top edge in its own colour.
+                    stack.map((s) => {
+                      const v = b.parts?.find((p) => p.key === s.key)?.v ?? 0
+                      if (v <= 0) return null
+                      const y0 = yb(base)
+                      base += v
+                      const y1 = yb(base)
+                      const series = partSeries(stack, s.key)
+                      return (
+                        <g key={s.key} opacity={opacity}>
+                          <rect
+                            x={left}
+                            y={y1}
+                            width={dayW}
+                            height={Math.max(0, y0 - y1)}
+                            fill={series.fill}
+                          />
+                          <rect x={left} y={y1} width={dayW} height={1.5} fill={series.edge} />
+                        </g>
+                      )
+                    })
+                  ) : (
+                    <rect
+                      x={left}
+                      y={yb(b.v)}
+                      width={dayW}
+                      height={Math.max(0, h)}
+                      fill={ACTUAL.fill}
+                      opacity={opacity}
+                    />
+                  )}
+                  {h > 0 && !(b.parts && stack.length) ? (
+                    <rect
+                      x={X(b.t + 43_200_000) - dayW / 2}
+                      y={yb(b.v)}
+                      width={dayW}
+                      height={2}
+                      fill={ACTUAL.edge}
+                    />
+                  ) : null}
+                  {b.spike ? (
+                    <text
+                      x={X(b.t + 43_200_000)}
+                      y={yb(b.v) - 3}
+                      textAnchor="middle"
+                      className="fill-warning text-2xs font-semibold"
+                    >
+                      !
+                    </text>
+                  ) : null}
+                </g>
+              )
+            })}
+            <AxisLeft
+              scale={yb}
+              numTicks={2}
+              tickFormat={(v) => formatMoney(Number(v))}
+              stroke="transparent"
+              tickStroke="transparent"
+              tickLabelProps={() => ({ ...TICK, textAnchor: 'end', dx: -4, dy: 3 })}
+            />
+            <AxisBottom
+              top={barsH}
+              scale={x}
+              numTicks={Math.max(2, Math.min(8, Math.floor(innerW / 90)))}
+              tickFormat={(d) => formatDay((d as Date).getTime())}
+              stroke="var(--border)"
+              tickStroke="var(--border)"
+              tickLabelProps={() => ({ ...TICK, textAnchor: 'middle' })}
+            />
+          </Group>
+        )}
         <AxisLeft
           scale={y}
           numTicks={4}

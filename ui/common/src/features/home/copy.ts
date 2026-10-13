@@ -42,6 +42,8 @@ export const copy = {
     budget: 'Budget use',
     lastChange: 'Last change',
   },
+  // Home's Budget burn panel names its scope (plans/feat-budget-burn.md F12).
+  budgetBurn: { fleet: 'Fleet', yours: 'Yours', unit: 'Unit' },
   budget: {
     use: (used: string, limit: string, month: string) =>
       month ? `${used} of ${limit} · ${month}` : `${used} of ${limit}`,
