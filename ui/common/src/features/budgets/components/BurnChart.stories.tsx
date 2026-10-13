@@ -10,7 +10,14 @@ import {
   worldFromScenario,
 } from '@/mocks/budgetEngine'
 import { budgetScenario, GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
-import { chartModel, previewLine, projection, tableRows, type BurnMode } from '../burn'
+import {
+  chartModel,
+  expectedLine,
+  previewLine,
+  projection,
+  tableRows,
+  type BurnMode,
+} from '../burn'
 import { shareLine, stackBars } from '../causes'
 import { burnAxisMoney, burnChartData, burnChartLabels } from '../chartData'
 import { BurnTable } from './BurnTable'
@@ -34,6 +41,7 @@ function Story({
   summary,
   now,
   preview,
+  expected,
 }: {
   scope: string
   id: string | null
@@ -41,6 +49,7 @@ function Story({
   summary: string
   now?: number
   preview?: (b: ReturnType<typeof read>) => { t: number; v: number }[]
+  expected?: (b: ReturnType<typeof read>) => { t: number; v: number }[] | null
 }) {
   const b = read(scope, id, now)
   const m = chartModel(b, mode)
@@ -48,10 +57,14 @@ function Story({
     <div className="max-w-3xl rounded-lg border border-border bg-card p-4">
       <BurnChart
         data={burnChartData(m)}
-        labels={burnChartLabels(m, { stops: b.budget?.action === 'stop', summary })}
+        labels={{
+          ...burnChartLabels(m, { stops: b.budget?.action === 'stop', summary }),
+          expected: 'Expected without the Oct 12 change',
+        }}
         formatMoney={burnAxisMoney}
         formatDay={(t) => fmtShortDay(new Date(t).toISOString())}
         preview={preview?.(b) ?? null}
+        expected={expected?.(b) ?? null}
         pickedDay="2026-10-09"
       />
     </div>
@@ -121,6 +134,19 @@ export const PreviewLine: StoryObj = {
       mode="down"
       summary="Preview, not applied: at half the pace, projected spend is $133.50."
       preview={(b) => previewLine(b, 'down', (projection(b)?.pace ?? 0) / 2)}
+    />
+  ),
+}
+
+/** After a change that moved the pace (F13): where spend was going before it, until 3 days of new data. */
+export const ExpectedAfterChange: StoryObj = {
+  render: () => (
+    <Story
+      scope="agent"
+      id={I.pricing}
+      mode="up"
+      summary="Expected without the Oct 12 change: spend at the pace before it."
+      expected={(b) => expectedLine(b, 'up', Date.parse('2026-10-12T10:00:00Z'))}
     />
   ),
 }

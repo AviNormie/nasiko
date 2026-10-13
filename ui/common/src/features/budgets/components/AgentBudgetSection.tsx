@@ -12,9 +12,10 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Announcer } from '@/components/shared/announcer'
 import { Button } from '@/components/ui/button'
+import { fmtShortDay } from '@/lib/format'
 import { budgetV1Query, useBreakdown, useBudgetV1, useBurn, type ScopeRef } from '../api'
 import { mayHave, type Availability } from '../availability'
-import type { BurnMode } from '../burn'
+import { expectedLine, type BurnMode } from '../burn'
 import { rememberBurnMode, storedBurnMode } from '../burnMode'
 import { dimensionsFor, keyLabel, shareLine } from '../causes'
 import type { ExtraMarker } from '../chartData'
@@ -45,6 +46,7 @@ export default function AgentBudgetSection({
   caps,
   markers,
   markersNote,
+  applied,
 }: {
   burn: Burn
   agent: { id: string; name: string; ownerId: string | null }
@@ -54,6 +56,11 @@ export default function AgentBudgetSection({
   markers: readonly ExtraMarker[]
   /** One quiet line when only some changes are known (the hub's partial-state rule). */
   markersNote: string | null
+  /**
+   * The latest change that moves this agent's pace (Token optimization, a model pin) from the hub's event log: its
+   * "expected" line (F13). Absent when the event log isn't there (then the write's own announcement is all).
+   */
+  applied: { at: number } | null
 }) {
   const titleId = useId()
   const ref: ScopeRef = { scope: 'agent', id: agent.id }
@@ -86,6 +93,11 @@ export default function AgentBudgetSection({
       : ([...levers.list.reduce, ...levers.list.adjust].find((l) => l.id === leverId) ?? null)
   const preview = lever ? leverPreview(burn, shownMode, lever) : null
   const leversRef = useRef<HTMLHeadingElement>(null)
+  const expectedPoints = applied ? expectedLine(burn, shownMode, applied.at) : null
+  const expected =
+    applied && expectedPoints
+      ? { line: expectedPoints, label: copy.burnExpected(fmtShortDay(applied.at)) }
+      : null
   // A link to `#hub-budget` (Needs you's budget rows) lands here once the section exists: it renders after its reads.
   const sectionRef = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -167,6 +179,7 @@ export default function AgentBudgetSection({
           onClearShare={() => setPicked(null)}
           preview={preview?.line ?? null}
           extraMarkers={markers}
+          expected={expected}
           footer={
             <>
               {markersNote ? <p className="text-xs text-muted-foreground">{markersNote}</p> : null}

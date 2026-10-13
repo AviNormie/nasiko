@@ -6,7 +6,10 @@
  */
 import { DAY_MS, project, type Projection } from './projection'
 import {
+  EXPECTED_DAYS,
   LOW_RATE_DAYS,
+  MIN_COMPLETE_DAYS,
+  PACE_DAYS,
   SPIKE_FACTOR,
   SPIKE_MIN_USD,
   SPIKE_WINDOW_DAYS,
@@ -650,6 +653,37 @@ export function previewLine(b: Burn, mode: BurnMode, pace: number, limit?: numbe
   return [
     { t: asOf, v: at(asOf) },
     { t: end, v: at(end) },
+  ]
+}
+
+/**
+ * The "expected" line after a change that moves the pace (F13; eng #59): spend as it stood just before the change, from
+ * the data **before** it (the mean of up to 7 complete days before the change's day, at least 3), carried from the change
+ * to the reset. The actual line bending under it is the change's effect; nothing is stored on the client. It ends once
+ * `EXPECTED_DAYS` complete days of new data exist (the projection then runs on them); null before that is possible.
+ */
+export function expectedLine(b: Burn, mode: BurnMode, at: number): ChartPoint[] | null {
+  const start = Date.parse(b.period_start)
+  const asOf = Date.parse(b.as_of)
+  // A stopped budget is projected nowhere (#68): its pace is the refusal's, not the change's.
+  if (!b.resets_at || b.budget?.stopped || at < start || at > asOf) return null
+  const end = Date.parse(b.resets_at)
+  const changeDay = dayStart(at)
+  if ((dayStart(asOf) - changeDay) / DAY_MS - 1 >= EXPECTED_DAYS) return null
+  const before = [...(b.previous?.daily ?? []), ...b.daily]
+    .filter((d) => parseDay(d.date) < changeDay)
+    .slice(-PACE_DAYS)
+  if (before.length < MIN_COMPLETE_DAYS) return null
+  const pace = before.reduce((s, d) => s + d.cost_usd, 0) / before.length
+  // Spend at the change: this period's days before its day, plus its day so far at that pace.
+  const used =
+    b.daily.filter((d) => parseDay(d.date) < changeDay).reduce((s, d) => s + d.cost_usd, 0) +
+    (pace * (at - changeDay)) / DAY_MS
+  const limit = limitAt(b, asOf) ?? 0
+  const show = (u: number) => (mode === 'up' || !b.budget ? u : limit - u)
+  return [
+    { t: at, v: show(used) },
+    { t: end, v: show(used + (pace * (end - at)) / DAY_MS) },
   ]
 }
 

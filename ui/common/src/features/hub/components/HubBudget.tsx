@@ -22,6 +22,8 @@ import { markerText } from '../events'
 
 const AgentBudgetSection = lazy(() => import('@/features/budgets/components/AgentBudgetSection'))
 const SECTION_SKELETON_PX = 360
+/** The event log's kinds a lever writes that move the agent's pace: Token optimization and a model pin (B3, F4). */
+const PACE_CHANGES = new Set(['compress_change', 'route_change'])
 
 export function HubBudget({ agent }: { agent: AgentView }) {
   const me = useQuery(meQuery).data
@@ -73,6 +75,9 @@ function Loaded({
   const markers = (set?.markers ?? [])
     .filter((m) => m.sub !== 'budget_warning')
     .map((m) => ({ at: m.at, label: markerText(m), budgetStop: m.sub === 'budget_stop' }))
+  // The latest change that moves the pace (F13's expected line): optimization switched, or the model routing changed.
+  const last = (set?.markers ?? []).findLast((m) => PACE_CHANGES.has(m.sub))
+  const applied = last ? { at: last.at } : null
   return (
     <Suspense fallback={<PanelSkeleton height={SECTION_SKELETON_PX} />}>
       <AgentBudgetSection
@@ -86,6 +91,7 @@ function Loaded({
         caps={caps}
         markers={markers}
         markersNote={markersNote(state, agent.isHarness)}
+        applied={applied}
       />
     </Suspense>
   )

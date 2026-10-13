@@ -8,6 +8,8 @@ export const LIST_STALE_MS = 10_000
 export const MIN_COMPLETE_DAYS = 3
 /** The pace is the mean of at most this many trailing complete days (§4.6). */
 export const PACE_DAYS = 7
+/** After a change that moves the pace, its "expected" line shows until this many complete days of new data (F13). */
+export const EXPECTED_DAYS = 3
 /** A budgets list read follows at most this many more pages (100 rows each). */
 export const MAX_PAGES = 50
 /** Spike day (plan §5): a day over this many times the trailing pace … */

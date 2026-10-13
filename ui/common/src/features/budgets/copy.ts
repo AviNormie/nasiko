@@ -411,6 +411,8 @@ export const copy = {
   burnRanOut: (day: string) => `Ran out ${day}`,
   burnExceeded: (day: string) => `Exceeded ${day}`,
   burnPreview: 'Preview, not applied',
+  // The "expected" line after a change that moved the pace (F13): where spend was going before it.
+  burnExpected: (day: string) => `Expected without the ${day} change`,
   burnBars: 'Daily spend',
   burnSpike: 'Spike day',
   // Event flags (BG-3 events; design 7B lists them on hover).

@@ -4,7 +4,7 @@
  * a panel error with Retry; a server without budgets or a harness without routed calls → nothing. The agent's own
  * changes join the budget's flags (`withExtraMarkers`).
  */
-import { screen, waitFor, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -99,6 +99,41 @@ describe('the hub’s Budget section', () => {
       'href',
       '#hub-budget',
     )
+  })
+
+  it('a recent model pin draws its expected line until 3 days of new data; an older one none (F13)', async () => {
+    const a = await named('Invoice Parser')
+    const pinAt = (daysBack: number) => new Date(now() - daysBack * 86_400_000).toISOString()
+    let at = pinAt(1)
+    server.use(
+      http.get('*/api/observability/agent/:id/events', () =>
+        HttpResponse.json({
+          data: {
+            events: [
+              {
+                id: 'e1',
+                kind: 'route_change',
+                at,
+                actor: 'admin',
+                summary: 'Routing switched to gpt-4o-mini',
+              },
+            ],
+            truncated: false,
+          },
+        }),
+      ),
+    )
+    renderApp(`/agents/${a.id}`)
+    const s = await section()
+    expect(
+      await within(s).findByText(/^Expected without the .* change$/, undefined, T),
+    ).toBeInTheDocument()
+    cleanup()
+    at = pinAt(5)
+    renderApp(`/agents/${a.id}`)
+    const s2 = await section()
+    await within(s2).findByText(budgetCopy.burnUp, undefined, T)
+    expect(within(s2).queryByText(/^Expected without the/)).toBeNull()
   })
 
   it('another viewer gets no section and reads no burn', async () => {
