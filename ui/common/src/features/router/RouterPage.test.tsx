@@ -26,11 +26,11 @@ const ready = async () => {
 const agentRows = () =>
   within(screen.getByRole('table', { name: copy.agentsTitle })).getAllByRole('row')
 const rowFor = (name: string) => screen.getByRole('link', { name }).closest('tr') as HTMLElement
-const strip = () => screen.getByRole('tablist', { name: copy.summaryLabel })
+const strip = () => screen.getByRole('navigation', { name: copy.summaryLabel })
 /** The summary tiles' names, which carry the strip's sentences ("5 attached"). */
 const stripText = () =>
   within(strip())
-    .getAllByRole('tab')
+    .getAllByRole('button')
     .map((b) => b.getAttribute('aria-label'))
     .join(' · ')
 /** The page shows one tab at a time (Agents first). */
@@ -52,15 +52,18 @@ const openMenu = async (name: string) => {
 }
 
 describe('layout', () => {
-  it('shows the tabs in order, with filter tabs that count the rows', async () => {
+  it('shows the tabs in order, with summary tiles that count the rows', async () => {
     renderApp('/router')
     await ready()
-    const sections = screen.getByRole('tablist', { name: copy.anchorsLabel })
-    expect(
-      within(sections)
-        .getAllByRole('tab')
-        .map((t) => t.textContent),
-    ).toEqual([copy.anchors.agents, copy.anchors.configs, copy.anchors.providers])
+    // Budgets shows once the budgets probe says this server has them (plans/feat-budget-burn.md F11).
+    await waitFor(() =>
+      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+        copy.anchors.agents,
+        copy.anchors.configs,
+        copy.anchors.budgets,
+        copy.anchors.providers,
+      ]),
+    )
     // One tab at a time: Your agents first.
     expect(screen.queryByRole('heading', { name: copy.configsTitle })).toBeNull()
     expect(stripText()).toContain('19 agents')
@@ -129,15 +132,15 @@ describe('agents section states', () => {
     await waitFor(() => expect(stripText()).toContain('14 on your default'))
   })
 
-  it('filter tabs narrow the rows and All clears them', async () => {
+  it('filter links narrow the rows and Show all clears them', async () => {
     const { router } = renderApp('/router')
     await ready()
-    await userEvent.click(within(strip()).getByRole('tab', { name: /5 attached/ }))
+    await userEvent.click(within(strip()).getByRole('button', { name: /5 attached/ }))
     expect(router.state.location.search).toEqual({ source: 'attached' })
     expect(agentRows()).toHaveLength(1 + 5)
-    await userEvent.click(within(strip()).getByRole('tab', { name: /no config/ }))
+    await userEvent.click(within(strip()).getByRole('button', { name: /no config/ }))
     expect(await screen.findByText(copy.noneInFilter)).toBeInTheDocument()
-    await userEvent.click(within(strip()).getByRole('tab', { name: /^\d+ agents$/ }))
+    await userEvent.click(screen.getByRole('button', { name: copy.clearFilter }))
     await waitFor(() => expect(router.state.location.search).toEqual({}))
   })
 
@@ -229,8 +232,6 @@ describe('configs', () => {
       model: 'claude-sonnet-4',
       is_default: true,
     })
-    // The counts are the Agents table's filter tabs.
-    await showTab(copy.anchors.agents)
     await waitFor(() =>
       expect(stripText()).toContain('19 on your default (anthropic, platform key)'),
     )
@@ -290,7 +291,6 @@ describe('configs', () => {
     await waitFor(() =>
       expect(configItem('research-tiers')).not.toHaveTextContent(copy.defaultBadge),
     )
-    await showTab(copy.anchors.agents)
     await waitFor(() => expect(stripText()).toContain('14 no config (platform key)'))
   })
 

@@ -6,7 +6,8 @@ import { z } from 'zod'
 
 // ─── R-L10 (the `budgets` mock group answers it; `router` brings it along) ──────────
 
-type BudgetScope = 'owner' | 'agent'
+/** R-L10's scopes, plus 1.0's fleet (`org`), which the sheet edits from /budgets (B2). */
+type BudgetScope = 'owner' | 'agent' | 'org'
 export type BudgetAction = 'alert' | 'stop'
 export type BudgetState = 'ok' | 'warning' | 'exceeded'
 
@@ -31,6 +32,8 @@ export interface Budget {
 export interface CreateBudgetBody {
   scope: BudgetScope
   agent_id?: string | null
+  /** 1.0: whose owner budget, when not the caller's (superuser, §6.4). */
+  user_id?: string
   limit_usd: number
   thresholds?: number[]
   action?: BudgetAction

@@ -34,10 +34,9 @@ const ownerTitle = copy.budgetEdit(null)
 const money = (v: number) => `$${v.toFixed(2)}`
 const esc = (t: string) => t.replace(/[.$]/g, (c) => `\\${c}`)
 
-// Budgets hidden (no server support for /api/budgets yet, R-L10): un-skip with RouterPage's commented budget code.
-describe.skip('Budgets section', () => {
+describe('Budgets section', () => {
   it('shows you first, then agents; used of limit, forecast, state and the action at 100%', async () => {
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const rows = within(await table())
       .getAllByRole('row')
@@ -60,7 +59,7 @@ describe.skip('Budgets section', () => {
   })
 
   it('shows how many calls had no price', async () => {
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     expect(row(owner().id)).toHaveTextContent(/[\d,]+ calls with no price count as \$0/)
   })
@@ -70,7 +69,7 @@ describe.skip('Budgets section', () => {
     vi.setSystemTime(early)
     configureMocks({ now: () => early })
     try {
-      renderApp('/router')
+      renderApp('/router?tab=budgets')
       await ready()
       const ok = budgetMockState().budgets.find((b) => b.action === 'alert' && b.scope === 'agent')!
       expect(row(ok.id)).toHaveTextContent(copy.forecastTooEarly)
@@ -79,45 +78,18 @@ describe.skip('Budgets section', () => {
     }
   })
 
-  it('lists alerts newest first, and View budget opens that budget', async () => {
-    renderApp('/router')
+  it('alerts moved to /budgets: the section links there instead (plans/feat-budget-burn.md F10)', async () => {
+    renderApp('/router?tab=budgets')
     await ready()
-    const list = await screen.findByRole('list', { name: copy.alertsTitle })
-    const items = within(list).getAllByRole('listitem')
-    expect(items[0]).toHaveTextContent(`${copy.alertOwner} crossed 80%`)
-    expect(list).toHaveTextContent('calls stopped')
-    await userEvent.click(
-      within(items[0]!).getByRole('button', { name: new RegExp(copy.viewBudget) }),
-    )
-    expect(await screen.findByRole('dialog', { name: ownerTitle })).toBeInTheDocument()
-  })
-
-  it('an empty alerts list says so', async () => {
-    server.use(
-      http.get('/api/budgets/alerts', () =>
-        HttpResponse.json({ data: [], status_code: 200, message: 'ok' }),
-      ),
-    )
-    renderApp('/router')
-    await ready()
-    expect(await screen.findByText(copy.noAlerts)).toBeInTheDocument()
-  })
-
-  it('a failed alerts read shows its own error with Retry', async () => {
-    server.use(
-      http.get('/api/budgets/alerts', () => new HttpResponse('internal error', { status: 500 })),
-    )
-    renderApp('/router')
-    await ready()
-    const alerts = screen.getByRole('heading', { name: copy.alertsTitle }).closest('section')!
-    expect(await within(alerts).findByRole('button', { name: copy.retry })).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: copy.alertsTitleV1 })).toBeNull()
+    expect(screen.getByRole('link', { name: copy.openBudgets })).toHaveAttribute('href', '/budgets')
   })
 
   it('a failed status read keeps the rows with their limits and offers Retry', async () => {
     server.use(
       http.get('/api/budgets/status', () => new HttpResponse('internal error', { status: 500 })),
     )
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await table()
     expect(await screen.findByText(copy.budgetStatusFailed)).toBeInTheDocument()
     expect(row(owner().id)).toHaveTextContent(`— of ${money(owner().limit_usd)}`)
@@ -125,7 +97,7 @@ describe.skip('Budgets section', () => {
 
   it('Switch to Alert only sends the budget with action alert and its updated_at, announces, and keeps focus in the row', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = stopped()
     const before = {
@@ -152,7 +124,7 @@ describe.skip('Budgets section', () => {
     server.use(
       http.put('/api/budgets/:id', () => new HttpResponse('internal error', { status: 500 })),
     )
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = stopped()
     await userEvent.click(
@@ -163,24 +135,30 @@ describe.skip('Budgets section', () => {
   })
 
   it('a failed budgets read shows the section error and the rest of the page works', async () => {
-    configureMocks({ routerVariants: ['router-budgets-fail'] })
-    renderApp('/router')
+    // Only the list fails: a failed availability probe hides the tab altogether (plans/feat-budget-burn.md F13).
+    server.use(
+      http.get('/api/budgets', () =>
+        HttpResponse.json({ error: 'internal error', code: 'internal' }, { status: 500 }),
+      ),
+    )
+    renderApp('/router?tab=budgets')
     expect(await screen.findByText(copy.budgetsFailed)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: 'Agents' }))
     expect(await screen.findByRole('table', { name: copy.agentsTitle })).toBeInTheDocument()
   })
 
   it('a server without the budget endpoints (bare 404) says it needs a newer server', async () => {
     server.use(http.get('/api/budgets', () => new HttpResponse(null, { status: 404 })))
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     expect(await screen.findByText(copy.budgetsMissing)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: copy.createFirstBudget })).toBeNull()
   })
 })
 
-describe.skip('budget sheet', () => {
+describe('budget sheet', () => {
   it('Raise limit opens the sheet on the limit and saves a guarded full replace', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = owner()
     const readAt = b.updated_at
@@ -208,19 +186,20 @@ describe.skip('budget sheet', () => {
   })
 
   it('a budget changed elsewhere since the sheet opened is refused, and the sheet says so', async () => {
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = owner()
     await raise(b.id)
     const sheet = await screen.findByRole('dialog', { name: ownerTitle })
-    b.updated_at = new Date(now() + 60_000).toISOString()
+    // Changed elsewhere: the mock's world is the source (budgetMockState().budgets is a read of it).
+    budgetMockState().world.budgets.find((x) => x.id === b.id)!.updated_at = now() + 60_000
     await userEvent.click(within(sheet).getByRole('button', { name: copy.save }))
     expect(await within(sheet).findByRole('alert')).toHaveTextContent(copy.budgetChanged)
   })
 
   it('threshold chips: remove, add, no duplicates, a typed mark kept on Save; Stop calls locks 100% and states the consequence', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     await raise(owner().id)
     const sheet = await screen.findByRole('dialog', { name: ownerTitle })
@@ -252,7 +231,7 @@ describe.skip('budget sheet', () => {
   })
 
   it('an agent budget’s Stop-calls consequence names the agent and the reset date', async () => {
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = stopped()
     const name = row(b.id).querySelector('td')!.textContent!
@@ -265,7 +244,7 @@ describe.skip('budget sheet', () => {
 
   it('removing a budget confirms inline (focus moves into it, and back on Cancel), then deletes it', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = stopped()
     await raise(b.id)
@@ -292,7 +271,7 @@ describe.skip('budget sheet', () => {
     server.use(
       http.delete('/api/budgets/:id', () => new HttpResponse('budget not found', { status: 404 })),
     )
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     const b = stopped()
     await raise(b.id)
@@ -305,7 +284,7 @@ describe.skip('budget sheet', () => {
 
   it('an invalid limit is flagged and nothing is sent', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     await raise(owner().id)
     const sheet = await screen.findByRole('dialog')
@@ -320,11 +299,11 @@ describe.skip('budget sheet', () => {
   })
 })
 
-describe.skip('new budgets', () => {
+describe('new budgets', () => {
   it('the empty state creates one with the defaults: you first, Alert only, 50/80/100', async () => {
     configureMocks({ routerVariants: ['router-budgets-empty'] })
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await userEvent.click(await screen.findByRole('button', { name: copy.createFirstBudget }))
     const sheet = await screen.findByRole('dialog', { name: copy.budgetNew })
     expect(within(sheet).getByLabelText(copy.budgetScope)).toHaveTextContent(copy.budgetOwnerOption)
@@ -348,7 +327,7 @@ describe.skip('new budgets', () => {
 
   it('an agent budget: only open scopes are offered, the consequence names the agent, and the POST carries agent_id', async () => {
     const rec = recordRequestBodies()
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await ready()
     await userEvent.click(screen.getByRole('button', { name: copy.newBudget }))
     const sheet = await screen.findByRole('dialog', { name: copy.budgetNew })
@@ -386,20 +365,23 @@ describe.skip('new budgets', () => {
   })
 
   it('with every scope taken, the sheet says so and Save is off', async () => {
-    const { queryClient } = renderApp('/router')
+    const { queryClient } = renderApp('/router?tab=budgets')
     await ready()
-    await screen.findByRole('table', { name: copy.agentsTitle })
+    // The agents table is on its own (hidden) tab, still mounted.
+    await waitFor(() => expect(document.querySelectorAll('[data-agent]').length).toBeGreaterThan(0))
     // Give every owned agent a budget in the mock, then re-read the list.
-    const s = budgetMockState()
-    const b0 = s.budgets[0]!
+    const w = budgetMockState().world
+    const b0 = w.budgets.find((b) => b.scope === 'agent')!
     for (const el of document.querySelectorAll('[data-agent]')) {
       const id = el.getAttribute('data-agent')!
-      if (!s.budgets.some((b) => b.agent_id === id))
-        s.budgets.push({ ...b0, id: `x-${id}`, scope: 'agent', agent_id: id })
+      if (!w.budgets.some((b) => b.agent_id === id))
+        w.budgets.push({ ...b0, id: `x-${id}`, agent_id: id })
     }
     await queryClient.refetchQueries({ queryKey: ['budgets'] })
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-budget]').length).toBe(s.budgets.length),
+      expect(document.querySelectorAll('[data-budget]').length).toBe(
+        budgetMockState().budgets.length,
+      ),
     )
     await userEvent.click(screen.getByRole('button', { name: copy.newBudget }))
     const sheet = await screen.findByRole('dialog', { name: copy.budgetNew })
@@ -408,12 +390,12 @@ describe.skip('new budgets', () => {
   })
 })
 
-describe.skip('TokenOps link, deep link and a11y', () => {
-  it('TokenOps links to the router page’s budgets', async () => {
+describe('TokenOps link, deep link and a11y', () => {
+  it('TokenOps links to the Budgets page', async () => {
     renderApp('/tokenops')
     expect(
-      await screen.findByRole('link', { name: 'Budgets are on the LLM router page' }),
-    ).toHaveAttribute('href', '/router#router-budgets')
+      await screen.findByRole('link', { name: 'Budgets and their burn are on the Budgets page' }),
+    ).toHaveAttribute('href', '/budgets')
   })
 
   it('arriving at #router-budgets scrolls to the section once it has loaded', async () => {
@@ -438,10 +420,9 @@ describe.skip('TokenOps link, deep link and a11y', () => {
       result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`),
     ).toEqual([])
   }
-  it('axe: the Budgets and Alerts sections, and the budget sheet with Stop calls on', async () => {
-    renderApp('/router')
+  it('axe: the Budgets tab, and the budget sheet with Stop calls on', async () => {
+    renderApp('/router?tab=budgets')
     await ready()
-    await screen.findByRole('list', { name: copy.alertsTitle })
     await check()
     await raise(stopped().id)
     await screen.findByTestId('stop-consequence')
@@ -451,9 +432,9 @@ describe.skip('TokenOps link, deep link and a11y', () => {
 
 // Regression: ISSUE-201..202 (/qa 2026-09-28, .gstack/qa-reports/qa-report-localhost-2026-09-28-r2.md): spend
 // jumping after Switch to Alert only; the TokenOps deep link landing above the Budgets section.
-describe.skip('switching and deep-link regressions', () => {
+describe('switching and deep-link regressions', () => {
   it('switching a stopped budget to Alert only doesn’t count the calls it refused', async () => {
-    renderApp('/router')
+    renderApp('/router?tab=budgets')
     await screen.findByRole('table', { name: copy.budgetsTitle })
     const b = budgetMockState().budgets.find((x) => x.action === 'stop')!
     const row = () => document.querySelector(`[data-budget="${b.id}"]`) as HTMLElement

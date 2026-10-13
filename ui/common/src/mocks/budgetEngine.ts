@@ -2044,7 +2044,8 @@ export function budgetsList(
   now: number,
 ) {
   let list: WBudget[]
-  if (!q.scope) list = w.budgets.filter((b) => b.owner_id === v.id)
+  // Deleted budgets keep their refusals as history (#66), never a row.
+  if (!q.scope) list = alive(w).filter((b) => b.owner_id === v.id)
   else {
     const t = readTarget(w, v, q)
     const b = budgetOf(w, t.scope, t.id)

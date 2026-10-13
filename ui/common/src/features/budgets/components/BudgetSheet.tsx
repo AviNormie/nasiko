@@ -48,7 +48,7 @@ import { copy } from '../copy'
 import { budgetError } from '../errors'
 import { fieldErrors } from '@/features/router/form'
 import { useReturnFocus } from '@/features/router/focus'
-import type { Budget, BudgetAction, BudgetStatus } from '../types'
+import type { Budget, BudgetAction, BudgetStatus, CreateBudgetBody } from '../types'
 import { LeaveGuard } from '@/components/shared/leave-guard'
 import { LinkButton, Warn } from '@/features/router/components/bits'
 
@@ -67,7 +67,24 @@ const schema = z.object({
 })
 type Form = z.infer<typeof schema>
 
-export type BudgetMode = { kind: 'create' } | { kind: 'edit'; budget: Budget }
+/**
+ * Whose budget the sheet edits, for its words: the fleet, you (R-L10's owner budget), another user (a superuser on
+ * /budgets) or an agent.
+ */
+export type BudgetWho =
+  | { kind: 'fleet' }
+  | { kind: 'you' }
+  | { kind: 'user'; id: string; name: string }
+  | { kind: 'agent'; id: string; name: string }
+
+/**
+ * Create picks a scope from the caller's open ones, or takes a fixed `target` (/budgets: Set a budget on a scope, an
+ * unbudgeted agent, a fleet). Edit takes the budget and, from /budgets, who it is for. `limit` pre-fills the limit
+ * ("Use this limit", Raise the limit).
+ */
+export type BudgetMode =
+  | { kind: 'create'; target?: BudgetWho; limit?: number }
+  | { kind: 'edit'; budget: Budget; who?: BudgetWho; limit?: number }
 
 interface SheetProps {
   mode: BudgetMode
@@ -106,8 +123,13 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
   const save = useSaveBudget()
   const del = useDeleteBudget()
   const src = mode.kind === 'edit' ? mode.budget : null
+  const target = mode.kind === 'create' ? (mode.target ?? null) : null
   const open = openScopes(budgets, agents)
-  const firstScope = open.owner ? 'owner' : (open.agents[0]?.id ?? '')
+  const firstScope = target
+    ? targetScope(target)
+    : open.owner
+      ? 'owner'
+      : (open.agents[0]?.id ?? '')
   const {
     control,
     register,
@@ -116,8 +138,8 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
     formState: { isDirty, isSubmitting, touchedFields, submitCount },
   } = useForm<Form>({
     defaultValues: {
-      scope: src ? (src.scope === 'owner' ? 'owner' : (src.agent_id ?? '')) : '',
-      limit: src ? src.limit_usd.toFixed(2) : '',
+      scope: src ? (src.scope === 'agent' ? (src.agent_id ?? '') : src.scope) : '',
+      limit: mode.limit !== undefined ? mode.limit.toFixed(2) : src ? src.limit_usd.toFixed(2) : '',
       thresholds: src ? [...src.thresholds] : [...DEFAULT_THRESHOLDS],
       action: src?.action ?? 'alert',
     },
@@ -142,13 +164,27 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
   }, [confirmingDelete, returnToRemove])
   const [error, setError] = useState<unknown>(null)
 
-  const label = src
-    ? budgetLabel(src, agentName)
-    : scope === 'owner'
-      ? copy.budgetOwner
-      : (agents.find((a) => a.id === scope)?.name ?? '')
+  const who: BudgetWho =
+    (mode.kind === 'edit' ? mode.who : target) ??
+    (src
+      ? src.scope === 'org'
+        ? { kind: 'fleet' }
+        : src.scope === 'owner'
+          ? { kind: 'you' }
+          : { kind: 'agent', id: src.agent_id ?? '', name: budgetLabel(src, agentName) }
+      : scope === 'owner'
+        ? { kind: 'you' }
+        : { kind: 'agent', id: scope, name: agents.find((a) => a.id === scope)?.name ?? '' })
+  const label =
+    who.kind === 'fleet'
+      ? copy.budgetFleet
+      : who.kind === 'you'
+        ? src
+          ? budgetLabel(src, agentName)
+          : copy.budgetOwner
+        : who.name
   // For sentences: null words it as "your budget".
-  const subject = src ? sentenceName(src, agentName) : scope === 'owner' ? null : label
+  const subject = who.kind === 'you' ? (src ? sentenceName(src, agentName) : null) : label
   const reset = fmtShortDay(resetsAt)
   const errs = fieldErrors(schema, form)
   const limitErr = errs.limit
@@ -180,14 +216,7 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
     const body = { limit_usd: parseLimit(limit), thresholds: marks, action }
     const v: SaveBudget = src
       ? { mode: 'update', id: src.id, body: { ...body, expected_updated_at: src.updated_at } }
-      : {
-          mode: 'create',
-          body: {
-            ...body,
-            scope: scope === 'owner' ? 'owner' : 'agent',
-            agent_id: scope === 'owner' ? null : scope,
-          },
-        }
+      : { mode: 'create', body: { ...body, ...createTarget(target ?? who) } }
     save.mutate(v, {
       onSuccess: () => {
         announce(copy.budgetSaved(subject))
@@ -216,7 +245,9 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
         <SheetDescription>
           {src && status
             ? copy.budgetStatusLine(fmtMoney(status.used_usd), fmtMoney(src.limit_usd), reset)
-            : copy.budgetDescription}
+            : who.kind === 'fleet'
+              ? copy.budgetDescriptionFleet
+              : copy.budgetDescription}
         </SheetDescription>
       </SheetHeader>
       <form
@@ -229,7 +260,13 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       >
         <LeaveGuard when={isDirty && !busy} />
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 text-sm">
-          {!src ? (
+          {!src && target ? (
+            <p>
+              <span className="text-muted-foreground">{copy.budgetFor}: </span>
+              <span className="font-medium">{label}</span>
+            </p>
+          ) : null}
+          {!src && !target ? (
             <Field className="gap-1">
               <FieldLabel htmlFor={`${ids}-scope`}>{copy.budgetScope}</FieldLabel>
               {noScope ? (
@@ -361,31 +398,40 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
               onValueChange={(a) => chooseAction(a as BudgetAction)}
               className="gap-2"
             >
-              {(['alert', 'stop'] as const).map((a) => (
-                <div key={a} className="flex items-start gap-2">
-                  <RadioGroupItem
-                    id={`${ids}-action-${a}`}
-                    value={a}
-                    className="mt-0.5"
-                    aria-describedby={a === 'stop' && action === 'stop' ? `${ids}-stop` : undefined}
-                  />
-                  <Label
-                    htmlFor={`${ids}-action-${a}`}
-                    className="block leading-normal font-normal"
-                  >
-                    {a === 'alert' ? copy.actionAlert : copy.actionStop}
-                    <span className="block text-xs text-muted-foreground">
-                      {a === 'alert' ? copy.alertOnlyHint : copy.stopHint}
-                    </span>
-                  </Label>
-                </div>
-              ))}
+              {(who.kind === 'fleet' ? (['alert'] as const) : (['alert', 'stop'] as const)).map(
+                (a) => (
+                  <div key={a} className="flex items-start gap-2">
+                    <RadioGroupItem
+                      id={`${ids}-action-${a}`}
+                      value={a}
+                      className="mt-0.5"
+                      aria-describedby={
+                        a === 'stop' && action === 'stop' ? `${ids}-stop` : undefined
+                      }
+                    />
+                    <Label
+                      htmlFor={`${ids}-action-${a}`}
+                      className="block leading-normal font-normal"
+                    >
+                      {a === 'alert' ? copy.actionAlert : copy.actionStop}
+                      <span className="block text-xs text-muted-foreground">
+                        {a === 'alert' ? copy.alertOnlyHint : copy.stopHint}
+                      </span>
+                    </Label>
+                  </div>
+                ),
+              )}
             </RadioGroup>
+            {who.kind === 'fleet' ? (
+              <p className="text-xs text-muted-foreground">{copy.budgetFleetAlertOnly}</p>
+            ) : null}
             {action === 'stop' ? (
               <Warn id={`${ids}-stop`} className="ml-6" testId="stop-consequence">
-                {scope === 'owner' || src?.scope === 'owner'
+                {who.kind === 'you'
                   ? copy.stopConsequenceOwner(reset)
-                  : copy.stopConsequenceAgent(label, reset)}
+                  : who.kind === 'user'
+                    ? copy.stopConsequenceUser(who.name, reset)
+                    : copy.stopConsequenceAgent(label, reset)}
               </Warn>
             ) : null}
           </FieldSet>
@@ -463,4 +509,17 @@ function Body({ mode, budgets, agents, agentName, status, resetsAt, onClose }: S
       </form>
     </>
   )
+}
+
+/** The scope value a fixed target takes in the form. */
+function targetScope(t: BudgetWho): string {
+  return t.kind === 'agent' ? t.id : t.kind === 'fleet' ? 'org' : 'owner'
+}
+
+/** POST's target fields (budgets.md §6.4): `user_id` only for someone else's owner budget. */
+function createTarget(w: BudgetWho): Pick<CreateBudgetBody, 'scope' | 'agent_id' | 'user_id'> {
+  if (w.kind === 'fleet') return { scope: 'org', agent_id: null }
+  if (w.kind === 'agent') return { scope: 'agent', agent_id: w.id }
+  if (w.kind === 'user') return { scope: 'owner', agent_id: null, user_id: w.id }
+  return { scope: 'owner', agent_id: null }
 }
