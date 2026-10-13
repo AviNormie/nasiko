@@ -34,8 +34,16 @@ export interface LeverAgent {
   compressOn: boolean | null
   /** Its routed spend per day over the trailing 7 complete days, from its own burn read; null when unread. */
   routedPace: number | null
-  /** Its routed tokens by model this period (BG-11), keyed `provider/model`; null when unread. */
+  /**
+   * Its routed tokens by model this period (BG-11), keyed `provider/model`, already scaled to the share this budget
+   * counts (an owner budget counts only the calls billed to its owner); null when unread.
+   */
   models: { key: string; inputTokens: number; outputTokens: number }[] | null
+  /**
+   * Its routing, read for agents the viewer may act on: the model pin and the attached (or default) config's provider.
+   * A pin elsewhere means the agent already moved; a config on another provider can't take this pin. Absent: unread.
+   */
+  routing?: { pinned: string | null; provider: string | null } | null
 }
 
 export interface LeverInput {
@@ -87,7 +95,9 @@ export function leverList(input: LeverInput): LeverList {
   if (!p) return { state: 'no_projection' }
   if (!needsLevers(b, p)) return { state: 'on_track' }
   const reduce: ReduceLever[] = []
-  for (const a of input.agents) {
+  // A stopped budget's calls are refused: nothing more is spent until the reset, so nothing to reduce (#68); only the
+  // raise, which would resume them, uses the projection.
+  for (const a of b.budget.stopped ? [] : input.agents) {
     if (a.compressOn === false)
       reduce.push({
         kind: 'compression',
@@ -104,6 +114,7 @@ export function leverList(input: LeverInput): LeverList {
   }
   // Fleet and unit budgets alert only (§7 Q1); a budget that already stops has nothing to switch.
   if (
+    !b.budget.stopped &&
     b.budget.action !== 'stop' &&
     b.scope !== 'org' &&
     b.scope !== 'unit' &&
@@ -141,6 +152,10 @@ function cheaperModel(a: LeverAgent, b: Burn, daysLeft: number, prices: readonly
   )[0]
   const from = main && priceOf(main.key)
   if (!main || !from) return null
+  // Already pinned elsewhere (its traffic this period is mixed), or a config this provider's pin can't apply to.
+  if (a.routing === null) return null
+  if (a.routing?.pinned && a.routing.pinned !== from.model) return null
+  if (a.routing?.provider && a.routing.provider !== from.provider) return null
   let best: { to: Price; estimate: number } | null = null
   for (const to of prices) {
     if (to.provider !== from.provider || to.model === from.model) continue
@@ -190,12 +205,18 @@ export function leverPreview(b: Burn, mode: BurnMode, lever: Lever): LeverPrevie
   const p = projection(b)
   const limit = currentLimit(b)
   if (!p || limit === null || !b.resets_at) return null
-  if (lever.kind === 'raise')
-    return {
-      line: previewLine(b, mode, p.pace, lever.limit),
-      projected: p.projected,
-      limit: lever.limit,
-    }
+  if (lever.kind === 'raise') {
+    // Burn-up: the new limit as a line (the pace doesn't change, so a spend line would hide under the projection);
+    // Burndown: what's left of the new limit at the same pace.
+    const line =
+      mode === 'up'
+        ? [
+            { t: Date.parse(b.as_of), v: lever.limit },
+            { t: Date.parse(b.resets_at), v: lever.limit },
+          ]
+        : previewLine(b, mode, p.pace, lever.limit)
+    return { line, projected: p.projected, limit: lever.limit }
+  }
   if (lever.kind === 'stop') {
     // Spend climbs at the pace until the limit, then calls stop: flat at the limit to the reset.
     const asOf = Date.parse(b.as_of)

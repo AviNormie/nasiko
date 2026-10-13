@@ -166,3 +166,47 @@ describe('inputs', () => {
     expect(routedPaceOf(read('agent', I.pricing))).toBe(6)
   })
 })
+
+describe('B3 review regressions', () => {
+  const price = () => read('agent', I.pricing)
+  const base = () => agent(I.pricing, 'Pricing Engine')
+
+  it('a stopped budget offers no reduce levers, only the raise (#68)', () => {
+    const l = leverList({
+      burn: read('agent', I.reviewer),
+      agents: [agent(I.reviewer, 'Code Reviewer')],
+      measured: { pct: 20, agents: 3 },
+      prices,
+    })
+    if (l.state !== 'levers') throw new Error(l.state)
+    expect(l.reduce).toEqual([])
+    expect(l.adjust.map((x) => x.kind)).toEqual(['raise'])
+  })
+
+  it('no model lever when the agent is pinned elsewhere, its config is on another provider, or routing failed', () => {
+    const kinds = (routing: LeverAgent['routing']) => {
+      const l = leverList({
+        burn: price(),
+        agents: [{ ...base(), routing }],
+        measured: null,
+        prices,
+      })
+      if (l.state !== 'levers') throw new Error(l.state)
+      return l.reduce.map((x) => x.kind)
+    }
+    expect(kinds({ pinned: null, provider: 'openai' })).toContain('model')
+    expect(kinds({ pinned: 'gpt-4.1', provider: 'openai' })).not.toContain('model')
+    expect(kinds({ pinned: null, provider: 'anthropic' })).not.toContain('model')
+    expect(kinds(null)).not.toContain('model')
+  })
+
+  it('raise in Burn-up previews the new limit as a line, not a spend line under the projection', () => {
+    const prev = leverPreview(price(), 'up', {
+      kind: 'raise',
+      id: 'raise',
+      limit: 186,
+      usedPct: 43,
+    })!
+    expect(prev.line.map((x) => x.v)).toEqual([186, 186])
+  })
+})

@@ -17,10 +17,12 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { useTurnOnCompression } from '@/features/agents/api'
 import { routingQuery, useRoutingPlan } from '@/features/router/api'
+import { ApiError } from '@/lib/api/client'
 import { fmtMoney, fmtShortDay } from '@/lib/format'
 import { budgetKeys, budgetV1Query, useSaveBudget } from '../api'
 import { withStopMark } from '../budgets'
@@ -82,21 +84,26 @@ function Confirm({
       setBusy(false)
     }
   }
-  const err = error ? budgetError(error) : null
+  // A refusal of our own (a plain Error) says exactly what happened; a server error maps as budgets map them.
+  const err = !error
+    ? null
+    : error instanceof Error && !(error instanceof ApiError)
+      ? { problem: error.message, action: undefined }
+      : budgetError(error)
   return (
     <AlertDialog open={open} onOpenChange={(o) => !busy && setOpen(o)}>
-      <Button
-        size="sm"
-        variant="outline"
-        aria-label={copy.leverDoLabel(title)}
-        disabled={busy}
-        onClick={() => {
-          setError(null)
-          setOpen(true)
-        }}
-      >
-        {copy.leverDo[kind]}
-      </Button>
+      {/* The trigger, so Radix returns focus here on Cancel or Escape. */}
+      <AlertDialogTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          aria-label={copy.leverDoLabel(title)}
+          disabled={busy}
+          onClick={() => setError(null)}
+        >
+          {copy.leverDo[kind]}
+        </Button>
+      </AlertDialogTrigger>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
@@ -164,11 +171,19 @@ function Model({
       run={async () => {
         // A fresh read: a plan built on a stale route could undo a change made elsewhere (router eng).
         const current = await qc.fetchQuery({ ...routingQuery(lever.agent.id), staleTime: 0 })
+        // The pin must fit the agent's config as it is now, not the one its traffic came from.
+        const provider = current.llm_config?.provider
+        if (provider && provider !== lever.to.provider)
+          throw new Error(copy.leverModelProvider(provider, lever.to.provider))
+        if (current.pinned_model === lever.to.model)
+          throw new Error(copy.leverModelAlready(lever.agent.name, lever.to.model))
         const out = await plan.mutateAsync({
           current: { llm_config_id: current.llm_config_id, pinned_model: current.pinned_model },
           desired: { llm_config_id: current.llm_config_id, pinned_model: lever.to.model },
         })
         if (out.failed) throw out.failed.error
+        if (!out.saved.length)
+          throw new Error(copy.leverModelAlready(lever.agent.name, lever.to.model))
         await qc.invalidateQueries({ queryKey: budgetKeys.all })
         onApplied()
         return copy.leverApplied.model(lever.agent.name, lever.to.model)
