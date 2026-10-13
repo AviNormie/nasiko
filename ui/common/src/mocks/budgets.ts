@@ -145,6 +145,7 @@ export function buildBudgetState(
     watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
     settings: {
       team_identity: false,
+      unit_leads_write: false,
       fiscal: [{ from: -Infinity, month: 1 }],
       updated_at: monthStart(now),
     },

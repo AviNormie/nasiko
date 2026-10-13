@@ -101,6 +101,8 @@ export interface World {
   watermarks: Record<Source, number>
   settings: {
     team_identity: boolean
+    /** EE: unit leads may write their units' budgets (§5, §6.8; plan §7 Q4). */
+    unit_leads_write: boolean
     /** The fiscal year's first month over time, ascending (§6.8): a change applies from the next quarter start. */
     fiscal: { from: number; month: number }[]
     updated_at: number
@@ -390,6 +392,8 @@ function requireWrite(w: World, v: Viewer, scope: Scope, id: string | null) {
       scope === 'org' || scope === 'unit' ? 'not_allowed' : 'not_owner',
       scope === 'org' || scope === 'unit' ? 'only an admin can do this' : 'not your budget',
     )
+  // A unit lead writes the units they lead while the org allows it (§5, §6.8).
+  if (scope === 'unit' && w.settings.unit_leads_write && ledUnits(w, v).has(id!)) return
   if (scope === 'org' || scope === 'unit') fail(403, 'not_allowed', 'only an admin can do this')
   const mine =
     scope === 'owner'
@@ -2077,7 +2081,9 @@ export function versionsList(
 
 export function settingsView(w: World) {
   return {
-    ...(w.edition === 'ee' ? { team_identity: w.settings.team_identity } : {}),
+    ...(w.edition === 'ee'
+      ? { team_identity: w.settings.team_identity, unit_leads_write: w.settings.unit_leads_write }
+      : {}),
     fiscal_year_first_month: w.settings.fiscal.at(-1)!.month,
     updated_at: iso(w.settings.updated_at),
   }
@@ -2088,6 +2094,7 @@ export function updateSettings(
   v: Viewer,
   body: {
     team_identity?: unknown
+    unit_leads_write?: unknown
     fiscal_year_first_month?: unknown
     expected_updated_at?: unknown
   },
@@ -2099,12 +2106,19 @@ export function updateSettings(
     if (typeof body.team_identity !== 'boolean')
       fail(400, 'not_available', 'team_identity must be true or false')
   }
+  if (body.unit_leads_write !== undefined) {
+    if (w.edition !== 'ee') fail(400, 'not_available', 'not available on this server')
+    if (typeof body.unit_leads_write !== 'boolean')
+      fail(400, 'not_available', 'unit_leads_write must be true or false')
+  }
   const m = body.fiscal_year_first_month
   if (m !== undefined && (!Number.isInteger(m) || (m as number) < 1 || (m as number) > 12))
     fail(400, 'not_available', 'fiscal_year_first_month must be 1 to 12')
   if (body.expected_updated_at !== iso(w.settings.updated_at))
     fail(409, 'settings_changed', 'settings changed elsewhere')
   if (body.team_identity !== undefined) w.settings.team_identity = body.team_identity as boolean
+  if (body.unit_leads_write !== undefined)
+    w.settings.unit_leads_write = body.unit_leads_write as boolean
   if (m !== undefined && m !== w.settings.fiscal.at(-1)!.month) {
     // From the next quarter start under the setting in force now (§6.8), replacing a change still pending.
     const from = periodOf(w, 'quarter', now)[1]
@@ -2198,6 +2212,7 @@ export function worldFromScenario(
     watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
     settings: {
       team_identity: false,
+      unit_leads_write: false,
       fiscal: [{ from: -Infinity, month: 1 }],
       updated_at: sc.budgets[0]!.created_at,
     },

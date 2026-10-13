@@ -15,7 +15,12 @@ import { SPEND_LIMIT } from '@/features/router/tuning'
 import { secretNameProblem } from '@/features/settings/logic'
 import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
 import { sessionBudgets, buildBudgetState, syncAgents, type BudgetMockStore } from './budgets'
-import { budgetView, worldFromScenario, type World } from './budgetEngine'
+import {
+  budgetView,
+  worldFromScenario,
+  type Viewer as BudgetViewer,
+  type World,
+} from './budgetEngine'
 import { budgetHandlers } from './budgetHandlers'
 import { liveFirst } from './budgetFill'
 import { budgetScenario } from './seed-budgets'
@@ -487,6 +492,14 @@ const SETTINGS_DEFAULTS = {
 }
 // Budgets (plans/feat-budget-burn.md B0): one engine over the app seed's world, or the golden scenario's.
 let budgetState: BudgetMockStore | null = null
+/** An edition's additions to the app seed's budget world (EE: its org, roles and harness estimates; B6). */
+const budgetWorldHooks = new Set<(w: World) => void>()
+export const onBudgetWorld = (fn: (w: World) => void) => void budgetWorldHooks.add(fn)
+/** Who reads the budgets: the seed admin by default; an edition may answer as its mock persona (EE: the org role). */
+let budgetViewerFn: (() => BudgetViewer) | null = null
+export const setBudgetViewer = (fn: () => BudgetViewer) => {
+  budgetViewerFn = fn
+}
 let budgetKey = ''
 function getBudgets(): BudgetMockStore {
   const golden = hasVariant('budgets-golden')
@@ -500,6 +513,7 @@ function getBudgets(): BudgetMockStore {
       : buildBudgetState(getSeed(), getAgents().agents, ADMIN_ID, nowFn(), {
           empty: budgetVariant('empty'),
         })
+    if (!golden) for (const hook of budgetWorldHooks) hook(budgetState)
     budgetKey = key
   }
   if (!golden) syncAgents(budgetState, getAgents().agents)
@@ -1889,7 +1903,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       loggedIn: () => loggedIn,
       now: () => nowFn(),
       world: () => getBudgets(),
-      viewer: () => ({ id: ADMIN_ID, superuser: superuser() }),
+      viewer: () => budgetViewerFn?.() ?? { id: ADMIN_ID, superuser: superuser() },
       absent: () => hasVariant('budgets-absent') || hasVariant('home-budgets-absent'),
       rl10Only: () => hasVariant('budgets-rl10-only'),
       failing: () => budgetVariant('fail'),
