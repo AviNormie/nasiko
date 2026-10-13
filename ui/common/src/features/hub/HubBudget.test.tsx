@@ -36,6 +36,10 @@ const T = { timeout: 10_000 }
 const named = (display: string) =>
   agentWhere((a) => (a as { display_name?: string }).display_name === display)
 const section = () => screen.findByRole('region', { name: budgetCopy.hubTitle }, T)
+/** Needs you has every source's answer (its coverage line shows), the budget's included: the section has decided. */
+const settled = () => screen.findByText(/^Checked /, undefined, T)
+const noSection = () =>
+  expect(screen.queryByRole('region', { name: budgetCopy.hubTitle })).toBeNull()
 
 describe('the hub’s Budget section', () => {
   it('a stopped budget: the sentence, Review actions, bars by model and the levers', async () => {
@@ -140,8 +144,8 @@ describe('the hub’s Budget section', () => {
     configureMocks({ persona: 'sam' })
     const rec = recordRequests()
     renderApp(`/agents/${seed.agents[0]!.id}`)
-    await screen.findByRole('region', { name: copy.cards.title }, T)
-    expect(screen.queryByRole('region', { name: budgetCopy.hubTitle })).toBeNull()
+    await settled()
+    noSection()
     rec.stop()
     expect(rec.urls.filter((u) => u.pathname === '/api/budgets/burn')).toEqual([])
   })
@@ -162,21 +166,26 @@ describe('the hub’s Budget section', () => {
     expect(await section()).toBeInTheDocument()
   })
 
-  it('a server without budgets, or a harness with no routed calls: no section', async () => {
+  it('a server without budgets: no section, once the probe answered', async () => {
     configureMocks({ budgetVariants: ['budgets-absent'] })
     const a = await named('Code Reviewer')
+    const rec = recordRequests()
     renderApp(`/agents/${a.id}`)
-    await screen.findByRole('region', { name: copy.cards.title }, T)
-    expect(screen.queryByRole('region', { name: budgetCopy.hubTitle })).toBeNull()
+    await settled()
+    rec.stop()
+    expect(rec.urls.some((u) => u.pathname === '/api/budgets/capabilities')).toBe(true)
+    noSection()
   })
 
   it('a harness with no routed calls this period has no section', async () => {
     const h = await agentNamed('admin-claude-code')
+    const rec = recordRequests()
     renderApp(`/agents/${h.id}`)
-    await screen.findByRole('region', { name: copy.cards.title }, T)
-    await waitFor(() =>
-      expect(screen.queryByRole('region', { name: budgetCopy.hubTitle })).toBeNull(),
-    )
+    await settled()
+    rec.stop()
+    // Its burn was read (the harness rule decided, not a missing read).
+    expect(rec.urls.some((u) => u.pathname === '/api/budgets/burn')).toBe(true)
+    noSection()
   })
 })
 

@@ -6,8 +6,8 @@
  * agent's changes over the budget's period as flags (the hub's markers: deploys, the latest crash, and the event log's
  * changes while it is a preview; its budget warnings and stops are the budget's own events, so they are left out).
  */
-import { useQuery } from '@tanstack/react-query'
-import { lazy, Suspense } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { lazy, Suspense, useEffect } from 'react'
 import { PanelError, PanelSkeleton } from '@/components/shared/panel'
 import type { AgentView } from '@/features/agents/normalize'
 import { useBurn } from '@/features/budgets/api'
@@ -16,6 +16,7 @@ import type { Burn } from '@/features/budgets/types'
 import { resolveWindow } from '@/features/tokenops/window'
 import { meQuery } from '@/lib/api/auth'
 import { isEndpointAbsent } from '@/lib/api/detect'
+import { useReturnTick } from '@/lib/useReturnTick'
 import { useHubMarkers, type MarkersState } from '../api'
 import { copy } from '../copy'
 import { markerText } from '../events'
@@ -31,9 +32,24 @@ export function HubBudget({ agent }: { agent: AgentView }) {
   const caps = useQuery({ ...capabilitiesQuery, enabled: reader })
   const on = reader && mayHave(caps.data, 'burn')
   const burn = useBurn({ scope: 'agent', id: agent.id }, { period: 'month' }, on)
+  // Coming back to the page re-reads the budget (budgets don't refetch on focus): the frozen-clock rule.
+  const tick = useReturnTick()
+  const qc = useQueryClient()
+  useEffect(() => {
+    if (tick) void qc.invalidateQueries({ queryKey: ['budgets', 'v1'] })
+  }, [tick, qc])
   if (!reader || !me) return null
   if (caps.isPending || (on && burn.isPending))
     return <PanelSkeleton height={SECTION_SKELETON_PX} />
+  // A failed probe can't say budgets are off: a failure with Retry (F13), never an absent section.
+  if (caps.isError)
+    return (
+      <PanelError
+        error={caps.error}
+        onRetry={() => void caps.refetch()}
+        what={copy.budgetSection}
+      />
+    )
   if (!on || !caps.data) return null
   if (burn.isError)
     return isEndpointAbsent(burn.error) ? null : (

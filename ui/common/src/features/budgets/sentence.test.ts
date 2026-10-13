@@ -66,3 +66,18 @@ describe('sessionSentence (F9) and burnNeed (F8)', () => {
     expect(burnNeed(read('owner', I.ana))).toBeNull()
   })
 })
+
+describe('B5 review: unpriced session calls', () => {
+  it('the spend is a floor, so the share and the overage are too', () => {
+    const s1 = read('session', I.s1)
+    const open = {
+      ...s1,
+      unpriced_calls: 1,
+      budget: { ...s1.budget!, stopped: false, action: 'alert' as const },
+    }
+    expect(sessionSentence(open)).toBe('Over its $8.00 session limit by ≥ $2.00.')
+    expect(sessionSentence({ ...open, used_usd: 6, turns: s1.turns!.slice(0, 2) })).toBe(
+      '≥ $6.00 of its $8.00 session limit used (≥ 75%) over 2 turns.',
+    )
+  })
+})

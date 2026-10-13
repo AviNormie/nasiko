@@ -71,6 +71,10 @@ export function sessionSentence(b: Burn): string {
   const limit = currentLimit(b)
   if (!b.budget || limit === null) return copy.sessionNoLimit(used, turns)
   if (b.budget.stopped) return copy.sessionStopped(fmtMoney(limit))
-  if (b.used_usd > limit) return copy.sessionOver(fmtMoney(limit), fmtMoney(b.used_usd - limit))
-  return copy.sessionUsed(used, fmtMoney(limit), Math.round((b.used_usd / limit) * 100), turns)
+  // With unpriced calls the spend is a floor, so the overage and the share are too (F2).
+  const floor = b.unpriced_calls > 0
+  if (b.used_usd > limit)
+    return copy.sessionOver(fmtMoney(limit), fmtMoneyFloor(b.used_usd - limit, floor))
+  const pct = `${floor ? '≥ ' : ''}${Math.round((b.used_usd / limit) * 100)}%`
+  return copy.sessionUsed(used, fmtMoney(limit), pct, turns)
 }

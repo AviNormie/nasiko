@@ -376,8 +376,8 @@ export const copy = {
   sessionTitle: 'Session budget',
   sessionNoLimit: (used: string, turns: number) =>
     `${used} over ${turns} ${turns === 1 ? 'turn' : 'turns'}; no session limit.`,
-  sessionUsed: (used: string, limit: string, pct: number, turns: number) =>
-    `${used} of its ${limit} session limit used (${pct}%) over ${turns} ${turns === 1 ? 'turn' : 'turns'}.`,
+  sessionUsed: (used: string, limit: string, pct: string, turns: number) =>
+    `${used} of its ${limit} session limit used (${pct}) over ${turns} ${turns === 1 ? 'turn' : 'turns'}.`,
   sessionOver: (limit: string, over: string) => `Over its ${limit} session limit by ${over}.`,
   sessionStopped: (limit: string) =>
     `Reached its ${limit} session limit; calls are stopped for this session.`,
@@ -389,6 +389,10 @@ export const copy = {
   sessionLeft: 'Left of the limit',
   sessionOverBy: 'Over by',
   setSessionLimit: 'Set a session limit',
+  // A picked contributor whose share read failed (B5 review): never the scope's own figures under its pick.
+  shareFailed: 'this contributor’s share',
+  sessionEnded: 'This session has ended, so it can’t take a limit.',
+  sessionEndedAction: 'Set a budget on its agent or on yourself instead.',
   editSessionLimit: 'Edit session limit',
   // The hub's Budget section (B5).
   hubTitle: 'Budget',

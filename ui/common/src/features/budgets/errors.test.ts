@@ -13,6 +13,8 @@ describe('budgetError', () => {
     [409, 'budget changed elsewhere', copy.budgetChanged, undefined],
     [400, 'limit_usd must be greater than 0', copy.limitPositive, 'limit'],
     [400, 'thresholds must be whole percents from 1 to 100', copy.thresholdRange, 'thresholds'],
+    // A session that ended while its sheet was open (BG-10, B5 review).
+    [400, 'this session has ended', copy.sessionEnded, undefined],
   ])('maps %i "%s"', (status, text, problem, field) => {
     const v = budgetError(e(status, text))
     expect(v.problem).toBe(problem)

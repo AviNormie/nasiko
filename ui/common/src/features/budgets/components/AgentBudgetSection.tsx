@@ -10,7 +10,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Announcer } from '@/components/shared/announcer'
+import { PanelError } from '@/components/shared/panel'
 import { Button } from '@/components/ui/button'
 import { fmtShortDay } from '@/lib/format'
 import { budgetV1Query, useBreakdown, useBudgetV1, useBurn, type ScopeRef } from '../api'
@@ -122,12 +122,12 @@ export default function AgentBudgetSection({
   const slug = agent.name.replace(/[^\w-]+/g, '-').toLowerCase()
   const date = burn.as_of.slice(0, 10)
   return (
-    <Announcer testId="hub-budget-announcer">
+    <>
       <section
         ref={sectionRef}
         id="hub-budget"
         aria-labelledby={titleId}
-        className="scroll-mt-4 space-y-3"
+        className="scroll-mt-16 space-y-3"
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
@@ -205,7 +205,13 @@ export default function AgentBudgetSection({
             </>
           }
         />
-        {shareRead ? (
+        {picked && contributor.isError ? (
+          <PanelError
+            error={contributor.error}
+            onRetry={() => void contributor.refetch()}
+            what={copy.shareFailed}
+          />
+        ) : shareRead ? (
           <ShareStrip scope={burn} read={shareRead} agentId={null} />
         ) : (
           <BurnStrip
@@ -261,6 +267,6 @@ export default function AgentBudgetSection({
           onClose={() => setDay(null)}
         />
       </section>
-    </Announcer>
+    </>
   )
 }

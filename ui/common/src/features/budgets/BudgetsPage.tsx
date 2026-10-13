@@ -482,7 +482,13 @@ function Body({
           />
         }
       />
-      {shareRead ? (
+      {picked && contributor.isError ? (
+        <PanelError
+          error={contributor.error}
+          onRetry={() => void contributor.refetch()}
+          what={copy.shareFailed}
+        />
+      ) : shareRead ? (
         <ShareStrip scope={burn} read={shareRead} agentId={by === 'agent' ? picked : null} />
       ) : (
         <BurnStrip

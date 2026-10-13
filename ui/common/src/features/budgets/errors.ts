@@ -20,6 +20,11 @@ const RULES: Rule[] = [
   },
   {
     status: 400,
+    match: /session has ended/,
+    view: () => ({ problem: copy.sessionEnded, action: copy.sessionEndedAction }),
+  },
+  {
+    status: 400,
     match: /limit_usd/,
     view: () => ({ problem: copy.limitPositive, field: 'limit' }),
   },

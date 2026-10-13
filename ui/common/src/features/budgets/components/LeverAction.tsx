@@ -185,6 +185,8 @@ function Model({
         if (!out.saved.length)
           throw new Error(copy.leverModelAlready(lever.agent.name, lever.to.model))
         await qc.invalidateQueries({ queryKey: budgetKeys.all })
+        // The hub's reads too: its event log brings the pin's flag and expected line (F13, B5 review).
+        void qc.invalidateQueries({ queryKey: ['agents', 'hub', lever.agent.id] })
         onApplied()
         return copy.leverApplied.model(lever.agent.name, lever.to.model)
       }}
