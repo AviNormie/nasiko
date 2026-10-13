@@ -134,14 +134,16 @@ export const TooEarly: StoryObj = {
 
 export const TableView: StoryObj = {
   render: () => {
-    const b = read('agent', I.pricing)
+    const b = read('agent', I.reviewer)
     return (
       <div className="max-w-3xl rounded-lg border border-border bg-card p-4">
         <BurnTable
           rows={tableRows(b)}
-          scopeLabel="Pricing Engine"
+          scopeLabel="Code Reviewer"
           fileName="burn.csv"
           onPickDay={() => {}}
+          floor={b.unpriced_calls > 0}
+          events={burnChartData(chartModel(b, 'down')).markers}
         />
         <p className="mt-2 text-xs text-muted-foreground">Used {fmtMoney(b.used_usd)}</p>
       </div>

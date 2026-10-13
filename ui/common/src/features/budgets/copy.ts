@@ -117,6 +117,9 @@ export const copy = {
   burnStop: 'Calls stop',
   burnOver: (amount: string) => `−${amount} over`,
   burnEstimated: (day: string) => `Estimated to exceed around ${day}`,
+  // Unpriced calls make spend a floor, so the run-out can only come sooner (plan F2).
+  burnEstimatedFloor: (day: string) => `Estimated to exceed by ${day} or earlier`,
+  burnOverFloor: (amount: string) => `At least −${amount} over`,
   burnRanOut: (day: string) => `Ran out ${day}`,
   burnExceeded: (day: string) => `Exceeded ${day}`,
   burnPreview: 'Preview, not applied',
@@ -139,10 +142,14 @@ export const copy = {
   tableCumulative: 'Cumulative',
   tableLeft: 'Left',
   tablePace: 'Even pace',
-  tableLow: 'Projection low (30-day rate)',
-  tableHigh: 'Projection high (7-day pace)',
+  // Neutral: which rate is lower changes from read to read (the band swaps), so the headers never name one.
+  tableLow: 'Projection low',
+  tableHigh: 'Projection high',
   tableSpike: 'Spike',
   tableProjected: 'projected',
   tableDownload: 'Download CSV',
   tableCaption: (scope: string) => `Daily spend and projection for ${scope}`,
+  tableFloor:
+    'Some calls have no price yet: spend is at least what is shown, and what is left at most.',
+  tableEvents: 'Events',
 }

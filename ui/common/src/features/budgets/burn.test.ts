@@ -172,9 +172,13 @@ describe('levers (F4)', () => {
     const b = price()
     expect(stopEstimate(b)).toBe(86)
     expect(raiseTo(projection(b))).toBe(186)
-    // Already over: avoidable is what the projection adds past what is spent. Its 30-day rate ($50 / 13 days) runs
-    // above the 7-day pace ($26 / 7), so that is the band's high edge.
-    expect(stopEstimate(read('agent', I.reviewer))).toBeCloseTo((50 / 13) * 17.5, 10)
+    // Already over: avoidable is what the projection adds past what is spent, at the 7-day pace ("if the rest of
+    // October follows the last 7 days"), not the band's high edge (here the 30-day rate). Not offered once it stops.
+    const reviewer = read('agent', I.reviewer)
+    expect(stopEstimate(reviewer)).toBeNull()
+    const alerting = { ...reviewer, budget: { ...reviewer.budget!, action: 'alert' as const } }
+    expect(stopEstimate(alerting)).toBeCloseTo((26 / 7) * 17.5, 10)
+    expect(raiseTo(projection(reviewer))).toBe(Math.ceil(50 + (26 / 7) * 17.5))
   })
 
   it('compression needs a measurement; a cheaper model prices the routed tokens left', () => {
@@ -207,7 +211,7 @@ describe('chart model (F1)', () => {
     ])
     expect(m.thresholds.map((t) => t.percent)).toEqual([50, 80])
     expect(m.thresholds[1]!.v).toBeCloseTo(20, 10)
-    expect(m.stopAt).toBeNull()
+    expect(m.limits.every((l) => !l.stops)).toBe(true)
   })
 
   it('burn-up with stepped limits: the raise is a step, thresholds move with it, the stop line is the limit', () => {
@@ -215,7 +219,7 @@ describe('chart model (F1)', () => {
     expect(m.limits.map((l) => l.v)).toEqual([40, 50])
     expect(m.limits[0]!.to).toBe(Date.UTC(2026, 9, 10, 9))
     expect(m.thresholds.filter((t) => t.percent === 80).map((t) => t.v)).toEqual([32, 40])
-    expect(m.stopAt).toBe(50)
+    expect(m.limits.map((l) => l.stops)).toEqual([true, true])
     // Events merged per day: Oct 9 holds the threshold and the stop.
     expect(m.markers.find((x) => x.day === '2026-10-09')!.events.map((e) => e.kind)).toEqual([
       'threshold',
@@ -252,5 +256,105 @@ describe('Table view rows', () => {
   it('a day beyond the data keeps nothing invented', () => {
     expect(tableRows(read('session', I.s1))).toEqual([])
     expect(DAY).toBe(86_400_000)
+  })
+})
+
+describe('B1 review regressions', () => {
+  const reviewer = () => read('agent', I.reviewer)
+
+  it('a stopped budget is projected nowhere: chart, table, strip and quarter agree', () => {
+    const b = reviewer()
+    expect(b.budget!.stopped).toBe(true)
+    expect(chartModel(b, 'down').band).toEqual([])
+    expect(tableRows(b).some((r) => r.low !== null)).toBe(false)
+    expect(figures(b).projected).toBeNull()
+    // The raise lever still sees what spend would do if calls resumed.
+    expect(projection(b)).not.toBeNull()
+  })
+
+  it('the table counts a limit raised during a day for that day, as the chart does', () => {
+    // Oct 10: raised from $40 to $50 at 09:00; $46 spent by the end of the day.
+    const row = tableRows(reviewer()).find((r) => r.date === '2026-10-10')!
+    expect(row.left).toBe(50 - row.cumulative)
+    const m = chartModel(reviewer(), 'down')
+    expect(m.actual.find((p) => p.t === Date.UTC(2026, 9, 11))!.v).toBe(row.left)
+  })
+
+  it('only steps that stopped calls draw the stop line', () => {
+    const b = reviewer()
+    const limits = b.budget!.limits.map((l, i) =>
+      i === 0 ? { ...l, action: 'alert' as const } : l,
+    )
+    const m = chartModel({ ...b, budget: { ...b.budget!, limits } }, 'up')
+    expect(m.limits.map((l) => l.stops)).toEqual([false, true])
+  })
+
+  it('the band ends at the reset wherever as_of falls', () => {
+    const b = { ...price(), as_of: '2026-10-14T12:37:00Z' }
+    expect(chartModel(b, 'up').band.at(-1)!.t).toBe(Date.UTC(2026, 10, 1))
+  })
+
+  it('this week is unknown when a day of it is missing from the read', () => {
+    const b = price()
+    const daily = b.daily.filter((d) => d.date !== '2026-10-12')
+    expect(figures({ ...b, daily }).week).toMatchObject({ used: null, usedCompleteDays: null })
+  })
+
+  it('a spike over a zero pace has no ratio, never Infinity', () => {
+    const b = reviewer()
+    const daily = b.daily.map((d) =>
+      d.date === '2026-10-09' ? d : { ...d, cost_usd: d.date < '2026-10-09' ? 0 : d.cost_usd },
+    )
+    expect(spikes({ ...b, daily }).find((x) => x.date === '2026-10-09')!.ratio).toBeNull()
+  })
+})
+
+describe('B1 review regressions (Codex)', () => {
+  it('burndown steps at the moment the limit changes, not across the day', () => {
+    // B-review: raised $40 → $50 on Oct 10 at 09:00; $42 spent by Oct 10 00:00, $44 by Oct 11 00:00.
+    const m = chartModel(read('agent', I.reviewer), 'down')
+    const at = m.actual.filter((p) => p.t === Date.UTC(2026, 9, 10, 9)).map((p) => p.v)
+    expect(at).toHaveLength(2)
+    expect(at[0]).toBeCloseTo(40 - 42.75, 10)
+    expect(at[1]).toBeCloseTo(50 - 42.75, 10)
+  })
+
+  it('a period’s closing point keeps that period’s spend; the new period starts at $0', () => {
+    // Pricing Engine read from Sep 1 (two periods), with $30 spent on Sep 30.
+    const b = read('agent', I.pricing, { include_previous: 'true', from: '2026-09-01' })
+    const daily = b.daily.map((d) => (d.date === '2026-09-30' ? { ...d, cost_usd: 30 } : d))
+    const m = chartModel({ ...b, daily }, 'up')
+    const atReset = m.actual.filter((p) => p.t === Date.UTC(2026, 9, 1)).map((p) => p.v)
+    expect(atReset).toEqual([30, 0])
+  })
+
+  it('a limit lowered today ran out today, not the day spend first passed the new limit', () => {
+    const b = price()
+    const [first] = b.budget!.limits
+    const limits = [
+      { ...first!, to: '2026-10-14T11:00:00Z' },
+      {
+        ...first!,
+        from: '2026-10-14T11:00:00Z',
+        to: null,
+        version: first!.version + 1,
+        limit_usd: 50,
+      },
+    ]
+    const lowered = { ...b, budget: { ...b.budget!, limits } }
+    expect(runOut(lowered)).toEqual({ at: Date.UTC(2026, 9, 14), observed: true })
+  })
+
+  it('a session draws its turns from its start to its end, with no even pace', () => {
+    const m = chartModel(read('session', I.s1), 'down')
+    expect(m.pace).toEqual([])
+    expect(m.band).toEqual([])
+    expect(m.actual.at(-1)!.v).toBeCloseTo(8 - 10, 10)
+    expect(m.end).toBeLessThan(NOW)
+  })
+
+  it('unpriced calls mark the model as a floor', () => {
+    expect(chartModel(read('org'), 'down').floor).toBe(true)
+    expect(chartModel(price(), 'down').floor).toBe(false)
   })
 })
