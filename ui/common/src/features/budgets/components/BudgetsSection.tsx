@@ -61,7 +61,12 @@ export function BudgetsSection({
   onEdit: (b: Budget) => void
   onSwitchToAlert: (b: Budget) => void
 }) {
-  const list = sortBudgets(budgets.data ?? [], agentName)
+  // The router's table is R-L10's owner and agent budgets; a 1.0 server's session, unit and fleet budgets live on
+  // /budgets (review: a session's null reset read as Jan 1 here).
+  const list = sortBudgets(
+    (budgets.data ?? []).filter((b) => b.scope === 'owner' || b.scope === 'agent'),
+    agentName,
+  )
   const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
   const missing = isBudgetsAbsent(budgets.error) && !budgets.data
   return (

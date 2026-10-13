@@ -79,13 +79,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function State({
   q,
   what,
+  enabled,
   children,
 }: {
   q: { isPending: boolean; error: unknown; refetch: () => unknown }
   what: string
+  /** False when this server doesn't serve the route (F11): a disabled query would otherwise pend forever. */
+  enabled: boolean
   children: ReactNode
 }) {
-  if (isEndpointAbsent(q.error))
+  if (!enabled || isEndpointAbsent(q.error))
     return <p className="text-xs text-muted-foreground">{copy.dayMissing}</p>
   if (q.error)
     return <PanelError error={q.error} onRetry={() => void q.refetch()} what={what.toLowerCase()} />
@@ -107,7 +110,7 @@ function DayContributors({
   const q = useBreakdown(scope, { by, period: 'month', from: day, to: day, top: 5 }, enabled)
   return (
     <Section title={copy.dayContributors}>
-      <State q={q} what={copy.dayContributors}>
+      <State q={q} what={copy.dayContributors} enabled={enabled}>
         <ul className="divide-y divide-border text-sm">
           {(q.data?.keys ?? []).map((k) => (
             <li key={k.key} className="flex justify-between gap-3 py-1.5">
@@ -133,7 +136,7 @@ function DayHours({ day, scope, enabled }: { day: string; scope: ScopeRef; enabl
   const max = Math.max(1e-9, ...hours.map((h) => h.cost_usd))
   return (
     <Section title={copy.dayHours}>
-      <State q={q} what={copy.dayHours}>
+      <State q={q} what={copy.dayHours} enabled={enabled}>
         <ol className="space-y-0.5 text-xs">
           {hours
             .filter((h) => h.cost_usd > 0 || h.calls > 0)
@@ -159,7 +162,7 @@ function DayTraces({ day, scope, enabled }: { day: string; scope: ScopeRef; enab
   const rows = q.data ?? []
   return (
     <Section title={copy.dayTraces}>
-      <State q={q} what={copy.dayTraces}>
+      <State q={q} what={copy.dayTraces} enabled={enabled}>
         {!rows.length ? (
           <p className="text-sm text-muted-foreground">{copy.dayTracesNone}</p>
         ) : (

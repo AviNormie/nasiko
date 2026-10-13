@@ -7,7 +7,7 @@
  *
  * Loads with the shell (`_app` hides the nav item from it): no zod, only the client.
  */
-import { apiFetch } from '@/lib/api/client'
+import { apiFetch, ApiError } from '@/lib/api/client'
 import { isEndpointAbsent } from '@/lib/api/detect'
 
 export type Feature =
@@ -56,11 +56,14 @@ async function readCapabilities(signal: AbortSignal): Promise<Availability> {
   } catch (err) {
     if (!isEndpointAbsent(err)) throw err
   }
+  const present: Availability = { kind: 'available', version: null, features: ['budgets'] }
   try {
     await apiFetch('/api/budgets?limit=1', { signal })
-    return { kind: 'available', version: null, features: ['budgets'] }
+    return present
   } catch (err) {
     if (isEndpointAbsent(err)) return { kind: 'absent' }
+    // A coded 404 or a 403 is the route answering this caller: present, not absent (§10.1).
+    if (err instanceof ApiError && (err.status === 404 || err.status === 403)) return present
     throw err
   }
 }
@@ -75,7 +78,7 @@ export const capabilitiesQuery = {
 } as const
 
 /** The server serves `feature` completely (budgets.md §10.1). */
-const has = (a: Availability | undefined, feature: Feature) =>
+export const has = (a: Availability | undefined, feature: Feature) =>
   a?.kind === 'available' && a.features.includes(feature)
 
 /**

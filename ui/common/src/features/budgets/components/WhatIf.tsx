@@ -71,8 +71,8 @@ export function WhatIfPanel({
             </FieldLabel>
             <Slider
               id={`${ids}-pace`}
-              aria-label={copy.whatIfPace}
-              aria-valuetext={copy.whatIfPaceValue(state.pace)}
+              thumbLabel={copy.whatIfPace}
+              thumbValueText={copy.whatIfPaceValue(state.pace)}
               min={-50}
               max={50}
               step={5}
@@ -95,9 +95,11 @@ export function WhatIfPanel({
             <ul className="space-y-0.5 text-sm md:col-span-3">
               <li>{copy.whatIfProjected(fmtMoney(result.projected), lastDay)}</li>
               <li>
-                {result.runOut
-                  ? copy.whatIfRunsOut(fmtShortDay(result.runOut), stops)
-                  : copy.whatIfWithin}
+                {result.exceeded
+                  ? copy.whatIfAlreadyOver(stops)
+                  : result.runOut
+                    ? copy.whatIfRunsOut(fmtShortDay(result.runOut), stops)
+                    : copy.whatIfWithin}
               </li>
               <li className="text-muted-foreground">
                 {result.allowance.none

@@ -1,5 +1,10 @@
-"use client"
-
+/**
+ * shadcn/ui Slider (new-york-v4 registry, 2026-10-06). Local edits:
+ * - `cn` from `@/lib/utils` (the CLI emits `from "cn"`); no "use client" (no RSC here).
+ * - Thumb fill `bg-background`, not `bg-white`, so each theme tints it (theme tokens only).
+ * - `thumbLabel` / `thumbValueText` name the focusable thumb (it owns `role="slider"`; a label on the root never
+ *   reaches it, axe `aria-input-field-name`).
+ */
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Slider as SliderPrimitive } from "radix-ui"
@@ -10,8 +15,13 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  thumbLabel,
+  thumbValueText,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  thumbLabel?: string
+  thumbValueText?: string
+}) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -52,7 +62,9 @@ function Slider({
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
-          className="block size-4 shrink-0 rounded-full border border-primary bg-white shadow-sm ring-ring/50 transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
+          aria-label={thumbLabel}
+          aria-valuetext={thumbValueText}
+          className="block size-4 shrink-0 rounded-full border border-primary bg-background shadow-sm ring-ring/50 transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
         />
       ))}
     </SliderPrimitive.Root>
