@@ -29,6 +29,8 @@ export const MOCKABLE = [
   'harnesses',
   'chat',
   'router',
+  // Budgets (plans/feat-budget-burn.md eng D1, D2): R-L10 and the burn contract. `router` brings it along.
+  'budgets',
   'deploy',
   'settings',
   'mcp',
@@ -93,6 +95,17 @@ export function readEnv(
       '[ui-lab] VITE_NASIKO_MOCK: "router" needs "agents" and "providers" too; ignoring "router" (use VITE_NASIKO_MOCK=router,agents,providers).',
     )
     partialMocks = partialMocks.filter((s) => s !== 'router')
+  }
+
+  // Budgets used to be part of the router group (plans/feat-budget-burn.md eng D2): `router` keeps mocking them.
+  if (partialMocks.includes('router') && !partialMocks.includes('budgets'))
+    partialMocks = [...partialMocks, 'budgets']
+  // Budgets are counted from the seed agents' spend: without `agents` they would name agents the server doesn't have.
+  if (partialMocks.includes('budgets') && !partialMocks.includes('agents')) {
+    console.warn(
+      '[ui-lab] VITE_NASIKO_MOCK: "budgets" needs "agents" too; ignoring "budgets" (use VITE_NASIKO_MOCK=budgets,agents).',
+    )
+    partialMocks = partialMocks.filter((s) => s !== 'budgets')
   }
 
   // Builds and uploads are derived from the seed agents: without `agents` the build rows would name agents the
@@ -194,5 +207,10 @@ export const env = readEnv()
  * so a preview never draws from an unexpected live response.
  */
 export function isPreview(group: Mockable, config: Pick<EnvConfig, 'mode' | 'partialMocks'> = env) {
-  return config.mode === 'mock' || config.partialMocks.includes(group)
+  // `router` implies `budgets` (eng D2), also for a config built by hand.
+  return (
+    config.mode === 'mock' ||
+    config.partialMocks.includes(group) ||
+    (group === 'budgets' && config.partialMocks.includes('router'))
+  )
 }

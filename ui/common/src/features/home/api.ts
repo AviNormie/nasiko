@@ -21,8 +21,8 @@ import type { HomeLevel } from '@/app/edition'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
 import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
-import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/router/api'
-import type { Budget, BudgetStatus } from '@/features/router/types'
+import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/budgets/api'
+import type { Budget, BudgetStatus } from '@/features/budgets/types'
 import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
 import type { ResolvedWindow } from '@/features/tokenops/window'
@@ -233,7 +233,7 @@ function rowBudget(b: Budget, st: BudgetStatus, now: Date): RowBudget {
 }
 
 function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
-  const preview = isPreview('router')
+  const preview = isPreview('budgets')
   // Both reads poll together: a limit changed elsewhere, or a new budget, shows with the next status.
   const list = useBudgets(preview && any, BUDGET_POLL_MS)
   const status = useBudgetStatus(preview && !!list.data?.length, BUDGET_POLL_MS)

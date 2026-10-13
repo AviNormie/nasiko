@@ -17,7 +17,6 @@
         "*/*/src/main.tsx",
         "*/src/mocks.ts",
         "*/*/src/mocks/index.ts",
-        "*/*/src/genui/frame/runtime.tsx",
         "*/*/src/routes/**/*.tsx",
         "*/vite.config.ts",
         "*/*/vite.config.ts",
@@ -33,17 +32,12 @@
         "**/routeTree.gen.ts"
       ],
       "ignoreDependencies": [
-        "acorn",
         "@tanstack/react-query",
         "lucide-react",
         "motion",
-        "react-day-picker",
         "react-hook-form",
         "sonner",
-        "zod",
-        "zustand",
-        "sucrase",
-        "tailwindcss"
+        "zod"
       ]
     },
     "common": {
@@ -52,7 +46,7 @@
         "src/**/*.test.{ts,tsx}",
         "src/test/**/*.ts",
         "src/**/*.stories.tsx",
-        "src/features/router/components/Budget*.tsx"
+        "src/features/budgets/components/Budget*.tsx"
       ],
       "project": [
         "src/**/*.{ts,tsx}"
@@ -66,10 +60,6 @@
   "ignoreIssues": {
     "common/src/components/charts/**": [
       "duplicates",
-      "exports",
-      "types"
-    ],
-    "ee/web/src/genui/lang/**": [
       "exports",
       "types"
     ]

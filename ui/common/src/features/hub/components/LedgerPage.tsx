@@ -290,7 +290,7 @@ function LedgerBody({
 
       {ledger.unplaced.length ? <Unplaced steps={ledger.unplaced} /> : null}
 
-      {isPreview('router') && !budgets.isPending ? (
+      {isPreview('budgets') && !budgets.isPending ? (
         <Budgets budgets={budgets} lines={lines} />
       ) : null}
 

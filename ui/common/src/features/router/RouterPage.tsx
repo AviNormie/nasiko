@@ -1,18 +1,20 @@
 /**
- * The LLM router page (plan §4). Order: title + "How routing works" → tabs: Your agents · Your configs · Providers
- * (`?tab=`, one at a time). The routing summary is the Agents table's own filter tabs, the only thing it filters. It shows configured routing and who pays, not observed calls (R-L5).
+ * The LLM router page (plan §4). Order: title + "How routing works" → summary tiles (filters) → tabs: Your agents ·
+ * Your configs · Providers (`?tab=`, one at a time). It shows configured routing and who pays, not observed calls (R-L5).
  *
  *   useOwnedAgents ─► ids ─► useRowReads (limiter, 4 at a time) ─► rows ─┬─► summary strip / counts / Affects N
  *   useConfigs · useSecrets · useCatalog · useCustomProviders ───────────┴─► sections and sheets
  */
 import { useQuery } from '@tanstack/react-query'
+import { Check } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageLoader } from '@/components/shared/page-loader'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Toggle } from '@/components/ui/toggle'
 import { useOwnedAgents } from '@/features/agents/api'
 import { ErrorState } from '@/features/observability/StateCard'
 import { meQuery } from '@/lib/api/auth'
-import { siblingsAround } from '@/lib/siblings'
+import { cn } from '@/lib/utils'
 import { useAnnounce } from './announce'
 import {
   // useBudgetAlerts,
@@ -29,9 +31,9 @@ import {
   useSetDefault,
   useUsageByAgent,
 } from './api'
-// import { budgetResetsAt, sentenceName, toAlertOnly } from './budgets'
-// import { BudgetSheet, type BudgetMode } from './components/BudgetSheet'
-// import { BudgetsSection } from './components/BudgetsSection'
+// import { budgetResetsAt, sentenceName, toAlertOnly } from '@/features/budgets/budgets'
+// import { BudgetSheet, type BudgetMode } from '@/features/budgets/components/BudgetSheet'
+// import { BudgetsSection } from '@/features/budgets/components/BudgetsSection'
 import { AgentsSection, type AgentRow, type SpendState } from './components/AgentsSection'
 import { Announcer } from './components/bits'
 import { RouterTitle } from './components/HowRouting'
@@ -123,8 +125,6 @@ function Page({
 
   const [editor, setEditor] = useState<EditorMode | null>(null)
   const [routingFor, setRoutingFor] = useState<string | null>(null)
-  // The agents table's order when the sheet opened from it, for the sheet's Previous/Next; [] from elsewhere.
-  const [routingOrder, setRoutingOrder] = useState<readonly string[]>([])
   const [customMode, setCustomMode] = useState<CustomMode | null>(null)
   const [deleting, setDeleting] = useState<LlmConfig | null>(null)
   const [updated, setUpdated] = useState<ReadonlyMap<string, number>>(new Map())
@@ -176,7 +176,6 @@ function Page({
     : rows
   const filterLabel = search.source ? copy.filterNames[search.source] : null
   const routingAgent = routingFor ? agentById.get(routingFor) : undefined
-  const routingStep = routingFor ? siblingsAround(routingOrder, routingFor) : null
   const attached = useMemo(
     () =>
       deleting
@@ -301,74 +300,68 @@ function Page({
         <PageLoader label={copy.loading} />
       ) : (
         <>
+          <nav aria-label={copy.summaryLabel} className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <FilterTile
+              active={!source}
+              onClick={() => showAgents(undefined)}
+              name={copy.summaryAgents(String(summary.total))}
+              label={copy.kpiAgents}
+              value={String(summary.total)}
+              note={copy.kpiAgentsNote}
+            />
+            <FilterTile
+              active={source === 'default'}
+              onClick={() => showAgents(source === 'default' ? undefined : 'default')}
+              name={copy.summaryDefault(countText(summary.onDefault), defaultDetail)}
+              label={copy.filterNames.default}
+              value={kpiCount(summary.onDefault)}
+              note={defaultDetail ?? copy.kpiNoDefault}
+            />
+            <FilterTile
+              active={source === 'attached'}
+              onClick={() => showAgents(source === 'attached' ? undefined : 'attached')}
+              name={copy.summaryAttached(countText(summary.attached))}
+              label={copy.filterNames.attached}
+              value={kpiCount(summary.attached)}
+              note={copy.kpiAttachedNote}
+            />
+            <FilterTile
+              active={source === 'none'}
+              onClick={() => showAgents(source === 'none' ? undefined : 'none')}
+              name={copy.summaryNone(countText(summary.none))}
+              label={copy.filterNames.none}
+              value={kpiCount(summary.none)}
+              note={copy.kpiNoneNote}
+            />
+          </nav>
+
           <Tabs
             value={tab}
             onValueChange={(t) =>
               setSearch({ tab: t === 'configs' || t === 'providers' ? t : undefined })
             }
           >
-            <TabsList
-              variant="line"
-              aria-label={copy.anchorsLabel}
-              className="w-full max-w-full justify-start overflow-x-auto border-b border-border"
-            >
+            <TabsList aria-label={copy.anchorsLabel}>
               {ROUTER_TABS.map((t) => (
-                <TabsTrigger key={t} value={t} className="min-h-10 flex-none px-3">
+                <TabsTrigger key={t} value={t} className="px-3 pointer-coarse:min-h-11">
                   {copy.anchors[t]}
                 </TabsTrigger>
               ))}
             </TabsList>
-            <TabsContent value="agents" forceMount hidden={tab !== 'agents'} className="pt-4">
+            <TabsContent value="agents" forceMount hidden={tab !== 'agents'} className="pt-3">
               <AgentsSection
-                filters={
-                  <SourceTabs
-                    value={source}
-                    onChange={(v) => showAgents(v)}
-                    tabs={[
-                      {
-                        value: 'all',
-                        label: copy.filterAll,
-                        count: String(summary.total),
-                        name: copy.summaryAgents(String(summary.total)),
-                      },
-                      {
-                        value: 'default',
-                        label: copy.filterNames.default,
-                        count: kpiCount(summary.onDefault),
-                        name: copy.summaryDefault(countText(summary.onDefault), defaultDetail),
-                        title: defaultDetail ?? copy.kpiNoDefault,
-                      },
-                      {
-                        value: 'attached',
-                        label: copy.filterNames.attached,
-                        count: kpiCount(summary.attached),
-                        name: copy.summaryAttached(countText(summary.attached)),
-                        title: copy.kpiAttachedNote,
-                      },
-                      {
-                        value: 'none',
-                        label: copy.filterNames.none,
-                        count: kpiCount(summary.none),
-                        name: copy.summaryNone(countText(summary.none)),
-                        title: copy.kpiNoneNote,
-                      },
-                    ]}
-                  />
-                }
                 rows={filtered}
                 total={rows.length}
                 spend={spend}
                 updated={updated}
-                onChange={(a, order) => {
-                  setRoutingFor(a.id)
-                  setRoutingOrder(order)
-                }}
+                onChange={(a) => setRoutingFor(a.id)}
                 onRetry={retry}
                 onShowConfig={(id) => goTo('configs', () => focusEl(`config-${id}`))}
                 filterLabel={filterLabel}
+                onClearFilter={() => setSearch({ source: undefined })}
               />
             </TabsContent>
-            <TabsContent value="configs" forceMount hidden={tab !== 'configs'} className="pt-4">
+            <TabsContent value="configs" forceMount hidden={tab !== 'configs'} className="pt-3">
               <ConfigsSection
                 configs={configs}
                 reads={reads}
@@ -394,7 +387,7 @@ function Page({
           onSwitchToAlert={onSwitchToAlert}
         />
         */}
-            <TabsContent value="providers" forceMount hidden={tab !== 'providers'} className="pt-4">
+            <TabsContent value="providers" forceMount hidden={tab !== 'providers'} className="pt-3">
               <ProvidersSection
                 catalog={catalog}
                 custom={custom}
@@ -430,17 +423,6 @@ function Page({
               }
             : null
         }
-        step={
-          routingStep
-            ? {
-                index: routingStep.index,
-                count: routingStep.count,
-                prev: routingStep.prev,
-                next: routingStep.next,
-                go: setRoutingFor,
-              }
-            : undefined
-        }
         viewer={{ sub: me?.sub, superuser }}
         configs={configs.data}
         catalog={catalog.data}
@@ -468,58 +450,47 @@ function Page({
         reads={reads}
         attached={attached}
         onClose={() => setDeleting(null)}
-        onChangeRouting={(id) => {
-          setRoutingFor(id)
-          setRoutingOrder([])
-        }}
+        onChangeRouting={(id) => setRoutingFor(id)}
       />
     </div>
   )
 }
 
-/**
- * The routing summary as the Agents table's filter: one tab per source with its count, All clears it. Each tab's name
- * is the summary's sentence ("5 attached", "at least 13 on your default"), so a screen reader hears the "at least".
- */
-function SourceTabs({
+/** A summary figure that filters Your agents (`aria-pressed`); its name is the strip's sentence ("5 attached"). */
+function FilterTile({
+  active,
+  onClick,
+  name,
+  label,
   value,
-  onChange,
-  tabs,
+  note,
 }: {
-  value: SourceFilter | undefined
-  onChange: (v: SourceFilter | undefined) => void
-  tabs: {
-    value: SourceFilter | 'all'
-    label: string
-    count: string
-    name: string
-    title?: string
-  }[]
+  active: boolean
+  onClick: () => void
+  name: string
+  label: string
+  value: string
+  note: string
 }) {
   return (
-    <Tabs
-      value={value ?? 'all'}
-      onValueChange={(v) => onChange(v === 'all' ? undefined : (v as SourceFilter))}
-      className="max-w-full min-w-0"
+    <Toggle
+      pressed={active}
+      onPressedChange={onClick}
+      aria-label={name}
+      className={cn(
+        'h-auto min-w-0 flex-col items-stretch justify-start gap-1 rounded-lg border bg-card p-3 text-left font-normal whitespace-normal text-foreground shadow-xs transition-[border-color,box-shadow] hover:border-ring/60 hover:bg-card hover:text-foreground motion-reduce:transition-none',
+        'data-[state=on]:border-primary data-[state=on]:bg-card data-[state=on]:text-foreground data-[state=on]:ring-1 data-[state=on]:ring-primary',
+      )}
     >
-      {/* Phones: the four tabs scroll sideways inside the card rather than overflow it. */}
-      <TabsList aria-label={copy.summaryLabel} className="max-w-full justify-start overflow-x-auto">
-        {tabs.map((t) => (
-          <TabsTrigger
-            key={t.value}
-            value={t.value}
-            aria-label={t.name}
-            title={t.title}
-            // No tab panels: every tab narrows the one agents table (Radix would point at a panel that isn't there).
-            aria-controls="router-agents"
-          >
-            {t.label} <span className="text-xs text-muted-foreground tabular-nums">{t.count}</span>
-          </TabsTrigger>
-        ))}
-      </TabsList>
-    </Tabs>
+      <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        {label}
+        {active ? <Check className="size-3.5 text-primary-text" aria-hidden /> : null}
+      </span>
+      <span className="text-2xl font-semibold tabular-nums">{value}</span>
+      <span className="truncate text-xs text-muted-foreground">{note}</span>
+    </Toggle>
   )
 }
 
-/** The tab's count: "13+" while some rows are unread (the tab's name keeps "at least 13"). */
+/** The tile's figure: "13+" while some rows are unread (the tile's name keeps "at least 13"). */
 const kpiCount = (c: { n: number; atLeast: boolean }) => `${c.n}${c.atLeast ? '+' : ''}`
