@@ -732,7 +732,10 @@ async fn mark_resume_unknown_sets_the_terminal_state_and_releases_the_lease() {
     .await
     .unwrap();
 
-    store.mark_resume_unknown(row.id).await.unwrap();
+    store
+        .mark_resume_unknown(row.id, "agent stream broke after 12 bytes")
+        .await
+        .unwrap();
 
     let after = store.get(row.id).await.unwrap().unwrap();
     assert_eq!(
@@ -742,6 +745,10 @@ async fn mark_resume_unknown_sets_the_terminal_state_and_releases_the_lease() {
     assert!(
         after.resume_claimed_at.is_none(),
         "the lease must be released, not left dangling on a terminal row"
+    );
+    assert_eq!(
+        after.resume_last_error.as_deref(),
+        Some("agent stream broke after 12 bytes")
     );
 }
 

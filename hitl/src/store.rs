@@ -153,8 +153,9 @@ pub trait HitlStore: Send + Sync {
     /// outcome — i.e. every attempt up to the cap crashed the dispatcher process mid-delivery
     /// rather than failing cleanly (a clean HTTP/parse failure already self-terminates via
     /// `mark_resume_failed`'s own cap check). Sets `resume_status = 'delivery_outcome_unknown'`
-    /// and releases the lease so it stops being reclaimed.
-    async fn mark_resume_unknown(&self, id: Uuid) -> Result<(), HitlError>;
+    /// and releases the lease so it stops being reclaimed. `reason` is stored in
+    /// `resume_last_error` so the unknown outcome is explained to operators.
+    async fn mark_resume_unknown(&self, id: Uuid, reason: &str) -> Result<(), HitlError>;
     /// The agent answered every re-delivery of the resume with "no such task" (A2A
     /// `TaskNotFoundError`, JSON-RPC -32001): it no longer holds the paused task, so the human's
     /// answer reached no task. Sets
@@ -811,13 +812,15 @@ impl HitlStore for PgHitlStore {
         }
     }
 
-    async fn mark_resume_unknown(&self, id: Uuid) -> Result<(), HitlError> {
+    async fn mark_resume_unknown(&self, id: Uuid, reason: &str) -> Result<(), HitlError> {
         sqlx::query(
             "UPDATE hitl_requests
-                SET resume_status = 'delivery_outcome_unknown', resume_claimed_at = NULL
+                SET resume_status = 'delivery_outcome_unknown', resume_claimed_at = NULL,
+                    resume_last_error = $2
               WHERE id = $1",
         )
         .bind(id)
+        .bind(reason)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1019,7 +1022,7 @@ mod resolve_display_row_tests {
         async fn cancel(&self, _id: Uuid, _canceled_by: Uuid) -> Result<ResolveOutcome, HitlError> {
             unimplemented!("not exercised by resolve_display_row")
         }
-        async fn mark_resume_unknown(&self, _id: Uuid) -> Result<(), HitlError> {
+        async fn mark_resume_unknown(&self, _id: Uuid, _reason: &str) -> Result<(), HitlError> {
             unimplemented!("not exercised by resolve_display_row")
         }
         async fn mark_resume_agent_lost_task(
