@@ -12,7 +12,7 @@ use crate::agent_scaling::{AgentDeploy, ReplicaBounds};
 use crate::auth::Claims;
 use crate::catalog::agent_secrets;
 use crate::state::AppState;
-use nasiko_runtime::{ContainerId, DeploymentSpec};
+use nasiko_runtime::{ContainerId, DeploymentSpec, RuntimeState};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -561,6 +561,15 @@ async fn restart(
     // path does (no-op for refs outside the `nasiko/` convention).
     let image = crate::agents::qualify_deploy_image(&state.config.agent_image_registry, &image);
 
+    let uuid_id = ContainerId::from_uuid(agent_id);
+    // A running agent is restarted where it is, so it stays available and keeps its
+    // autoscaling. Destroy and recreate stays for what it alone can do: starting an agent that
+    // is not running (including a pre-UUID name-keyed one), pulling the image fresh
+    // (`refresh`), and any runtime whose restart does not apply a changed env.
+    if !query.refresh && can_restart_in_place(&state, &uuid_id).await {
+        return restart_in_place(&state, &uuid_id, agent_id, owner_id, &name).await;
+    }
+
     let scaling = state.agent_scaling.begin_deploy(agent_id).await;
     let replica_bounds = match scaling.bounds().await {
         Ok(bounds) => bounds,
@@ -582,7 +591,6 @@ async fn restart(
 
     // Destroy the UUID-keyed workload (post-fix); fall back to the name-keyed one
     // for pre-fix containers so we don't leave a stale duplicate running.
-    let uuid_id = ContainerId::from_uuid(agent_id);
     if state.runtime.destroy(&uuid_id).await.is_err() {
         let _ = state.runtime.destroy(&ContainerId::new(&name)).await;
     }
@@ -635,6 +643,62 @@ async fn restart(
         }
         Err(e) => {
             tracing::error!(%e, %name, "restart: redeploy failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
+    }
+}
+
+/// Whether `restart` can replace the agent where it runs: the runtime rolls restarts in place
+/// and the agent is serving. A status that cannot be read counts as not running, so the
+/// restart falls back to a redeploy, which does not need it.
+async fn can_restart_in_place(state: &AppState, id: &ContainerId) -> bool {
+    if !state.runtime.restarts_in_place().await {
+        return false;
+    }
+    match state.runtime.status(id).await {
+        Ok(status) => status.state == RuntimeState::Running,
+        Err(e) => {
+            tracing::warn!(%e, container = %id, "restart: could not read the agent's status - redeploying it");
+            false
+        }
+    }
+}
+
+/// Rolls a running agent's instances one at a time. The workload and its autoscaling are left
+/// as they are, and so is `state_mode`: the same image comes back and registers its task
+/// store as before. The env is rebuilt first, with the platform credentials rotated, and
+/// applied to the runtime so the replacements start with it; if that fails nothing is rolled.
+async fn restart_in_place(
+    state: &AppState,
+    id: &ContainerId,
+    agent_id: Uuid,
+    owner_id: Uuid,
+    name: &str,
+) -> axum::response::Response {
+    let mut env = resolve_full_env(state, owner_id, agent_id).await;
+    crate::agents::deploy_env::apply_platform_env(
+        state,
+        &mut env,
+        agent_id,
+        owner_id,
+        crate::agents::deploy_env::StateModeOnDeploy::Keep,
+    )
+    .await;
+    // The runtime applies this as the agent's whole env, so it carries the port as a deploy does.
+    crate::agents::set_port_env(&mut env, crate::agents::DEFAULT_AGENT_PORT);
+
+    if let Err(e) = state.runtime.refresh_secrets(id, name, env).await {
+        tracing::error!(%e, %name, "restart: could not apply the agent's env");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+    }
+    if let Err(e) = state.runtime.restart(id).await {
+        tracing::error!(%e, %name, "restart: rolling restart failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+    }
+    match state.runtime.status(id).await {
+        Ok(status) => Json(status).into_response(),
+        Err(e) => {
+            tracing::error!(%e, %name, "restart: could not read the status after the restart");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
         }
     }
