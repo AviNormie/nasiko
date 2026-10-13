@@ -15,6 +15,8 @@ import {
   type ScopeRef,
 } from '@/features/budgets/api'
 import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
+import { readsFleet } from '@/features/budgets/scope'
+import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import { project } from '@/features/budgets/projection'
 import type { AtRiskRow, Budget, BudgetStatus, StatusRow } from '@/features/budgets/types'
 import type { Me } from '@/lib/api/auth'
@@ -128,9 +130,11 @@ export function useBudgetNeeds(
 ) {
   const caps = useQuery({ ...capabilitiesQuery, enabled })
   const available = caps.data?.kind === 'available'
-  const ref: ScopeRef = me.is_superuser
-    ? { scope: 'org', id: null }
-    : { scope: 'owner', id: me.sub }
+  // A fleet reader (superuser, EE org admin or finance, B6) watches the fleet; anyone else their own budgets.
+  const who = useBudgetsViewer()
+  const fleet = who.viewer ? readsFleet(who.viewer) : me.is_superuser
+  const self = who.viewer?.id ?? me.sub
+  const ref: ScopeRef = fleet ? { scope: 'org', id: null } : { scope: 'owner', id: self }
   const atRisk = useAtRisk(ref, enabled && available && mayHave(caps.data, 'at_risk'))
   const own = useScopeStatus(ref, enabled && available && mayHave(caps.data, 'scope_status'))
   // R-L10 (no At risk, or it answered a bare 404): the viewer's own list and status.
@@ -141,10 +145,10 @@ export function useBudgetNeeds(
   const ownAbsent = !mayHave(caps.data, 'scope_status') || isEndpointAbsent(own.error)
   const ownRow = own.data?.rows.find((r) => r.scope === ref.scope)
   const ownItem = ownRow
-    ? needFromOwnStatus(ownRow, me.is_superuser ? copy.needs.fleetBudget : copy.needs.yourBudget)
+    ? needFromOwnStatus(ownRow, fleet ? copy.needs.fleetBudget : copy.needs.yourBudget)
     : null
   const value: NeedsInput['budgets'] = (() => {
-    if (!enabled || caps.isPending) return { state: 'loading' }
+    if (!enabled || caps.isPending || who.pending) return { state: 'loading' }
     if (caps.isError) return { state: 'failed' }
     if (!available || (fallback && isEndpointAbsent(list.error))) return { state: 'absent' }
     if (fallback) {
@@ -152,7 +156,7 @@ export function useBudgetNeeds(
       if (!list.data || !status.data) return { state: 'loading' }
       return {
         state: 'ok',
-        value: needsFromStatus(list.data, status.data.data, me.sub, agentLabel, shownAsAgent),
+        value: needsFromStatus(list.data, status.data.data, self, agentLabel, shownAsAgent),
       }
     }
     if (atRisk.isError || (own.isError && !ownAbsent)) return { state: 'failed' }
@@ -161,7 +165,7 @@ export function useBudgetNeeds(
       state: 'ok',
       value: [
         ...(ownItem ? [ownItem] : []),
-        ...needsFromAtRisk(atRisk.data.rows, me.sub, shownAsAgent),
+        ...needsFromAtRisk(atRisk.data.rows, self, shownAsAgent),
       ],
       // Rows are real, but a later page failed: the source can't vouch that nothing else needs the viewer.
       incomplete: atRisk.data.partial || !!own.data?.partial,

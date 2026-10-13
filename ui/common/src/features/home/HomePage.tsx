@@ -12,6 +12,8 @@
  * 640 px; PR2c the EE levels; PR2d the chart band between the strip and the table (`components/ChartBand`), whose health
  * bar filters the table (`?health=`).
  */
+import { readsFleet } from '@/features/budgets/scope'
+import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
@@ -183,15 +185,17 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
     : null
 
   // Budget burn (plans/feat-budget-burn.md F10, D13): the scope's burn read; the panel replaces Spend · Over time only
-  // once it answers. Fleet is the org's for a superuser (a member's Fleet is only what's shared with them).
+  // once it answers. Fleet is the org's for a fleet reader (a superuser, or EE's org admin or finance, B6); a member's
+  // Fleet is only what's shared with them. Yours is the account the budgets viewer speaks for.
   const caps = useQuery(capabilitiesQuery)
+  const budgetsViewer = useBudgetsViewer().viewer
   const burnRef: ScopeRef | null =
     scope === 'fleet'
-      ? me.is_superuser
+      ? (budgetsViewer ? readsFleet(budgetsViewer) : me.is_superuser)
         ? { scope: 'org', id: null }
         : null
       : scope === 'yours'
-        ? { scope: 'owner', id: me.sub }
+        ? { scope: 'owner', id: budgetsViewer?.id ?? me.sub }
         : unit
           ? { scope: 'unit', id: scope.slice('unit:'.length) }
           : null
