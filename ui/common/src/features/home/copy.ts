@@ -55,6 +55,7 @@ export const copy = {
     preview: 'Preview: needs server support',
     note: (updated: string | null) =>
       `Budget use is a preview: needs server support${updated ? ` · ${updated}` : ''}`,
+    liveNote: (updated: string | null) => `Budget use${updated ? ` · ${updated}` : ''}`,
     stale: "Couldn't refresh budgets: the figures are from the last successful read",
     off: "Budgets aren't set up on this server",
     failed: "Budgets couldn't load",

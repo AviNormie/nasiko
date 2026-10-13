@@ -10,11 +10,15 @@ import { checkSessions } from '@/features/observability/sessions'
 import { STATUS_CHECK_ROWS } from '@/features/observability/tuning'
 import { tempoSafeStart, useFleetSessions, useSessionStatuses } from '@/features/sessions/api'
 import type { Me } from '@/lib/api/auth'
+import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import { useAgentsDirectory } from '@/features/agents/api'
 import type { Agent } from '@/features/agents/types'
 import { displayStatus, isHarness } from '@/features/agents/status'
 import { useBudgetStatus, useBudgets } from '@/features/budgets/api'
+import { capabilitiesQuery } from '@/features/budgets/availability'
+import { isEndpointAbsent } from '@/lib/api/detect'
+import { useBudgetNeeds } from './budgetNeeds'
 import { useDashboard, useTimeseries } from '@/features/tokenops/api'
 import { zeroFillTimeline } from '@/features/tokenops/series'
 import type { AgentFinopsRow } from '@/features/tokenops/types'
@@ -92,12 +96,11 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
   const prev = useDashboard(win7, {}, 'agent', 'previous', on)
   const d30 = useDashboard(win30, {}, 'agent', 'current', on)
   const ts = useTimeseries(win30, {}, on && fleetSeries)
-  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines (and the
-  // `isEndpointAbsent` import from @/lib/api/detect) when it lands.
-  // const budgets = useBudgets(on)
-  // const budgetsAbsent = isEndpointAbsent(budgets.error)
-  const budgets = useBudgets(false)
-  const budgetsAbsent = true
+  // Budgets only on a server that has them (plans/feat-budget-burn.md F11): a stopped budget is an agent's reason.
+  const caps = useQuery({ ...capabilitiesQuery, enabled: on })
+  const budgetsOn = caps.data?.kind === 'available'
+  const budgets = useBudgets(on && budgetsOn)
+  const budgetsAbsent = !budgetsOn || isEndpointAbsent(budgets.error)
   // Only once the list answered: on a server without budgets (bare 404) no status request goes out.
   const budgetStatus = useBudgetStatus(on && budgets.isSuccess)
   const deployedCount = useMemo(
@@ -259,13 +262,14 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   const chats = useChatSessions()
   // The fleet's directory, not a second observer: one enabled late would refetch a failed list and flicker it pending.
   const dir = { byId: fleet.byId }
-  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines (and the
-  // `isEndpointAbsent` import from @/lib/api/detect) when it lands.
-  // const budgets = useBudgets(enabled)
-  // const budgetsAbsent = isEndpointAbsent(budgets.error)
-  const budgets = useBudgets(false)
-  const budgetsAbsent = true
-  const status = useBudgetStatus(enabled && budgets.isSuccess)
+  // Budgets (plans/feat-budget-burn.md F8): the viewer's scope's At risk, or R-L10's own list on an older server.
+  const shownAsAgent = (agentId: string) =>
+    !!fleet.summary?.byId.get(agentId)?.reasons.some((r) => r.code === 'budgetStopped')
+  const agentLabel = (agentId: string) => {
+    const a = dir.byId.get(agentId)
+    return a?.display_name || a?.name
+  }
+  const budgetNeeds = useBudgetNeeds(me, enabled, agentLabel, shownAsAgent)
   const sessions = useRecentSessions(now, enabled)
   // Stable inputs for the memo below: query result objects are new on every render.
   const { match, failedCold, isPending: waitingPending } = waiting
@@ -314,37 +318,7 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
               // Rows are real, but with a cost input down the source can't vouch that nothing else needs action.
               incomplete: fleet.costFailed,
             }
-    const budgetRows: NeedsInput['budgets'] = budgetsAbsent
-      ? { state: 'absent' }
-      : budgets.isError || status.isError
-        ? { state: 'failed' }
-        : budgets.isPending || status.isPending
-          ? { state: 'loading' }
-          : {
-              state: 'ok',
-              value: (budgets.data ?? []).flatMap((b) => {
-                const st = status.data?.data.find((x) => x.budget_id === b.id)
-                // A stopped agent budget is skipped only when its agent row already says so (a stopped, harness or unlisted
-                // agent isn't rated, so the budget row must stay; /ship adversarial).
-                const shownAsAgent =
-                  !!b.agent_id &&
-                  !!fleet.summary?.byId
-                    .get(b.agent_id)
-                    ?.reasons.some((r) => r.code === 'budgetStopped')
-                if (!st || st.state === 'ok' || (st.stopped && shownAsAgent)) return []
-                const agent = b.agent_id ? dir.byId.get(b.agent_id) : undefined
-                return [
-                  {
-                    id: b.id,
-                    label: b.agent_id
-                      ? agent?.display_name || agent?.name || copy.needs.anAgent
-                      : copy.needs.yourBudget,
-                    crossed: st.crossed,
-                    state: st.state === 'warning' ? 'warning' : 'exceeded',
-                  } as const,
-                ]
-              }),
-            }
+    const budgetRows = budgetNeeds.value
     const failedRows = sessions.newest.filter((r) => sessions.status.get(r.session_id) === 'failed')
     // The rule the hub shares (observability/sessions.ts `checkSessions`): most of the sample must answer before "no
     // failures" counts, and "N of M checked sessions failed" counts the sessions actually checked (user decisions).
@@ -383,14 +357,7 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
     fleet.ratingsPending,
     fleet.costFailed,
     fleet.displayName,
-    budgetsAbsent,
-    budgets.data,
-    budgets.isError,
-    budgets.isPending,
-    status.data,
-    status.isError,
-    status.isPending,
-    dir.byId,
+    budgetNeeds.value,
     sessions.newest,
     sessions.list.isError,
     sessions.list.isPending,
@@ -398,11 +365,9 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   ])
 
   const needs = useMemo(() => mergeNeeds(input), [input])
-  const stamps = [
-    waiting.lastChecked,
-    budgetsAbsent ? 0 : status.dataUpdatedAt,
-    sessions.list.dataUpdatedAt,
-  ].filter((t) => t > 0)
+  const stamps = [waiting.lastChecked, budgetNeeds.stamp, sessions.list.dataUpdatedAt].filter(
+    (t) => t > 0,
+  )
   return {
     needs,
     waiting,
@@ -414,10 +379,7 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
         fleet.retry()
         if (fleet.costFailed) fleet.retryCost()
       },
-      budgets: () => {
-        void budgets.refetch()
-        void status.refetch()
-      },
+      budgets: budgetNeeds.retry,
       sessions: () => void sessions.list.refetch(),
     },
     sessions,
