@@ -13,7 +13,7 @@ import { AxisBottom, AxisLeft } from '@visx/axis'
 import { GridRows } from '@visx/grid'
 import { Group } from '@visx/group'
 import { ParentSize } from '@visx/responsive'
-import { scaleLinear, scaleTime } from '@visx/scale'
+import { scaleLinear, scaleUtc } from '@visx/scale'
 import { Area, LinePath } from '@visx/shape'
 import { motion, useReducedMotion } from 'motion/react'
 import { useId, useState } from 'react'
@@ -33,10 +33,9 @@ export interface BurnChartData {
   actual: BurnChartPoint[]
   pace: BurnChartPoint[][]
   band: { t: number; low: number; high: number }[]
-  limits: { from: number; to: number; v: number }[]
+  /** Limit steps; `stops` when calls stopped under that step (drawn as the stop line). In burndown, `v` is 0. */
+  limits: { from: number; to: number; v: number; stops: boolean }[]
   thresholds: { from: number; to: number; v: number; percent: number }[]
-  /** The y value calls stop at (the stop line), or null. */
-  stopAt: number | null
   runOut: { t: number; observed: boolean } | null
   /** Events merged per day: the flag shows a count past one; hover lists them. */
   markers: { day: string; t: number; labels: string[] }[]
@@ -103,7 +102,7 @@ export function BurnChart(props: BurnChartProps) {
           </Key>
         ) : null}
         {data.band.length ? <Key band>{labels.band}</Key> : null}
-        {data.limits.length && data.mode === 'up' && data.stopAt === null ? (
+        {data.mode === 'up' && data.limits.some((l) => !l.stops) ? (
           <Key color="var(--foreground)">{labels.limit}</Key>
         ) : null}
         {data.thresholds.length ? (
@@ -111,7 +110,9 @@ export function BurnChart(props: BurnChartProps) {
             {labels.thresholds}
           </Key>
         ) : null}
-        {data.stopAt !== null ? <Key color="var(--destructive)">{labels.stop}</Key> : null}
+        {data.limits.some((l) => l.stops) ? (
+          <Key color="var(--destructive)">{labels.stop}</Key>
+        ) : null}
         {preview?.length ? (
           <Key dashed color={PREVIEW.edge}>
             {labels.preview}
@@ -177,7 +178,8 @@ function Plot({
   const barsTop = burnH + GAP
   const barsH = Math.max(0, innerH - barsTop)
 
-  const x = scaleTime({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
+  // UTC, like the day bars and the labels: a local-time scale puts ticks at the viewer's midnight.
+  const x = scaleUtc({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
   const lowY = Math.min(0, data.minY, ...(preview ?? []).map((p) => p.v))
   const highY = Math.max(data.maxY, ...(preview ?? []).map((p) => p.v)) * 1.06 || 1
   const y = scaleLinear({ domain: [lowY, highY], range: [burnH, 0], nice: true })
@@ -189,21 +191,20 @@ function Plot({
   const zeroY = y(0)
   const last = data.actual.at(-1)
 
-  const hovered =
-    hover === null
-      ? null
-      : data.bars.reduce<(typeof data.bars)[number] | null>(
-          (best, b) =>
-            !best || Math.abs(b.t + 43_200_000 - hover) < Math.abs(best.t + 43_200_000 - hover)
-              ? b
-              : best,
-          null,
-        )
+  // The day under a point: only a day with a bar, so the projected future picks nothing.
+  const dayAt = (t: number | null) =>
+    t === null ? null : (data.bars.find((b) => t >= b.t && t < b.t + 86_400_000) ?? null)
+  const timeAt = (svg: SVGSVGElement, clientX: number) => {
+    const px = clientX - svg.getBoundingClientRect().left - MARGIN.left
+    return px >= 0 && px <= innerW ? x.invert(px).getTime() : null
+  }
+  const hovered = dayAt(hover)
+  const dimOthers = data.bars.some((b) => b.day === pickedDay)
   const atHover = (pts: BurnChartPoint[]) => {
     if (hovered === null) return null
     const t = hovered.t + 86_400_000
-    const p = pts.findLast((q) => q.t <= t)
-    return p ?? null
+    // A day's closing point: at a reset the old period's close comes before the new period's $0 at the same instant.
+    return pts.find((q) => q.t === t) ?? pts.findLast((q) => q.t <= t) ?? null
   }
 
   const actualAt = atHover(data.actual)
@@ -213,14 +214,12 @@ function Plot({
       width={width}
       height={height}
       className="overflow-visible"
-      onPointerMove={(e) => {
-        const box = e.currentTarget.getBoundingClientRect()
-        const px = e.clientX - box.left - MARGIN.left
-        setHover(px >= 0 && px <= innerW ? x.invert(px).getTime() : null)
-      }}
+      onPointerMove={(e) => setHover(timeAt(e.currentTarget, e.clientX))}
       onPointerLeave={() => setHover(null)}
-      onClick={() => {
-        if (hovered && onPickDay) onPickDay(hovered.day)
+      // From the click itself: a touch tap has no pointermove, and pointerleave clears the hover first.
+      onClick={(e) => {
+        const day = dayAt(timeAt(e.currentTarget, e.clientX))
+        if (day && onPickDay) onPickDay(day.day)
       }}
     >
       <HatchPattern id={hatch} stroke="var(--destructive)" />
@@ -298,15 +297,13 @@ function Plot({
                   x2={X(l.to)}
                   y1={y(l.v)}
                   y2={y(l.v)}
-                  stroke={data.stopAt !== null ? 'var(--destructive)' : 'var(--foreground)'}
+                  stroke={l.stops ? 'var(--destructive)' : 'var(--foreground)'}
                   strokeWidth={1.5}
                 />
                 {/* Inside the plot, above the line, right-aligned (as ReferenceLine): never clipped by the margin. */}
                 {i === data.limits.length - 1 ? (
                   <Label x={X(l.to) - 2} y={y(l.v) - 9} anchor="end">
-                    {data.stopAt !== null
-                      ? `${formatMoney(l.v)} · ${labels.stop}`
-                      : formatMoney(l.v)}
+                    {l.stops ? `${formatMoney(l.v)} · ${labels.stop}` : formatMoney(l.v)}
                   </Label>
                 ) : null}
               </g>
@@ -330,21 +327,28 @@ function Plot({
             ) : null}
           </g>
         ))}
-        {data.stopAt !== null && data.mode === 'down' ? (
-          <g aria-hidden>
-            <line
-              x1={0}
-              x2={innerW}
-              y1={y(data.stopAt)}
-              y2={y(data.stopAt)}
-              stroke="var(--destructive)"
-              strokeWidth={1.5}
-            />
-            <Label x={innerW + 4} y={y(data.stopAt)} anchor="start">
-              {labels.stop}
-            </Label>
-          </g>
-        ) : null}
+        {/* Burndown: calls stop at $0 left, only across the steps that stopped them. */}
+        {data.mode === 'down'
+          ? data.limits.map((l, i) =>
+              l.stops ? (
+                <g key={l.from} aria-hidden>
+                  <line
+                    x1={X(l.from)}
+                    x2={X(l.to)}
+                    y1={zeroY}
+                    y2={zeroY}
+                    stroke="var(--destructive)"
+                    strokeWidth={1.5}
+                  />
+                  {i === data.limits.length - 1 ? (
+                    <Label x={X(l.to) + 4} y={zeroY} anchor="start">
+                      {labels.stop}
+                    </Label>
+                  ) : null}
+                </g>
+              ) : null,
+            )
+          : null}
         {preview?.length ? (
           <LinePath
             data={preview}
@@ -406,9 +410,10 @@ function Plot({
               stroke="var(--foreground)"
               strokeWidth={1.2}
             />
+            {/* The count of merged events, as the hub's rail shows it ("+3" for three; plan F1). */}
             {m.labels.length > 1 ? (
               <Label x={4} y={-19} anchor="middle">
-                {`+${m.labels.length - 1}`}
+                {`+${m.labels.length}`}
               </Label>
             ) : null}
           </g>
@@ -427,7 +432,7 @@ function Plot({
                   width={dayW}
                   height={Math.max(0, h)}
                   fill={ACTUAL.fill}
-                  opacity={pickedDay && !picked ? 0.45 : 1}
+                  opacity={dimOthers && !picked ? 0.45 : 1}
                 />
                 {h > 0 ? (
                   <rect

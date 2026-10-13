@@ -60,3 +60,13 @@ describe('event flags (design 7B)', () => {
     expect(eventLabel(unknown)).toBeNull()
   })
 })
+
+describe('unpriced calls (plan F2)', () => {
+  it('the projected run-out reads "or earlier"', () => {
+    const m = chartModel(read('unit', I.platform), 'down')
+    expect(m.floor).toBe(true)
+    expect(burnChartLabels(m, { stops: false, summary: '' }).runOut).toBe(
+      copy.burnEstimatedFloor('Oct 22'),
+    )
+  })
+})

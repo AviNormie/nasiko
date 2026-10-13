@@ -71,14 +71,16 @@ export function burnChartLabels(
     stop: copy.burnStop,
     over:
       m.mode === 'down' && m.limits.length && last && last.v < 0
-        ? copy.burnOver(fmtMoney(-last.v))
+        ? (m.floor ? copy.burnOverFloor : copy.burnOver)(fmtMoney(-last.v))
         : null,
     runOut: ro
       ? ro.observed
         ? (opts.stops ? copy.burnRanOut : copy.burnExceeded)(
             fmtShortDay(new Date(ro.at).toISOString()),
           )
-        : copy.burnEstimated(fmtShortDay(new Date(ro.at).toISOString()))
+        : (m.floor ? copy.burnEstimatedFloor : copy.burnEstimated)(
+            fmtShortDay(new Date(ro.at).toISOString()),
+          )
       : null,
     preview: copy.burnPreview,
     bars: copy.burnBars,

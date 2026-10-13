@@ -91,6 +91,14 @@ export function projection(b: Burn): BurnProjection | null {
   return { ...p, band }
 }
 
+/**
+ * The projection the page shows: none for a stopped budget, whose calls are refused, so nothing more is spent until the
+ * reset (ledger #67). The levers that resume calls (raise the limit) still use `projection`.
+ */
+function shownProjection(b: Burn): BurnProjection | null {
+  return b.budget?.stopped ? null : projection(b)
+}
+
 // ─── run-out (§5) ───────────────────────────────────────────────────────────
 
 export type RunOut = { at: number; observed: true } | { at: number; observed: false } | null
@@ -116,7 +124,9 @@ export function runOut(b: Burn, p: BurnProjection | null = projection(b)): RunOu
     let cum = 0
     for (const d of periodDays(b)) {
       cum += d.cost_usd
-      if (cum >= limit) return { at: parseDay(d.date), observed: true }
+      // Against the limit in force that day: a limit lowered today ran out today, not when spend first passed it.
+      const dayLimit = limitAt(b, parseDay(d.date) + DAY_MS - 1)
+      if (dayLimit !== null && cum >= dayLimit) return { at: parseDay(d.date), observed: true }
     }
     return { at: asOf, observed: true }
   }
@@ -130,7 +140,7 @@ export interface Figures {
   floor: boolean
   today: { used: number; avg7: number | null }
   /** Monday to now; compared with last week's same complete weekdays (null on a Monday or without data). */
-  week: { used: number; sameDaysLastWeek: number | null; usedCompleteDays: number }
+  week: { used: number | null; sameDaysLastWeek: number | null; usedCompleteDays: number | null }
   periodToDate: { used: number; pct: number | null }
   projected: { low: number; high: number; lowPct: number | null; highPct: number | null } | null
   quarter: QuarterProjection | null
@@ -144,7 +154,7 @@ export function figures(b: Burn, opts: { quarter?: QuarterInput | null } = {}): 
   const asOf = Date.parse(b.as_of)
   const costs = dayCosts(b)
   const today = dayOf(asOf)
-  const p = projection(b)
+  const p = shownProjection(b)
   const limit = limitAt(b, asOf)
   const trailing: number[] = []
   for (let d = dayStart(asOf) - DAY_MS; trailing.length < 7; d -= DAY_MS) {
@@ -158,8 +168,11 @@ export function figures(b: Burn, opts: { quarter?: QuarterInput | null } = {}): 
   let completeThisWeek = 0
   let lastWeek = 0
   let lastWeekKnown = true
+  let weekKnown = true
   for (let d = monday; d <= dayStart(asOf); d += DAY_MS) {
-    week += costs.get(dayOf(d)) ?? 0
+    const c = costs.get(dayOf(d))
+    if (c === undefined) weekKnown = false
+    week += c ?? 0
     if (d < dayStart(asOf)) {
       completeThisWeek += costs.get(dayOf(d)) ?? 0
       const prev = costs.get(dayOf(d - 7 * DAY_MS))
@@ -172,8 +185,8 @@ export function figures(b: Burn, opts: { quarter?: QuarterInput | null } = {}): 
     floor: b.unpriced_calls > 0,
     today: { used: costs.get(today) ?? 0, avg7: trailing.length >= 3 ? mean(trailing) : null },
     week: {
-      used: week,
-      usedCompleteDays: completeThisWeek,
+      used: weekKnown ? week : null,
+      usedCompleteDays: weekKnown ? completeThisWeek : null,
       sameDaysLastWeek: monday < dayStart(asOf) && lastWeekKnown ? lastWeek : null,
     },
     periodToDate: { used: b.used_usd, pct: limit ? (b.used_usd / limit) * 100 : null },
@@ -261,7 +274,8 @@ export interface Spike {
   cost: number
   /** The trailing pace it's compared with, and the ratio. */
   pace: number
-  ratio: number
+  /** null over a zero pace (no "Infinity×"). */
+  ratio: number | null
 }
 
 /** Days in `[from, as_of]` over 2× the trailing 7 complete days' pace and at least $1; the first 7 days have none. */
@@ -283,7 +297,7 @@ export function spikes(b: Burn): Spike[] {
         date: d.date,
         cost: d.cost_usd,
         pace,
-        ratio: pace > 0 ? d.cost_usd / pace : Infinity,
+        ratio: pace > 0 ? d.cost_usd / pace : null,
       })
   }
   return out
@@ -380,13 +394,14 @@ export function cheaperModelEstimate(
  */
 export function stopEstimate(b: Burn, p: BurnProjection | null = projection(b)): number | null {
   const limit = limitAt(b, Date.parse(b.as_of))
-  if (!p || limit === null) return null
-  return Math.max(0, p.band.high - Math.max(limit, b.used_usd))
+  // Not offered when the budget already stops (plan F4).
+  if (!p || limit === null || b.budget?.action === 'stop') return null
+  return Math.max(0, p.projected - Math.max(limit, b.used_usd))
 }
 
 /** Raise the limit: the limit that lands at 100% of the projection, rounded up to whole dollars. */
 export function raiseTo(p: BurnProjection | null): number | null {
-  return p ? Math.ceil(p.band.high) : null
+  return p ? Math.ceil(p.projected) : null
 }
 
 // ─── the chart model (F1) ───────────────────────────────────────────────────
@@ -410,11 +425,12 @@ export interface ChartModel {
   /** From as_of to the reset: low and high edges, in the mode's units. */
   band: { t: number; low: number; high: number }[]
   /** Limit steps (up), or the stop/zero line (down); every version and period start is a step. */
-  limits: { from: number; to: number; v: number }[]
+  /** Unpriced calls this period: spend is a floor, so the run-out reads "or earlier" (plan F2). */
+  floor: boolean
+  /** Limit steps; `stops` when that version stopped calls (the stop line). In burndown, `v` is 0. */
+  limits: { from: number; to: number; v: number; stops: boolean }[]
   /** Threshold lines per step, in the mode's units. */
   thresholds: { from: number; to: number; v: number; percent: number }[]
-  /** The y value calls stop at: the limit (up) or 0 (down); null without a budget or when it only alerts. */
-  stopAt: number | null
   runOut: RunOut
   /** Events merged per UTC day (plan F1, hub `timeline.ts` rule). */
   markers: { day: string; t: number; events: BudgetEvent[] }[]
@@ -431,8 +447,14 @@ export interface ChartModel {
  */
 export function chartModel(b: Burn, mode: BurnMode): ChartModel {
   const asOf = Date.parse(b.as_of)
-  const from = parseDay(b.from)
-  const end = b.resets_at ? Date.parse(b.resets_at) : asOf
+  // A session has no reset: it runs from its start to its end (or now), by turn (plan F9).
+  const session = b.resets_at === null && b.session ? b.session : null
+  const from = session ? Date.parse(session.started_at) : parseDay(b.from)
+  const end = b.resets_at
+    ? Date.parse(b.resets_at)
+    : session?.ended_at
+      ? Math.min(Date.parse(session.ended_at), asOf)
+      : asOf
   const periods = b.periods.map((p) => ({
     start: Date.parse(p.period_start),
     end: p.resets_at ? Date.parse(p.resets_at) : end,
@@ -443,49 +465,78 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
   const lim = (t: number) => limitAt(b, t) ?? 0
   const show = (t: number, used: number) => (mode === 'up' || !hasBudget ? used : lim(t) - used)
 
-  // Actual: cumulative within each period, at each day's end, then at as_of.
-  const actual: ChartPoint[] = [{ t: Math.max(from, periodOf(from).start), v: show(from, 0) }]
+  // Spend, cumulative within each period: at each day's end (then as_of), or after each turn for a session. `limT` is
+  // when the limit is read: a closing point takes the limit of the interval it closes, so a reset never applies the
+  // new period's limit to the old period's spend.
+  const spend: { t: number; v: number; limT: number }[] = [
+    { t: Math.max(from, periodOf(from).start), v: 0, limT: from },
+  ]
   let cum = 0
-  let current = periodOf(from).start
-  for (const d of b.daily) {
-    const t = parseDay(d.date)
-    const p = periodOf(t)
-    if (p.start !== current) {
-      current = p.start
-      cum = 0
-      actual.push({ t: p.start, v: show(p.start, 0) })
+  if (session) {
+    for (const turn of b.turns ?? []) {
+      cum += turn.cost_usd
+      const t = Date.parse(turn.at)
+      spend.push({ t, v: cum, limT: t })
     }
-    cum += d.cost_usd
-    const at = Math.min(t + DAY_MS, asOf)
-    actual.push({ t: at, v: show(at, cum) })
+  } else {
+    let current = periodOf(from).start
+    for (const d of b.daily) {
+      const t = parseDay(d.date)
+      const p = periodOf(t)
+      if (p.start !== current) {
+        current = p.start
+        cum = 0
+        spend.push({ t: p.start, v: 0, limT: p.start })
+      }
+      cum += d.cost_usd
+      const at = Math.min(t + DAY_MS, asOf)
+      spend.push({ t: at, v: cum, limT: at - 1 })
+    }
   }
-
-  const pace: ChartPoint[][] = hasBudget
-    ? periods.map((p) =>
-        mode === 'down'
-          ? [
-              { t: p.start, v: lim(p.start) },
-              { t: p.end, v: 0 },
-            ]
-          : [
-              { t: p.start, v: 0 },
-              { t: p.end, v: lim(p.end - 1) },
-            ],
-      )
-    : []
-
-  const proj = projection(b)
-  const band: ChartModel['band'] = []
-  // A stopped budget's calls are refused: its spend can't grow until the reset, so there is nothing to project.
-  if (proj && !b.budget?.stopped) {
-    for (let t = asOf; t <= end; t += DAY_MS / 4) {
-      const dt = (Math.min(t, end) - asOf) / DAY_MS
-      const lo = b.used_usd + proj.band.lowRate * dt
-      const hi = b.used_usd + proj.band.highRate * dt
-      const a = show(t, lo)
-      const z = show(t, hi)
-      band.push({ t: Math.min(t, end), low: Math.min(a, z), high: Math.max(a, z) })
+  // Burndown steps where the limit changes inside a period: what's left jumps at that moment (spend read linearly
+  // within its day), never drifting across the day.
+  if (mode === 'down' && hasBudget && !session) {
+    const starts = new Set(periods.map((p) => p.start))
+    for (const step of (b.budget?.limits ?? []).slice(1)) {
+      const t = Date.parse(step.from)
+      if (t <= from || t >= asOf || starts.has(t)) continue
+      const i = spend.findIndex((q) => q.t > t)
+      const a = spend[i - 1]
+      const z = spend[i]
+      if (!a || !z) continue
+      const v = a.v + ((z.v - a.v) * (t - a.t)) / (z.t - a.t)
+      spend.splice(i, 0, { t, v, limT: t - 1 }, { t, v, limT: t })
     }
+  }
+  const actual: ChartPoint[] = spend.map((q) => ({ t: q.t, v: show(q.limT, q.v) }))
+
+  const pace: ChartPoint[][] =
+    hasBudget && !session
+      ? periods.map((p) =>
+          mode === 'down'
+            ? [
+                { t: p.start, v: lim(p.start) },
+                { t: p.end, v: 0 },
+              ]
+            : [
+                { t: p.start, v: 0 },
+                { t: p.end, v: lim(p.end - 1) },
+              ],
+        )
+      : []
+
+  const proj = shownProjection(b)
+  const band: ChartModel['band'] = []
+  if (proj) {
+    const at = (t: number) => {
+      const dt = (t - asOf) / DAY_MS
+      const a = show(t, b.used_usd + proj.band.lowRate * dt)
+      const z = show(t, b.used_usd + proj.band.highRate * dt)
+      band.push({ t, low: Math.min(a, z), high: Math.max(a, z) })
+    }
+    for (let t = asOf; t < end; t += DAY_MS / 4) at(t)
+    // Always end at the reset, wherever as_of falls in its 6-hour step.
+    at(end)
   }
 
   const steps = (b.budget?.limits ?? []).map((s) => ({
@@ -493,8 +544,15 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
     to: s.to ? Date.parse(s.to) : end,
     limit: s.limit_usd,
     thresholds: s.thresholds,
+    stops: s.action === 'stop',
   }))
-  const limits = steps.map((s) => ({ from: s.from, to: s.to, v: mode === 'up' ? s.limit : 0 }))
+  // Each step carries its own action: calls stopped only while a stop version was in force (design 1C).
+  const limits = steps.map((s) => ({
+    from: s.from,
+    to: s.to,
+    v: mode === 'up' ? s.limit : 0,
+    stops: s.stops,
+  }))
   const thresholds = steps.flatMap((s) =>
     s.thresholds
       .filter((p) => p < 100)
@@ -530,6 +588,7 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
   ]
   return {
     mode,
+    floor: b.unpriced_calls > 0,
     start: from,
     end,
     actual,
@@ -537,7 +596,6 @@ export function chartModel(b: Burn, mode: BurnMode): ChartModel {
     band,
     limits: hasBudget ? limits : [],
     thresholds: hasBudget ? thresholds : [],
-    stopAt: b.budget?.action === 'stop' ? (mode === 'up' ? lim(asOf) : 0) : null,
     runOut: runOut(b, proj),
     markers: [...markers]
       .sort(([x], [y]) => x.localeCompare(y))
@@ -582,7 +640,7 @@ export interface TableRow {
 /** One row per day of the chart, history then the projection's days, the bounds' wording in the column headers. */
 export function tableRows(b: Burn): TableRow[] {
   const asOf = Date.parse(b.as_of)
-  const proj = projection(b)
+  const proj = shownProjection(b)
   const spikeDays = new Set(spikes(b).map((s) => s.date))
   const rows: TableRow[] = []
   let cum = 0
@@ -597,7 +655,8 @@ export function tableRows(b: Burn): TableRow[] {
       cum = 0
     }
     cum += d.cost_usd
-    const limit = limitAt(b, t)
+    // The limit at the day's end, as the chart's points are (a raise during the day counts that day).
+    const limit = limitAt(b, t + DAY_MS - 1)
     const ps = p ? Date.parse(p.period_start) : t
     const pe = p?.resets_at ? Date.parse(p.resets_at) : t + DAY_MS
     rows.push({
