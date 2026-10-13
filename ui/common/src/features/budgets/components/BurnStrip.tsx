@@ -4,6 +4,7 @@
  * a floor ("≥") and the allowance a ceiling ("at most"). A figure the read can't support says why, never "$0".
  */
 import { Delta } from '@/components/shared/delta'
+import { Button } from '@/components/ui/button'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { fmtMoney, fmtMoneyFloor, fmtUtcTime } from '@/lib/format'
 import { currentLimit, figures, quarterInput } from '../burn'
@@ -19,6 +20,8 @@ export function BurnStrip({
   kind,
   quarterRead,
   showQuarter = true,
+  preview,
+  onResetPreview,
 }: {
   burn: Burn
   kind: 'month' | 'quarter'
@@ -26,6 +29,9 @@ export function BurnStrip({
   quarterRead?: Burn | null
   /** The quarter figure can be read at all (not on an R-L10 server, which has this month only). */
   showQuarter?: boolean
+  /** A lever or what-if preview (F4: "on the chart and in the strip"), with Reset. */
+  preview?: { projected: number; limit: number } | null
+  onResetPreview?: () => void
 }) {
   const quarter = kind === 'month' && quarterRead ? quarterInput(quarterRead) : null
   const f = figures(burn, { quarter })
@@ -91,6 +97,24 @@ export function BurnStrip({
                   )
                 : null}
           </span>
+          {preview ? (
+            <span className="flex flex-wrap items-center gap-x-2 text-xs text-primary-text">
+              {copy.previewNotApplied(
+                fmtMoney(preview.projected),
+                `${Math.round((preview.projected / preview.limit) * 100)}%`,
+              )}
+              {onResetPreview ? (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={onResetPreview}
+                >
+                  {copy.previewReset}
+                </Button>
+              ) : null}
+            </span>
+          ) : null}
         </KpiTile>
         {kind === 'month' && burn.budget && showQuarter ? (
           <KpiTile

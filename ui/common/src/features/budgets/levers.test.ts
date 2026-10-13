@@ -67,7 +67,7 @@ describe('Pricing Engine: projected past its $100 (186%)', () => {
     // gpt-4o → gpt-4o-mini on 6.48M in / 6.48M out over 13.5 days, 17.5 days left.
     expect(model.to.model).toBe('gpt-4o-mini')
     expect(model.estimate).toBeCloseTo((6.48 * (2.35 + 9.4) * 17.5) / 13.5, 6)
-    expect(l.reduce[1]).toMatchObject({ kind: 'stop', estimate: 86, immediate: false })
+    expect(l.reduce[1]).toMatchObject({ kind: 'stop', estimate: 86, immediate: false, limit: 100 })
     // 20% of its $6 a day routed pace for 17.5 days.
     expect(l.reduce[2]).toMatchObject({ kind: 'compression', basisAgents: 3 })
     expect(l.reduce[2]!.estimate).toBeCloseTo(6 * 17.5 * 0.2, 6)
@@ -111,7 +111,13 @@ describe('a stop budget that ran out', () => {
 describe('previews', () => {
   it('stop: climbs to the limit at the run-out, then flat to the reset', () => {
     const b = read('agent', I.pricing)
-    const p = leverPreview(b, 'up', { kind: 'stop', id: 'stop', estimate: 86, immediate: false })!
+    const p = leverPreview(b, 'up', {
+      kind: 'stop',
+      id: 'stop',
+      estimate: 86,
+      immediate: false,
+      limit: 100,
+    })!
     expect(p.projected).toBe(100)
     expect(p.line.at(-1)).toEqual({ t: Date.UTC(2026, 10, 1), v: 100 })
     expect(p.line[1]).toEqual({ t: Date.UTC(2026, 9, 17, 16), v: 100 })

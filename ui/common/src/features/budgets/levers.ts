@@ -46,7 +46,7 @@ export interface LeverInput {
   prices: readonly Price[] | null
 }
 
-export type ReduceLever =
+type ReduceLever =
   | {
       kind: 'compression'
       id: string
@@ -55,9 +55,9 @@ export type ReduceLever =
       basisAgents: number | null
     }
   | { kind: 'model'; id: string; agent: LeverAgent; from: Price; to: Price; estimate: number }
-  | { kind: 'stop'; id: string; estimate: number | null; immediate: boolean }
+  | { kind: 'stop'; id: string; estimate: number | null; immediate: boolean; limit: number }
 
-export interface RaiseLever {
+interface RaiseLever {
   kind: 'raise'
   id: string
   limit: number
@@ -115,6 +115,7 @@ export function leverList(input: LeverInput): LeverList {
       id: 'stop',
       estimate: stopEstimate(b, p),
       immediate: b.used_usd >= limit,
+      limit,
     })
   }
   reduce.sort((x, y) => (y.estimate ?? -1) - (x.estimate ?? -1))

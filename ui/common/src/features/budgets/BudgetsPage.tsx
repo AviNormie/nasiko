@@ -4,7 +4,7 @@
  * item is hidden there (`_app`). Every read is the scope's own (§4: never a wider series filtered here).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Announcer } from '@/components/shared/announcer'
 import { useAnnounce } from '@/components/shared/announce'
 import { PageHeader } from '@/components/shared/page-header'
@@ -35,13 +35,14 @@ import {
   type ScopeRef,
 } from './api'
 import { capabilitiesQuery, has, mayHave, type Availability, type Feature } from './availability'
-import { previewLine, projection, quarterOf, spikes, type BurnMode } from './burn'
+import { currentLimit, previewLine, projection, quarterOf, spikes, type BurnMode } from './burn'
 import { rememberBurnMode, storedBurnMode } from './burnMode'
 import { BurnCard } from './components/BurnCard'
 import { BurnStrip } from './components/BurnStrip'
 import { AtRisk } from './components/AtRisk'
 import { BudgetSheet, type BudgetMode } from './components/BudgetSheet'
 import { Contributors } from './components/Contributors'
+import { Levers } from './components/Levers'
 import { RowActions } from './components/RowActions'
 import { DayPanel } from './components/DayPanel'
 import { ScopeAlerts } from './components/ScopeAlerts'
@@ -63,7 +64,9 @@ import {
   pickDimension,
   shareLine,
 } from './causes'
+import { leverPreview } from './levers'
 import { burnSentence } from './sentence'
+import { useLevers } from './useLevers'
 import { WHAT_IF_CLOSED, whatIfInputs, type WhatIfState } from './whatIf'
 import type { Budget, Burn } from './types'
 
@@ -264,6 +267,8 @@ function Body({
   const dimensions = dimensionsFor(ref.scope)
   const by = pickDimension(ref.scope, search.by)
   const can = (f: Feature) => mayHave(caps, f)
+  // An R-L10 server (the fallback) has neither the quarter read, 1.0's alert fields nor the levers' reads.
+  const rl10 = caps === RL10_ONLY
   const breakdown = useBreakdown(ref, { by, period: kind, top: 5 }, can('breakdown'))
   const picked = search.contributor ?? null
   const contributor = useBurn(
@@ -273,45 +278,61 @@ function Body({
   )
   const shareRead = picked && contributor.data?.contributor ? contributor.data : null
 
-  // What-if (F6): one preview at a time, so starting it clears a picked contributor and picking one closes it (4A).
+  // Previews (F4, F6, design 4A): one at a time across levers, what-if and a picked contributor. Starting one clears
+  // the others; a contributor brought back by the URL (Back) wins over both, whatever moved it (#71).
   const announce = useAnnounce()
+  const shownMode: BurnMode = burn.budget ? mode : 'up'
   const [whatIfState, setWhatIfState] = useState<WhatIfState>(WHAT_IF_CLOSED)
-  const preview = whatIfInputs(burn, whatIfState)
+  const [leverId, setLeverId] = useState<string | null>(null)
+  const whatIf = whatIfInputs(burn, whatIfState)
   const lastDay = burn.resets_at ? fmtShortDay(Date.parse(burn.resets_at) - 86_400_000) : ''
   const onWhatIf = (next: WhatIfState) => {
     setWhatIfState(next)
-    if (whatIfInputs(burn, next) && picked) setSearch({ contributor: undefined }, { replace: true })
+    if (!whatIfInputs(burn, next)) return
+    setLeverId(null)
+    if (picked) setSearch({ contributor: undefined }, { replace: true })
   }
-  // Announced once the inputs rest, not per keystroke or slider step (ledger #71).
+  const levers = useLevers(burn, ref, kind, caps, !rl10)
+  const leverById = (id: string | null) =>
+    levers.list.state === 'levers'
+      ? ([...levers.list.reduce, ...levers.list.adjust].find((l) => l.id === id) ?? null)
+      : null
+  const onLeverPreview = (id: string | null) => {
+    setLeverId(id)
+    if (!id) return
+    setWhatIfState((w) => (w.open ? { ...w, limit: '', pace: 0 } : w))
+    if (picked) setSearch({ contributor: undefined }, { replace: true })
+  }
   const p = projection(burn)
-  const previewMessage =
-    preview && p
-      ? copy.whatIfAnnounce(
-          fmtMoney(burn.used_usd + p.pace * (1 + preview.paceChange) * p.daysLeft),
-          lastDay,
-        )
-      : ''
+  const lever = picked ? null : leverById(leverId)
+  const leverShown = lever ? leverPreview(burn, shownMode, lever) : null
+  const whatIfLine =
+    !picked && !lever && whatIf && p
+      ? {
+          line: previewLine(
+            burn,
+            shownMode,
+            p.pace * (1 + whatIf.paceChange),
+            whatIf.limit ?? undefined,
+          ),
+          projected: burn.used_usd + p.pace * (1 + whatIf.paceChange) * p.daysLeft,
+          limit: whatIf.limit ?? currentLimit(burn) ?? 0,
+        }
+      : null
+  const shown = leverShown ?? whatIfLine
+  // Announced once the inputs rest, not per keystroke or slider step (ledger #71).
+  const previewMessage = shown ? copy.whatIfAnnounce(fmtMoney(shown.projected), lastDay) : ''
   useEffect(() => {
     if (!previewMessage) return
     const t = setTimeout(() => announce(previewMessage), ANNOUNCE_REST_MS)
     return () => clearTimeout(t)
   }, [previewMessage, announce])
-  // One preview at a time, whatever moved the URL (Back included): a picked contributor wins (#71).
-  const previewPoints =
-    preview && !picked
-      ? previewLine(
-          burn,
-          burn.budget ? mode : 'up',
-          (projection(burn)?.pace ?? 0) * (1 + preview.paceChange),
-          preview.limit ?? undefined,
-        )
-      : null
+  const previewPoints = shown?.line ?? null
+  const leversRef = useRef<HTMLHeadingElement>(null)
 
   // At risk, Unbudgeted and the alerts (F5, F7): the scope's own lists.
   const atRisk = useAtRisk(ref, can('at_risk'))
   const unbudgeted = useUnbudgeted(ref, kind, can('unbudgeted'))
-  // An R-L10 server (the fallback) has neither the quarter read nor 1.0's alert fields.
-  const rl10 = caps === RL10_ONLY
   const alerts = useScopeAlerts(ref, can('budgets') && !rl10)
   const own = useBudgetV1(burn.budget?.id ?? null, true)
   const limitsInside =
@@ -378,7 +399,18 @@ function Body({
       ) : null}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-lead">{sentence}</h2>
-        {writable ? (
+        {levers.list.state === 'levers' ? (
+          // F12: projected over → one action, to the levers.
+          <Button
+            size="sm"
+            onClick={() => {
+              leversRef.current?.scrollIntoView({ block: 'start' })
+              leversRef.current?.focus()
+            }}
+          >
+            {copy.reviewActions}
+          </Button>
+        ) : writable ? (
           <Button size="sm" variant={burn.budget ? 'outline' : 'default'} onClick={() => editOwn()}>
             {burn.budget
               ? copy.editBudget
@@ -448,20 +480,41 @@ function Body({
       {shareRead ? (
         <ShareStrip scope={burn} read={shareRead} agentId={by === 'agent' ? picked : null} />
       ) : (
-        <BurnStrip burn={burn} kind={words} quarterRead={quarterFrom} showQuarter={!rl10} />
+        <BurnStrip
+          burn={burn}
+          kind={words}
+          quarterRead={quarterFrom}
+          showQuarter={!rl10}
+          preview={shown ? { projected: shown.projected, limit: shown.limit } : null}
+          onResetPreview={() => {
+            setLeverId(null)
+            setWhatIfState((w) => (w.open ? { ...w, limit: '', pace: 0 } : w))
+          }}
+        />
       )}
-      <WhatChanged
-        spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}
-        changes={changes.data}
-        error={changes.error}
-        pending={changes.isPending && changes.fetchStatus !== 'idle'}
-        missing={!can('changes')}
-        noWeek={noWeek}
-        onRetry={() => void changes.refetch()}
-        by={by}
-        onPickDay={pickDay}
-        onOwner={onOwner}
-      />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Levers
+          list={levers.list}
+          loading={levers.loading}
+          rest={restOf(burn)}
+          period={words}
+          previewing={lever ? lever.id : null}
+          onPreview={onLeverPreview}
+          titleRef={leversRef}
+        />
+        <WhatChanged
+          spikes={spikes(burn).filter((x) => x.date >= burn.period_start.slice(0, 10))}
+          changes={changes.data}
+          error={changes.error}
+          pending={changes.isPending && changes.fetchStatus !== 'idle'}
+          missing={!can('changes')}
+          noWeek={noWeek}
+          onRetry={() => void changes.refetch()}
+          by={by}
+          onPickDay={pickDay}
+          onOwner={onOwner}
+        />
+      </div>
       <AtRisk
         rows={atRisk.data?.rows}
         partial={!!atRisk.data?.partial}
@@ -588,4 +641,12 @@ function useFallbackBurn(enabled: boolean, self: string) {
     error: list.error ?? status.error,
     retry: () => void (list.isError ? list.refetch() : status.refetch()),
   }
+}
+
+/** "October" for a month budget, "the quarter" otherwise: what the lever estimates assume follows the last 7 days. */
+function restOf(b: Burn): string {
+  if (b.period !== 'month' || !b.resets_at) return 'the period'
+  return new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' }).format(
+    Date.parse(b.resets_at) - 86_400_000,
+  )
 }
