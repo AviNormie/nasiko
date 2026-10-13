@@ -9,6 +9,7 @@ pub mod admin;
 pub mod admission;
 pub mod agent_lifecycle;
 pub mod agent_proxy;
+pub mod agent_scaling;
 pub mod agent_state;
 pub mod agents;
 pub mod auth;

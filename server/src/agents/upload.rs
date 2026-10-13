@@ -940,6 +940,8 @@ pub async fn execute_upload_and_deploy(
 ) {
     let db = &state.db;
     let runtime = &state.runtime;
+    // Before the deploy env, which may reset the agent's state mode for the new image.
+    let scaling = state.agent_scaling.begin_deploy(agent_id).await;
     set_build_status(db, build_id, BuildStatus::Building).await;
     set_upload_status(db, &upload_id, &name, owner_id, "initiated", None, None).await;
 
@@ -986,8 +988,17 @@ pub async fn execute_upload_and_deploy(
         )
         .await;
 
+        // Read before the deploy env is built: a failed read must not rotate the running
+        // agent's credentials or reset its state mode for a deploy that never happens.
+        let replica_bounds = scaling
+            .bounds()
+            .await
+            .map_err(|e| format!("read replica bounds: {e}"))?;
         // Minted only now that the image exists: this rotates the agent's gateway and state
         // credentials, and a build that failed must leave the running pods' credentials alone.
+        // Nothing below can fail before `scaling.deploy` (spec building and the pull
+        // credential attach are infallible; the latter logs its errors), so the durable state
+        // mode the build above may have reset needs no restoring on an early exit.
         let mut env = crate::agents::deploy_env::build(
             state,
             agent_id,
@@ -1013,7 +1024,7 @@ pub async fn execute_upload_and_deploy(
             ports,
             env,
             &state.config.agent_default_memory,
-            state.config.agent_max_replicas,
+            replica_bounds,
             writable,
             writable_path.clone(),
             owner_id,
@@ -1026,7 +1037,7 @@ pub async fn execute_upload_and_deploy(
             agent_id,
         )
         .await;
-        let deploy_status = runtime
+        let deploy_status = scaling
             .deploy(&spec)
             .await
             .map_err(|e| format!("deploy: {e}"))?;
@@ -1194,6 +1205,8 @@ pub async fn execute_clone_and_deploy(
 ) {
     let db = &state.db;
     let runtime = &state.runtime;
+    // Before the deploy env, which may reset the agent's state mode for the new image.
+    let scaling = state.agent_scaling.begin_deploy(agent_id).await;
     let agent_image_registry = &state.config.agent_image_registry;
     set_build_status(db, build_id, BuildStatus::Building).await;
     set_upload_status(db, &upload_id, &name, owner_id, "initiated", None, None).await;
@@ -1319,8 +1332,17 @@ pub async fn execute_clone_and_deploy(
         )
         .await;
 
+        // Read before the deploy env is built: a failed read must not rotate the running
+        // agent's credentials or reset its state mode for a deploy that never happens.
+        let replica_bounds = scaling
+            .bounds()
+            .await
+            .map_err(|e| format!("BUILD_FAILED:read replica bounds: {e}"))?;
         // Minted only now that the image exists: this rotates the agent's gateway and state
         // credentials, and a clone or build that failed must leave the running pods alone.
+        // Nothing below can fail before `scaling.deploy` (spec building and the pull
+        // credential attach are infallible; the latter logs its errors), so the durable state
+        // mode the build above may have reset needs no restoring on an early exit.
         let mut env = crate::agents::deploy_env::build(
             state,
             agent_id,
@@ -1345,7 +1367,7 @@ pub async fn execute_clone_and_deploy(
             ports,
             env,
             &state.config.agent_default_memory,
-            state.config.agent_max_replicas,
+            replica_bounds,
             // GitHub-clone deploys don't expose a --writable flag yet.
             false,
             None,
@@ -1359,7 +1381,7 @@ pub async fn execute_clone_and_deploy(
             agent_id,
         )
         .await;
-        let deploy_status = runtime
+        let deploy_status = scaling
             .deploy(&spec)
             .await
             .map_err(|e| format!("BUILD_FAILED:deploy: {e}"))?;

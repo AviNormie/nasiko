@@ -20,6 +20,7 @@ use nasiko_runtime::{
 };
 use uuid::Uuid;
 
+use crate::agent_scaling::ReplicaBounds;
 use crate::state::AppState;
 
 pub use upload::UploadAndDeployResponse;
@@ -188,6 +189,13 @@ pub(crate) fn qualify_deploy_image(registry: &str, image: &str) -> String {
     }
 }
 
+/// Tells the agent which port to listen on (the Service targets the first port, and every
+/// in-tree agent honors `PORT`). An explicit `PORT` in `env` wins.
+pub(crate) fn set_port_env(env: &mut HashMap<String, String>, port: u16) {
+    env.entry("PORT".to_string())
+        .or_insert_with(|| port.to_string());
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_agent_spec(
     agent_id: Uuid,
@@ -196,7 +204,7 @@ pub(crate) fn build_agent_spec(
     ports: Vec<u16>,
     mut env: HashMap<String, String>,
     default_memory: &str,
-    max_replicas: u32,
+    bounds: ReplicaBounds,
     writable: bool,
     writable_path: Option<String>,
     owner_id: Uuid,
@@ -206,16 +214,21 @@ pub(crate) fn build_agent_spec(
     } else {
         ports
     };
-    env.entry("PORT".to_string())
-        .or_insert_with(|| ports[0].to_string());
+    set_port_env(&mut env, ports[0]);
+    // A writable agent's files sit on one volume, whatever bounds the caller computed.
+    let bounds = if writable {
+        ReplicaBounds::SINGLE
+    } else {
+        bounds
+    };
     DeploymentSpec {
         container_id: ContainerId::from_uuid(agent_id),
         name: name.to_string(),
         image: image.into(),
         ports,
         env_vars: env,
-        min_replicas: 1,
-        max_replicas,
+        min_replicas: bounds.min,
+        max_replicas: bounds.max,
         // No per-agent override exists yet — every caller wants the
         // platform's configured default (AGENT_DEFAULT_MEMORY, see
         // Config::agent_default_memory's doc comment). cpu_milli is
@@ -279,7 +292,7 @@ mod spec_tests {
             vec![],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -291,7 +304,7 @@ mod spec_tests {
             vec![],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -318,7 +331,7 @@ mod spec_tests {
             vec![],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -339,7 +352,7 @@ mod spec_tests {
             vec![9091],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -359,7 +372,7 @@ mod spec_tests {
             vec![],
             env,
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -377,7 +390,7 @@ mod spec_tests {
             vec![9091],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -395,7 +408,7 @@ mod spec_tests {
             vec![9091, 9092],
             HashMap::new(),
             "512Mi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),
@@ -405,25 +418,47 @@ mod spec_tests {
     }
 
     #[test]
-    fn spec_max_replicas_comes_from_parameter() {
-        let id = Uuid::new_v4();
+    fn spec_replicas_come_from_the_bounds() {
+        let bounds = ReplicaBounds {
+            min: 2,
+            max: 5,
+            target: None,
+        };
         let s = build_agent_spec(
-            id,
+            Uuid::new_v4(),
             "a",
             "img:1",
             vec![],
             HashMap::new(),
             "512Mi",
-            5,
+            bounds,
             false,
             None,
             Uuid::nil(),
         );
-        assert_eq!(
-            s.max_replicas, 5,
-            "max_replicas must match the parameter, not be hardcoded"
+        assert_eq!((s.min_replicas, s.max_replicas), (2, 5));
+    }
+
+    #[test]
+    fn a_writable_spec_runs_one_replica_whatever_the_bounds() {
+        let bounds = ReplicaBounds {
+            min: 2,
+            max: 5,
+            target: None,
+        };
+        let s = build_agent_spec(
+            Uuid::new_v4(),
+            "a",
+            "img:1",
+            vec![],
+            HashMap::new(),
+            "512Mi",
+            bounds,
+            true,
+            None,
+            Uuid::nil(),
         );
-        assert_eq!(s.min_replicas, 1);
+        assert_eq!((s.min_replicas, s.max_replicas), (1, 1));
     }
 
     #[test]
@@ -436,7 +471,7 @@ mod spec_tests {
             vec![],
             HashMap::new(),
             "2Gi",
-            1,
+            ReplicaBounds::SINGLE,
             false,
             None,
             Uuid::nil(),

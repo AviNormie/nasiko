@@ -392,6 +392,14 @@ pub(crate) async fn build_and_deploy(
             .execute(&state.db)
             .await;
 
+    let scaling = state.agent_scaling.begin_deploy(agent_id).await;
+    let replica_bounds = scaling.bounds().await.map_err(|e| {
+        tracing::error!(%e, %agent_id, "build_and_deploy: read replica bounds");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal error".to_string(),
+        )
+    })?;
     // Deploy container — UUID-keyed (see build_agent_spec) so import re-targets the
     // existing workload on re-import and can't collide cross-team on the name.
     // Seed from agent_env (per-agent secrets + platform OPENAI_*/PORT fallback) like
@@ -413,7 +421,7 @@ pub(crate) async fn build_and_deploy(
         vec![],
         env_vars,
         &state.config.agent_default_memory,
-        state.config.agent_max_replicas,
+        replica_bounds,
         // Catalog import has no --writable equivalent yet.
         false,
         None,
@@ -428,7 +436,7 @@ pub(crate) async fn build_and_deploy(
     )
     .await;
 
-    let container_name = match state.runtime.deploy(&spec).await {
+    let container_name = match scaling.deploy(&spec).await {
         Ok(status) => {
             // Sibling deploy paths (agents/upload.rs, agents/update.rs) all mark
             // the agent `running` with its resolved URL immediately after a
@@ -1109,6 +1117,14 @@ pub(crate) async fn import_registry(
             }
         };
 
+        let scaling = state.agent_scaling.begin_deploy(agent_id).await;
+        let replica_bounds = match scaling.bounds().await {
+            Ok(bounds) => bounds,
+            Err(e) => {
+                tracing::error!(%e, %agent_id, "import_registry: read replica bounds");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+            }
+        };
         // Deploy — UUID-keyed (see build_agent_spec).
         // Seed from agent_env (per-agent secrets + platform OPENAI_*/PORT fallback) like
         // every other deploy path (agents/upload.rs, deployments.rs::restart) — this path
@@ -1129,7 +1145,7 @@ pub(crate) async fn import_registry(
             vec![],
             env_vars,
             &state.config.agent_default_memory,
-            state.config.agent_max_replicas,
+            replica_bounds,
             // Catalog import has no --writable equivalent yet.
             false,
             None,
@@ -1144,7 +1160,7 @@ pub(crate) async fn import_registry(
         )
         .await;
 
-        let container_name = match state.runtime.deploy(&spec).await {
+        let container_name = match scaling.deploy(&spec).await {
             Ok(status) => {
                 let agent_url = crate::agents::resolve_agent_url(
                     &state.runtime,

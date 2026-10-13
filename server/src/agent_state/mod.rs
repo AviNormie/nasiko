@@ -72,6 +72,15 @@ pub async fn reset_state_mode(db: &sqlx::PgPool, agent_id: uuid::Uuid) -> Result
     repo::mark_memory(db, agent_id).await
 }
 
+/// Puts back an agent's durable `state_mode` after a deploy that reset it failed: the
+/// workload still running is the version that registered the task store.
+pub async fn restore_durable_state_mode(
+    db: &sqlx::PgPool,
+    agent_id: uuid::Uuid,
+) -> Result<(), sqlx::Error> {
+    repo::mark_durable(db, agent_id).await.map(|_| ())
+}
+
 use nasiko_config::Config;
 
 /// Warns, at startup, when agent state is configured to expire before a pending human-in-the-loop

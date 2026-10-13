@@ -60,7 +60,30 @@ pub struct FakeRuntime {
     /// `{subpath}/{rel_path}` so a test can prove the server scoped a read to
     /// the right agent rather than just echoing back what it asked for.
     workspace: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    /// What `supports_autoscaling` answers; off by default, like a runtime that
+    /// cannot autoscale.
+    autoscaling: std::sync::atomic::AtomicBool,
+    /// Every `apply_replica_bounds` call, in order: (container, min, max, target).
+    applied_bounds: std::sync::Mutex<Vec<AppliedBounds>>,
+    /// Every `deploy` call's replica bounds, in order: (container, min, max).
+    deployed_bounds: std::sync::Mutex<Vec<(ContainerId, u32, u32)>>,
+    /// When set, `build` waits for it to be notified before returning.
+    build_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// How many `build` calls have started.
+    builds_started: std::sync::atomic::AtomicUsize,
+    /// What `restarts_in_place` answers; off by default, like a runtime whose restart does not
+    /// apply a changed env.
+    restarts_in_place: std::sync::atomic::AtomicBool,
+    /// When set, `status` reports this state instead of `Running`.
+    reported_state: std::sync::Mutex<Option<RuntimeState>>,
+    /// Every `restart` call, in order.
+    restarted: std::sync::Mutex<Vec<ContainerId>>,
+    /// Every `refresh_secrets` call, in order: the container and the env it was given.
+    refreshed: std::sync::Mutex<Vec<(ContainerId, std::collections::HashMap<String, String>)>>,
 }
+
+/// One `apply_replica_bounds` call: (container, min, max, target).
+pub type AppliedBounds = (ContainerId, u32, u32, Option<u32>);
 
 impl FakeRuntime {
     /// Replace the instance set the next `list_instances` call reports.
@@ -119,6 +142,75 @@ impl FakeRuntime {
         self.fail_build
             .store(fail, std::sync::atomic::Ordering::SeqCst);
     }
+
+    /// Make `supports_autoscaling` answer `supported`.
+    #[allow(dead_code)]
+    pub fn set_supports_autoscaling(&self, supported: bool) {
+        self.autoscaling
+            .store(supported, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The `apply_replica_bounds` calls made so far.
+    #[allow(dead_code)]
+    pub fn applied_bounds(&self) -> Vec<AppliedBounds> {
+        self.applied_bounds.lock().unwrap().clone()
+    }
+
+    /// Make `restarts_in_place` answer `in_place`.
+    #[allow(dead_code)]
+    pub fn set_restarts_in_place(&self, in_place: bool) {
+        self.restarts_in_place
+            .store(in_place, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Make `status` report `state` (the agent is stopped, crashed, ...) instead of `Running`.
+    #[allow(dead_code)]
+    pub fn set_reported_state(&self, state: RuntimeState) {
+        *self.reported_state.lock().unwrap() = Some(state);
+    }
+
+    /// The containers `restart` was called on so far.
+    #[allow(dead_code)]
+    pub fn restarted(&self) -> Vec<ContainerId> {
+        self.restarted.lock().unwrap().clone()
+    }
+
+    /// The env most recently given to `refresh_secrets` for `container_id`, if any.
+    #[allow(dead_code)]
+    pub fn last_refreshed_env(
+        &self,
+        container_id: &ContainerId,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        self.refreshed
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(id, _)| id == container_id)
+            .map(|(_, env)| env.clone())
+    }
+
+    /// The (container, min, max) of every `deploy` so far.
+    #[allow(dead_code)]
+    pub fn deployed_bounds(&self) -> Vec<(ContainerId, u32, u32)> {
+        self.deployed_bounds.lock().unwrap().clone()
+    }
+
+    /// Makes every later `build` wait until the returned gate is notified
+    /// (`notify_one` per build), so a test can act between a job's start and its deploy.
+    #[allow(dead_code)]
+    pub fn hold_builds(&self) -> Arc<tokio::sync::Notify> {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *self.build_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    /// How many `build` calls have started, held or not.
+    #[allow(dead_code)]
+    pub fn builds_started(&self) -> usize {
+        self.builds_started
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 fn fake_status(container_id: &ContainerId) -> DeploymentStatus {
@@ -142,6 +234,11 @@ impl ContainerRuntime for FakeRuntime {
         }
         let status = fake_status(&spec.container_id);
         self.deployed.lock().unwrap().push(spec.clone());
+        self.deployed_bounds.lock().unwrap().push((
+            spec.container_id.clone(),
+            spec.min_replicas,
+            spec.max_replicas,
+        ));
         self.containers
             .lock()
             .unwrap()
@@ -158,7 +255,8 @@ impl ContainerRuntime for FakeRuntime {
         Ok(())
     }
 
-    async fn restart(&self, _container_id: &ContainerId) -> RuntimeResult<()> {
+    async fn restart(&self, container_id: &ContainerId) -> RuntimeResult<()> {
+        self.restarted.lock().unwrap().push(container_id.clone());
         Ok(())
     }
 
@@ -171,7 +269,11 @@ impl ContainerRuntime for FakeRuntime {
                 container_id.clone(),
             ));
         }
-        Ok(fake_status(container_id))
+        let mut status = fake_status(container_id);
+        if let Some(state) = *self.reported_state.lock().unwrap() {
+            status.state = state;
+        }
+        Ok(status)
     }
 
     async fn list(&self) -> RuntimeResult<Vec<DeploymentStatus>> {
@@ -197,12 +299,54 @@ impl ContainerRuntime for FakeRuntime {
     }
 
     async fn build(&self, _tar_context: &[u8], image_tag: &str) -> RuntimeResult<String> {
+        self.builds_started
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let gate = self.build_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         if self.fail_build.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(nasiko_runtime::RuntimeError::BackendUnreachable(
                 "fake build failure (scripted by test)".into(),
             ));
         }
         Ok(image_tag.to_owned())
+    }
+
+    async fn supports_autoscaling(&self) -> bool {
+        self.autoscaling.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn restarts_in_place(&self) -> bool {
+        self.restarts_in_place
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn refresh_secrets(
+        &self,
+        container_id: &ContainerId,
+        _name: &str,
+        env_vars: std::collections::HashMap<String, String>,
+    ) -> RuntimeResult<()> {
+        self.refreshed
+            .lock()
+            .unwrap()
+            .push((container_id.clone(), env_vars));
+        Ok(())
+    }
+
+    async fn apply_replica_bounds(
+        &self,
+        container_id: &ContainerId,
+        min: u32,
+        max: u32,
+        target: Option<u32>,
+    ) -> RuntimeResult<()> {
+        self.applied_bounds
+            .lock()
+            .unwrap()
+            .push((container_id.clone(), min, max, target));
+        Ok(())
     }
 
     // Explicit impl (not the trait default) so tests fully control what the

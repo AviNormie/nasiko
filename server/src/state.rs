@@ -10,6 +10,7 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 use crate::agent_lifecycle::SwappableAgentDeletionHook;
+use crate::agent_scaling::{AgentScaling, SingleReplica};
 use crate::prompt_context::SwappablePromptContext;
 use crate::telemetry::GenAiMetrics;
 use crate::usage::UsageTracker;
@@ -49,6 +50,11 @@ pub struct AppState {
     /// cell (`SwappableAgentDeletionHook::install`, not a plain reassignment) for the same reason
     /// `prompt_context` does — see that field's doc comment and `agent_lifecycle` module docs.
     pub agent_deletion_hook: Arc<SwappableAgentDeletionHook>,
+    /// Decides the replica bounds of every agent deploy and whether an autoscaler owns the
+    /// count. A constructor argument (`from_config_with_scaling`), not a swappable cell: the
+    /// build worker and HITL dispatcher copy `AppState` while it is built. OSS wires
+    /// `SingleReplica`.
+    pub agent_scaling: Arc<dyn AgentScaling>,
     /// PACMS candidate/query embedding cache for the history enrichment done
     /// directly in `a2a_dispatch.rs` (shared across requests, like the one
     /// `OssRoutingEngine` holds internally for its own `fetch_pacms` call —
@@ -142,6 +148,20 @@ impl AppState {
         runtime: Arc<dyn ContainerRuntime>,
         oci_storage: Arc<dyn nasiko_runtime::BlobStore>,
         db: PgPool,
+    ) -> Self {
+        let agent_scaling = Arc::new(SingleReplica::new(runtime.clone()));
+        Self::from_config_with_scaling(config, auth, runtime, oci_storage, db, agent_scaling).await
+    }
+
+    /// [`from_config_with_db`](Self::from_config_with_db) with the edition's replica policy
+    /// instead of the single-replica default.
+    pub async fn from_config_with_scaling(
+        config: Config,
+        auth: Arc<dyn AuthService>,
+        runtime: Arc<dyn ContainerRuntime>,
+        oci_storage: Arc<dyn nasiko_runtime::BlobStore>,
+        db: PgPool,
+        agent_scaling: Arc<dyn AgentScaling>,
     ) -> Self {
         let redis = redis::Client::open(config.redis_url.as_str()).expect("invalid redis url");
 
@@ -253,9 +273,9 @@ impl AppState {
         // second AppState in the same process (tests) keeps the first one's: the instruments sit
         // on the process-wide meter either way.
         nasiko_hitl::install_observer(Arc::new(genai_metrics.clone()));
-        let hitl_store: Arc<dyn nasiko_hitl::HitlStore> = Arc::new(
+        let hitl_store = agent_scaling.observe_hitl_store(Arc::new(
             nasiko_hitl::PgHitlStore::with_ttl_days(db.clone(), config.hitl_request_ttl_days),
-        );
+        ));
 
         // MCP gateway state: reuses the same pool, redis client, and pooled
         // HTTP client — no duplicated infrastructure.
@@ -297,6 +317,7 @@ impl AppState {
             orchestrator_policy,
             prompt_context,
             agent_deletion_hook,
+            agent_scaling,
             history_embedding_cache,
             observability,
             github_svc,
