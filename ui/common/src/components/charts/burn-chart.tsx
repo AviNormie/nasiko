@@ -18,7 +18,7 @@ import { Area, LinePath } from '@visx/shape'
 import { motion, useReducedMotion } from 'motion/react'
 import { useId, useState } from 'react'
 import { Swatch } from '@/components/shared/chart-marks'
-import { seriesAt } from '@/lib/chart'
+import { OTHER_SERIES, seriesAt } from '@/lib/chart'
 import { HatchPattern } from './hatch-pattern'
 
 export interface BurnChartPoint {
@@ -39,7 +39,18 @@ export interface BurnChartData {
   runOut: { t: number; observed: boolean } | null
   /** Events merged per day: the flag shows a count past one; hover lists them. */
   markers: { day: string; t: number; labels: string[] }[]
-  bars: { day: string; t: number; v: number; spike: boolean }[]
+  /** One per day; `parts` stacks it by contributor in `stack` order (keys outside `stack` are not drawn). */
+  bars: {
+    day: string
+    t: number
+    v: number
+    spike: boolean
+    parts?: { key: string; v: number }[]
+  }[]
+  /** The stack's contributors, largest first; the key `other` takes the Other colour (F3: the top 5 plus Other). */
+  stack?: { key: string; label: string }[]
+  /** A picked contributor's cumulative share, in the chart's units (F3 share view). */
+  share?: BurnChartPoint[]
   minY: number
   maxY: number
 }
@@ -61,6 +72,8 @@ export interface BurnChartLabels {
   spike: string
   /** The chart's accessible description: the page's sentence (F12). */
   summary: string
+  /** The share line's legend key (the picked contributor's name). */
+  share?: string
 }
 
 export interface BurnChartProps {
@@ -77,6 +90,17 @@ export interface BurnChartProps {
 
 const ACTUAL = seriesAt(0)
 const PREVIEW = seriesAt(2)
+const SHARE = seriesAt(1)
+/** A stacked part's colours: the stack's position, Other in the Other colour. */
+const partSeries = (stack: readonly { key: string }[], key: string) =>
+  key === 'other'
+    ? OTHER_SERIES
+    : seriesAt(
+        Math.max(
+          0,
+          stack.findIndex((s) => s.key === key),
+        ),
+      )
 const MARGIN = { top: 22, right: 64, bottom: 28, left: 56 }
 /** Share of the plot height the burn takes; the daily bars get the rest (design 1B). */
 const BURN_SHARE = 0.68
@@ -118,9 +142,18 @@ export function BurnChart(props: BurnChartProps) {
             {labels.preview}
           </Key>
         ) : null}
-        <span className="inline-flex items-center gap-1.5">
-          <Swatch series={ACTUAL} /> {labels.bars}
-        </span>
+        {data.share?.length && labels.share ? <Key color={SHARE.edge}>{labels.share}</Key> : null}
+        {data.stack?.length ? (
+          data.stack.map((s) => (
+            <span key={s.key} className="inline-flex items-center gap-1.5">
+              <Swatch series={partSeries(data.stack ?? [], s.key)} /> {s.label}
+            </span>
+          ))
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            <Swatch series={ACTUAL} /> {labels.bars}
+          </span>
+        )}
       </figcaption>
     </figure>
   )
@@ -180,8 +213,9 @@ function Plot({
 
   // UTC, like the day bars and the labels: a local-time scale puts ticks at the viewer's midnight.
   const x = scaleUtc({ domain: [new Date(data.start), new Date(data.end)], range: [0, innerW] })
-  const lowY = Math.min(0, data.minY, ...(preview ?? []).map((p) => p.v))
-  const highY = Math.max(data.maxY, ...(preview ?? []).map((p) => p.v)) * 1.06 || 1
+  const extra = [...(preview ?? []), ...(data.share ?? [])].map((p) => p.v)
+  const lowY = Math.min(0, data.minY, ...extra)
+  const highY = Math.max(data.maxY, ...extra) * 1.06 || 1
   const y = scaleLinear({ domain: [lowY, highY], range: [burnH, 0], nice: true })
   const barMax = Math.max(1e-9, ...data.bars.map((b) => b.v))
   const yb = scaleLinear({ domain: [0, barMax], range: [barsH, 0], nice: true })
@@ -360,6 +394,16 @@ function Plot({
             aria-hidden
           />
         ) : null}
+        {data.share?.length ? (
+          <LinePath
+            data={data.share}
+            x={(d) => X(d.t)}
+            y={(d) => y(d.v)}
+            stroke={SHARE.edge}
+            strokeWidth={2}
+            aria-hidden
+          />
+        ) : null}
         <LinePath data={data.actual} x={(d) => X(d.t)} y={(d) => y(d.v)}>
           {({ path }) => (
             <motion.path
@@ -424,17 +468,45 @@ function Plot({
           {data.bars.map((b) => {
             const h = barsH - yb(b.v)
             const picked = b.day === pickedDay
+            const opacity = dimOthers && !picked ? 0.45 : 1
+            const left = X(b.t + 43_200_000) - dayW / 2
+            const stack = data.stack ?? []
+            let base = 0
             return (
               <g key={b.day} aria-hidden>
-                <rect
-                  x={X(b.t + 43_200_000) - dayW / 2}
-                  y={yb(b.v)}
-                  width={dayW}
-                  height={Math.max(0, h)}
-                  fill={ACTUAL.fill}
-                  opacity={dimOthers && !picked ? 0.45 : 1}
-                />
-                {h > 0 ? (
+                {b.parts && stack.length ? (
+                  // Bottom up in stack order; each part's top edge in its own colour.
+                  stack.map((s) => {
+                    const v = b.parts?.find((p) => p.key === s.key)?.v ?? 0
+                    if (v <= 0) return null
+                    const y0 = yb(base)
+                    base += v
+                    const y1 = yb(base)
+                    const series = partSeries(stack, s.key)
+                    return (
+                      <g key={s.key} opacity={opacity}>
+                        <rect
+                          x={left}
+                          y={y1}
+                          width={dayW}
+                          height={Math.max(0, y0 - y1)}
+                          fill={series.fill}
+                        />
+                        <rect x={left} y={y1} width={dayW} height={1.5} fill={series.edge} />
+                      </g>
+                    )
+                  })
+                ) : (
+                  <rect
+                    x={left}
+                    y={yb(b.v)}
+                    width={dayW}
+                    height={Math.max(0, h)}
+                    fill={ACTUAL.fill}
+                    opacity={opacity}
+                  />
+                )}
+                {h > 0 && !(b.parts && stack.length) ? (
                   <rect
                     x={X(b.t + 43_200_000) - dayW / 2}
                     y={yb(b.v)}
@@ -498,11 +570,17 @@ function Plot({
       </Group>
       {hovered ? (
         <Tip
-          left={Math.min(width - 190, MARGIN.left + X(hovered.t + 43_200_000) + 10)}
+          left={Math.min(width - 210, MARGIN.left + X(hovered.t + 43_200_000) + 10)}
           top={MARGIN.top}
           title={formatDay(hovered.t)}
           rows={[
             [labels.bars, formatMoney(hovered.v)],
+            ...(hovered.parts && data.stack
+              ? data.stack.flatMap((s): [string, string][] => {
+                  const v = hovered.parts?.find((p) => p.key === s.key)?.v ?? 0
+                  return v > 0 ? [[s.label, formatMoney(v)]] : []
+                })
+              : []),
             ...(actualAt ? [[labels.actual, formatMoney(actualAt.v)] as [string, string]] : []),
             ...(hovered.spike ? [[labels.spike, ''] as [string, string]] : []),
           ]}
@@ -555,12 +633,12 @@ function Tip({
   rows: [string, string][]
 }) {
   return (
-    <foreignObject x={left} y={top} width={180} height={24 + rows.length * 18} aria-hidden>
+    <foreignObject x={left} y={top} width={200} height={24 + rows.length * 18} aria-hidden>
       <div className="rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm">
         <div className="font-medium">{title}</div>
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between gap-3 tabular-nums">
-            <span className="text-muted-foreground">{k}</span>
+            <span className="truncate text-muted-foreground">{k}</span>
             <span>{v}</span>
           </div>
         ))}

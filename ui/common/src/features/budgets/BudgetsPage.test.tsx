@@ -2,12 +2,15 @@
 // follows the server's budgets, the sentence and strip follow the scope, a member reads Yours only, the burn mode is
 // remembered, and a picked day is pushed to the URL.
 import { screen, waitFor, within } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import userEvent from '@testing-library/user-event'
+import axe from 'axe-core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configureMocks } from '@/mocks/handlers'
 import { GOLDEN_ANCHOR, SCENARIO_IDS as I } from '@/mocks/seed-budgets'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
+import { server } from '@/test/setup'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -83,5 +86,109 @@ describe('/budgets', () => {
     renderApp('/budgets')
     expect(await screen.findByText(/Couldn't load budgets/)).toBeInTheDocument()
     expect(screen.queryByText(copy.pageMissing)).toBeNull()
+  })
+
+  it('the bars stack by agent; a contributor opens its share view, and Clear closes it', async () => {
+    const { router } = renderApp('/budgets?burn=up')
+    await sentence()
+    const list = await screen.findByRole('list', { name: copy.contributorsTitle })
+    await userEvent.click(
+      within(list).getByRole('button', { name: copy.contributorsPick('Code Reviewer') }),
+    )
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({ contributor: I.reviewer }),
+    )
+    expect(await screen.findByText(copy.shareSpend('Code Reviewer'))).toBeInTheDocument()
+    expect(screen.getByText(copy.shareLine('Code Reviewer'))).toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: copy.shareClearLabel('Code Reviewer') }),
+    )
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('contributor'))
+    expect(screen.getByRole('region', { name: copy.stripLabel })).toHaveTextContent(copy.stripToday)
+  })
+
+  it('switching the dimension replaces the URL and re-reads the bars', async () => {
+    const { router } = renderApp('/budgets')
+    await sentence()
+    await userEvent.click(await screen.findByRole('radio', { name: copy.dimension.owner }))
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ by: 'owner' }))
+    const list = await screen.findByRole('list', { name: copy.contributorsTitle })
+    expect(
+      await within(list).findByRole('button', { name: copy.contributorsPick('Dev') }),
+    ).toBeInTheDocument()
+  })
+
+  it('What changed ranks this week against last and lists spike days, each opening its day', async () => {
+    const { router } = renderApp('/budgets')
+    await sentence()
+    const panel = (await screen.findByRole('heading', { name: copy.changesTitle })).closest(
+      'section',
+    )!
+    // Claude Code had no spend the same hours last week (budgets.md §14.2): a new contributor.
+    expect(await within(panel).findByText('Claude Code')).toBeInTheDocument()
+    expect(within(panel).getAllByText(`(${copy.changesNew})`).length).toBeGreaterThan(0)
+    const spikes = within(panel).getByRole('list', { name: copy.changesSpikeLabel })
+    await userEvent.click(within(spikes).getAllByRole('button')[0]!)
+    await waitFor(() => expect(router.state.location.search).toHaveProperty('day'))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('a picked day opens its drill-down; another user’s session is a redacted row', async () => {
+    server.use(
+      http.get('/api/budgets/burn/traces', () =>
+        HttpResponse.json({
+          data: [
+            {
+              row_id: 'r1',
+              as_of: GOLDEN_ANCHOR,
+              covers: 'all_priced',
+              redacted: true,
+              trace_id: null,
+              session_id: null,
+              agent_id: null,
+              agent_label: null,
+              user_id: null,
+              user_label: null,
+              cost_usd: 4,
+              calls: 2,
+              unpriced_calls: 0,
+              started_at: '2026-10-09T15:20:00Z',
+            },
+          ],
+          has_more: false,
+          next_cursor: null,
+          prev_cursor: null,
+        }),
+      ),
+    )
+    renderApp('/budgets?day=2026-10-09')
+    const sheet = await screen.findByRole('dialog')
+    expect(within(sheet).getByRole('heading', { name: copy.dayContributors })).toBeInTheDocument()
+    expect(within(sheet).getByRole('heading', { name: copy.dayHours })).toBeInTheDocument()
+    expect(await within(sheet).findByText(copy.dayAnother)).toBeInTheDocument()
+    expect(within(sheet).queryByRole('link')).toBeNull()
+    expect(within(sheet).getByText('$4.00')).toBeInTheDocument()
+  })
+
+  const axeClean = async () => {
+    const result = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
+    })
+    expect(
+      result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`),
+    ).toEqual([])
+  }
+
+  it('has no axe violations', async () => {
+    renderApp('/budgets')
+    await sentence()
+    await screen.findByRole('list', { name: copy.contributorsTitle })
+    await axeClean()
+  })
+
+  it('has no axe violations with the day panel open', async () => {
+    renderApp('/budgets?day=2026-10-09')
+    await screen.findByRole('dialog')
+    await axeClean()
   })
 })
