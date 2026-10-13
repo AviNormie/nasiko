@@ -39,6 +39,7 @@ import {
 } from './budgetEngine'
 import { SEED_MODELS, type Seed } from './seed'
 import { ADMIN_ID } from './seed-harness'
+import { observabilityData } from './spanBuilder'
 
 export type BudgetMockStore = World
 
@@ -56,6 +57,7 @@ const marks = (thresholds: readonly number[], action: Budget['action']) =>
 /** The seed's traces as the router's calls: billed to the agent's owner (the seed has no flow attribution). */
 function seedCalls(seed: Seed, agents: readonly MockAgent[]): WCall[] {
   const owner = new Map(agents.map((a) => [a.id, a.owner_id]))
+  const sessions = observabilityData(seed)
   return seed.traces
     .map((t): WCall => ({
       call_id: t.trace_id,
@@ -64,11 +66,9 @@ function seedCalls(seed: Seed, agents: readonly MockAgent[]): WCall[] {
       agent_id: t.agent_id,
       billed_user_id: owner.get(t.agent_id) ?? null,
       flow_id: t.trace_id,
-      // The Sessions mock's chat session for the trace (`spanBuilder.ts`: one per agent per UTC day), so a session's
-      // ledger and its session budget are the same session.
-      chat_session_id: t.workflow_id
-        ? null
-        : `5eed-sess-${t.agent_name.replace(/^seed-/, '')}-${new Date(t.ts).toISOString().slice(0, 10)}`,
+      // The Sessions mock's chat session for the trace (`spanBuilder.ts`: one per agent per UTC day, the spike day's PR
+      // reviews their own), so a session's ledger and its session budget are the same session.
+      chat_session_id: sessions.traceById.get(t.trace_id)?.session.session_id ?? null,
       turn_id: t.trace_id,
       model: `${t.provider}/${t.model}`,
       operation: t.workflow_id ? 'workflow' : 'chat',
@@ -103,7 +103,8 @@ function sessionsOf(calls: readonly WCall[], now: number): World['sessions'] {
         title: '',
         user_id: first.billed_user_id,
         agent_id: first.agent_id,
-        started_at: first.at,
+        // A minute before its first call: the session exists before its first turn (turn 0 is its start).
+        started_at: first.at - 60_000,
         ended_at: end <= now ? end : null,
       },
     ]

@@ -148,7 +148,14 @@ export default function SessionBurn({
           <KpiTile
             compact
             label={left < 0 ? copy.sessionOverBy : copy.sessionLeft}
-            value={fmtMoney(Math.abs(left))}
+            // With unpriced calls spend is a floor: what's left is a ceiling, an overage a floor (F2).
+            value={
+              left < 0
+                ? fmtMoneyFloor(-left, floor)
+                : floor
+                  ? copy.stripAtMost(fmtMoney(left))
+                  : fmtMoney(left)
+            }
           />
         ) : null}
       </div>

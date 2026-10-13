@@ -438,3 +438,26 @@ describe('a session on its turns (F9, ledger #85)', () => {
     expect(sessionTurnModel(price(), 'up')).toBeNull()
   })
 })
+
+describe('B5 review: a session’s flags are per turn', () => {
+  it('two events after different turns of one day stay at their own turns', () => {
+    const b = read('session', I.s1)
+    const ev = (at: string, kind: 'threshold' | 'stopped') => ({
+      ...b.events[0]!,
+      id: at,
+      at,
+      kind,
+    })
+    const m = sessionTurnModel(
+      {
+        ...b,
+        events: [ev('2026-10-09T15:01:00Z', 'threshold'), ev('2026-10-09T15:21:00Z', 'stopped')],
+      },
+      'up',
+    )!
+    expect(m.markers.map((x) => [x.t, x.events.length])).toEqual([
+      [1, 1],
+      [3, 1],
+    ])
+  })
+})

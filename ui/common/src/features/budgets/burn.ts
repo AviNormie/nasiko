@@ -717,11 +717,27 @@ export function sessionTurnModel(b: Burn, mode: BurnMode): ChartModel | null {
     // A step that ended before the first turn spans no turn: nothing to draw.
     limits: m.limits.map(span).filter((x) => x.to > x.from),
     thresholds: m.thresholds.map(span).filter((x) => x.to > x.from),
-    markers: m.markers.map((x) => ({
-      ...x,
-      t: Math.min(n, turnOf(Math.max(...x.events.map((e) => Date.parse(e.at))))),
-    })),
+    markers: turnMarkers(b.events, turnOf, n),
   }
+}
+
+/**
+ * A session's flags, one per turn (F9, B5 review): each event at the turn it followed, never grouped by day first (two
+ * marks a few turns apart on one day stay apart). `day` is the flag's key (`turn-3`).
+ */
+function turnMarkers(
+  events: readonly BudgetEvent[],
+  turnOf: (t: number) => number,
+  n: number,
+): ChartModel['markers'] {
+  const byTurn = new Map<number, BudgetEvent[]>()
+  for (const e of events) {
+    const turn = Math.min(n, turnOf(Date.parse(e.at)))
+    byTurn.set(turn, [...(byTurn.get(turn) ?? []), e])
+  }
+  return [...byTurn]
+    .sort(([a], [b]) => a - b)
+    .map(([turn, evs]) => ({ day: `turn-${turn}`, t: turn, events: evs }))
 }
 
 // ─── the Table view and its CSV (F1) ────────────────────────────────────────

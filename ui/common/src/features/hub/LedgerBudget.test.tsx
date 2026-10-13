@@ -69,25 +69,39 @@ describe('the ledger’s session budget', () => {
     expect(within(p).queryByRole('button', { name: budgetCopy.setSessionLimit })).toBeNull()
   })
 
-  it('a session the server won’t show is nothing; a failed read says so with Retry', async () => {
+  it('a session the server won’t show is nothing, once its read answered', async () => {
     const id = sessionOf(false)
-    let status = 404
+    let answered = false
+    server.use(
+      http.get('*/api/budgets/burn', () => {
+        answered = true
+        return HttpResponse.json({ error: 'x', code: 'scope_not_found' }, { status: 404 })
+      }),
+    )
+    renderApp(`/sessions/${id}?view=ledger`)
+    await waitFor(() => expect(answered).toBe(true), T)
+    // The skeleton gives way to nothing: neither the panel nor an error.
+    await waitFor(() =>
+      expect(screen.queryByText(`Couldn't load ${copy.ledger.budgetSection}`)).toBeNull(),
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    expect(screen.queryByRole('heading', { name: budgetCopy.sessionTitle })).toBeNull()
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull()
+  })
+
+  it('a failed read says so, with Retry', async () => {
+    const id = sessionOf(false)
+    let fail = true
     server.use(
       http.get('*/api/budgets/burn', () =>
-        HttpResponse.json(
-          { error: 'x', code: status === 404 ? 'scope_not_found' : 'bad' },
-          { status },
-        ),
+        fail ? HttpResponse.json({ error: 'x', code: 'bad' }, { status: 400 }) : undefined,
       ),
     )
     renderApp(`/sessions/${id}?view=ledger`)
-    await screen.findByRole('heading', { name: new RegExp(`^${copy.ledger.title}`) }, T)
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: budgetCopy.sessionTitle })).toBeNull(),
-    )
-    status = 400
-    renderApp(`/sessions/${id}?view=ledger`)
-    expect(await screen.findByRole('button', { name: /retry/i }, T)).toBeInTheDocument()
+    const retry = await screen.findByRole('button', { name: /retry/i }, T)
     expect(screen.getByText(`Couldn't load ${copy.ledger.budgetSection}`)).toBeInTheDocument()
+    fail = false
+    await userEvent.click(retry)
+    expect(await panel()).toBeInTheDocument()
   })
 })
