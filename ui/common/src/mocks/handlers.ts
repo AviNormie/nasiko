@@ -14,17 +14,11 @@ import { mockEntries as parseMockList } from '@/features/chat/search'
 import { SPEND_LIMIT } from '@/features/router/tuning'
 import { secretNameProblem } from '@/features/settings/logic'
 import { PASSWORD_CODES, passwordProblem } from '@/lib/password'
-import {
-  budgetAlerts,
-  budgetStatus,
-  sessionBudgets,
-  buildBudgetState,
-  createBudget,
-  deleteBudget,
-  listBudgets,
-  updateBudget,
-  type BudgetMockStore,
-} from './budgets'
+import { sessionBudgets, buildBudgetState, type BudgetMockStore } from './budgets'
+import { budgetView, worldFromScenario, type World } from './budgetEngine'
+import { budgetHandlers } from './budgetHandlers'
+import { budgetScenario } from './seed-budgets'
+import type { Budget } from '@/features/budgets/types'
 import type { Mockable } from '@/lib/env'
 import {
   dashboard,
@@ -195,9 +189,19 @@ export const ROUTER_PAGE_VARIANTS = [
 ] as const
 /**
  * Budget states (plans/feat-budget-burn.md). They combine like the router's.
- * - `budgets-empty`: no budgets; `budgets-fail`: every /api/budgets read answers 500.
+ * - `budgets-empty`: no budgets; `budgets-fail`: every /api/budgets read answers 500;
+ * - `budgets-absent`: a server without budgets (bare 404 on every budgets route; `home-budgets-absent` too);
+ * - `budgets-rl10-only`: a server with R-L10 only (bare 404 on the 1.0 routes, F11's per-route fallback);
+ * - `budgets-golden`: the golden scenario (docs/requirements/budgets.md §14) anchored at the mock clock's hour, the
+ *   world the contract's fixtures use, in place of the app seed's.
  */
-export const BUDGETS_PAGE_VARIANTS = ['budgets-empty', 'budgets-fail'] as const
+export const BUDGETS_PAGE_VARIANTS = [
+  'budgets-empty',
+  'budgets-fail',
+  'budgets-absent',
+  'budgets-rl10-only',
+  'budgets-golden',
+] as const
 /** Page variants combine (read through hasVariant) instead of taking the single degraded-state slot. */
 const PAGE_VARIANTS: readonly string[] = [
   ...CHAT_PAGE_VARIANTS,
@@ -480,15 +484,21 @@ const SETTINGS_DEFAULTS = {
   registry_url: null,
   catalog_tabs: null,
 }
-// R2 budgets (proposed R-L10): built from this month's seed spend, rebuilt with the router state.
+// Budgets (plans/feat-budget-burn.md B0): one engine over the app seed's world, or the golden scenario's.
 let budgetState: BudgetMockStore | null = null
 let budgetKey = ''
 function getBudgets(): BudgetMockStore {
-  const key = String(budgetVariant('empty'))
+  const golden = hasVariant('budgets-golden')
+  const key = `${budgetVariant('empty')}:${golden}`
   if (!budgetState || budgetKey !== key) {
-    budgetState = buildBudgetState(getSeed(), getAgents().agents, ADMIN_ID, nowFn(), {
-      empty: budgetVariant('empty'),
-    })
+    budgetState = golden
+      ? worldFromScenario(budgetScenario(Math.floor(nowFn() / 3_600_000) * 3_600_000, ADMIN_ID), {
+          adminId: ADMIN_ID,
+          edition: 'ee',
+        })
+      : buildBudgetState(getSeed(), getAgents().agents, ADMIN_ID, nowFn(), {
+          empty: budgetVariant('empty'),
+        })
     budgetKey = key
   }
   return budgetState
@@ -508,8 +518,14 @@ function getRouter(): RouterState {
   return routerState
 }
 
-/** The budgets mock's live state, for tests. */
-export const budgetMockState = (): BudgetMockStore => getBudgets()
+/**
+ * The budgets mock's live state, for tests: the engine's world, and every budget in R-L10's shape (a snapshot; change
+ * the world to change what the routes answer).
+ */
+export const budgetMockState = (): { world: World; budgets: Budget[] } => {
+  const w = getBudgets()
+  return { world: w, budgets: w.budgets.map((b) => budgetView(w, b, nowFn()) as unknown as Budget) }
+}
 
 /** The router mock's live state, for tests that change it under the page (plan §8 ordering test). */
 export const routerMockState = (): RouterState => getRouter()
@@ -1814,23 +1830,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
   }),
   // Budgets (plans/feat-budget-burn.md eng D1): R-L10, moved out of the router group; `router` brings it along.
   budgets: [
-    // R-L10 (docs/requirements/budgets.md, which extends it). No server yet.
-    http.get('/api/budgets', () =>
-      routed(() => {
-        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
-        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
-        return envelope(listBudgets(getBudgets(), ADMIN_ID))
-      }),
-    ),
-    http.get('/api/budgets/status', () =>
-      routed(() => {
-        if (hasVariant('home-budgets-absent')) return new HttpResponse(null, { status: 404 })
-        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
-        return HttpResponse.json(
-          budgetStatus(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
-        )
-      }),
-    ),
     // The ledger's per-session budgets (proposed AH-8, plans/feat-agent-centric.md PR1b): the caller's own sessions
     // only (the messages route's rule); the recorded demo chat has a $1 session budget.
     http.get('/api/budgets/session/:id', ({ params: p }) =>
@@ -1867,48 +1866,17 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
         )
       }),
     ),
-    http.get('/api/budgets/alerts', () =>
-      routed(() => {
-        if (budgetVariant('fail')) throw new MockHttpError(500, 'internal error')
-        return envelope(
-          budgetAlerts(getBudgets(), getSeed(), getAgents().agents, ADMIN_ID, nowFn()),
-        )
-      }),
-    ),
-    http.post('/api/budgets', async ({ request }) => {
-      const body = await request.json().catch(() => ({}))
-      const agentOwner = (id: string) =>
-        getAgents().agents.find((a) => !a.deleted && a.id === id)?.owner_id
-      return routed(() =>
-        HttpResponse.json(
-          {
-            data: createBudget(
-              getBudgets(),
-              ADMIN_ID,
-              body as never,
-              agentOwner,
-              superuser(),
-              nowFn(),
-            ),
-            status_code: 201,
-            message: 'Budget created',
-          },
-          { status: 201 },
-        ),
-      )
+    // Every other budgets route (docs/requirements/budgets.md 1.0) answers from the engine.
+    ...budgetHandlers({
+      loggedIn: () => loggedIn,
+      now: () => nowFn(),
+      world: () => getBudgets(),
+      viewer: () => ({ id: ADMIN_ID, superuser: superuser() }),
+      absent: () => hasVariant('budgets-absent') || hasVariant('home-budgets-absent'),
+      rl10Only: () => hasVariant('budgets-rl10-only'),
+      failing: () => budgetVariant('fail'),
+      unauthorized: () => unauthorized(),
     }),
-    http.put('/api/budgets/:id', async ({ params: prm, request }) => {
-      const body = await request.json().catch(() => ({}))
-      return routed(() =>
-        envelope(updateBudget(getBudgets(), String(prm.id), ADMIN_ID, body as never, nowFn())),
-      )
-    }),
-    http.delete('/api/budgets/:id', ({ params: prm }) =>
-      routed(() => {
-        deleteBudget(getBudgets(), String(prm.id), ADMIN_ID)
-        return HttpResponse.json({ data: null, status_code: 200, message: 'Budget deleted' })
-      }),
-    ),
   ],
   chat: [],
   // Settings (plans/feat-settings.md); EE stacks /api/settings/oidc and the SCIM tokens on top.
