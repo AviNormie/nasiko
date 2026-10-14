@@ -38,7 +38,7 @@ impl RateLimiter {
 
     /// Records one request for `key`; returns `false` if it exceeds the
     /// limit for the current window.
-    pub(crate) fn allow(&self, key: &str) -> bool {
+    pub fn allow(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut entry = self.buckets.entry(key.to_owned()).or_insert((now, 0));
         if now.duration_since(entry.0) > self.window {
