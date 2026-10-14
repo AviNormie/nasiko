@@ -8,7 +8,7 @@ pub mod util;
 pub mod version_prompt;
 
 use anyhow::Result;
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 
 #[derive(Subcommand)]
 #[command(next_help_heading = "Create")]
@@ -358,6 +358,29 @@ pub enum AgentOpsCommands {
     },
 }
 
+/// Embedding-routing flags, shared by `llm-config create` and `llm-config update`.
+///
+/// Grouped rather than spelled out twice: both commands already carry a long parameter
+/// list, and these five only ever move together.
+#[derive(Args, Clone, Debug, Default)]
+pub struct EmbeddingArgs {
+    /// Provider for this config's embedding calls (set together with --embedding-model)
+    #[arg(long = "embedding-provider")]
+    pub embedding_provider: Option<String>,
+    /// Embedding model this config routes to (set together with --embedding-provider)
+    #[arg(long = "embedding-model")]
+    pub embedding_model: Option<String>,
+    /// Name of your user-secret holding the embedding provider's API key
+    #[arg(long = "embedding-secret-name")]
+    pub embedding_secret_name: Option<String>,
+    /// Plaintext embedding API key to store under --embedding-secret-name
+    #[arg(long = "embedding-secret-value")]
+    pub embedding_secret_value: Option<String>,
+    /// Let this config's embedding model outrank the model an agent asks for
+    #[arg(long = "embedding-model-override")]
+    pub embedding_model_override: bool,
+}
+
 #[derive(Subcommand)]
 pub enum LlmConfigCommands {
     /// Create a reusable LLM config in your library
@@ -390,6 +413,8 @@ pub enum LlmConfigCommands {
         /// Mark this as your default config
         #[arg(long)]
         default: bool,
+        #[command(flatten)]
+        embedding: EmbeddingArgs,
     },
     /// Update an existing config in your library (only the flags you pass change)
     Update {
@@ -430,6 +455,15 @@ pub enum LlmConfigCommands {
         /// Reset the pinned model to null (pin falls back to the config's model)
         #[arg(long = "clear-pinned-model")]
         clear_pinned_model: bool,
+        #[command(flatten)]
+        embedding: EmbeddingArgs,
+        /// Unset the embedding provider and model (embedding calls fall through to the
+        /// organization default, which is a different vector space — needs --yes)
+        #[arg(long = "clear-embedding-model")]
+        clear_embedding_model: bool,
+        /// Confirm an embedding provider/model change up front, for non-interactive use
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
     },
     /// Delete a config from your library (must be detached from all agents first)
     #[command(alias = "rm")]
@@ -1289,6 +1323,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 pin,
                 pinned_model,
                 default,
+                embedding,
             } => commands::llm_config::create(
                 &name,
                 &provider,
@@ -1301,6 +1336,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 pin,
                 pinned_model,
                 default,
+                embedding,
             ),
             LlmConfigCommands::Update {
                 config,
@@ -1317,6 +1353,9 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
+                embedding,
+                clear_embedding_model,
+                yes,
             } => commands::llm_config::update(
                 &config,
                 name,
@@ -1332,6 +1371,11 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
+                commands::llm_config::EmbeddingUpdate {
+                    args: embedding,
+                    clear: clear_embedding_model,
+                    confirmed: yes,
+                },
             ),
             LlmConfigCommands::Delete { config, force } => {
                 commands::llm_config::delete(&config, force)

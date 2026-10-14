@@ -4,14 +4,15 @@
  * rail does: the same nav in a full-height column beside the rail from 1024 px, a sheet opened from above the page
  * below that. The page scrolls in its own column (the shell fills the viewport on /settings, as on /chat). The rows
  * are nasiko-cloud-rs (`origin/development` a4853db4) `ui/oss/navigation.js` `MODULE_NAVS.settings` plus
- * whatever an edition layer appends:
- * - Workspace: General, (EE: Orchestrator), Flow limits, Registry. `/settings?section=`.
- * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`), Chat context (`/settings/chat-context`; nasiko-cloud-rs
- *   `35c749af`, every user's own).
- * - Account: Appearance (`/settings/appearance`; the lab's, this browser's mode and theme), Password
- *   (`/settings/password`; Change password).
- * A layer's rows come from the `settingsSections` slot, placed after the row they name. A member sees Secrets and
- * Account: the workspace sections are superuser-gated on the API.
+ * the EE layer's `nav-ext-ee.js`:
+ * - Workspace: General, (EE: Orchestrator), Flow limits, Optimization tiers (`/settings/optimization-tiers`), Registry.
+ *   `/settings?section=` for the sections of the one form.
+ * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`).
+ * A layer's rows come from the `settingsSections` slot, placed after the row they name. A member sees Secrets only:
+ * the workspace sections are superuser-gated on the API. This is the sidebar's Organization → Settings.
+ * With `account`, the same layout holds the account's own settings (the account menu's Settings): Appearance
+ * (`/account/appearance`; the lab's, this browser's mode and theme) and Password (`/account/password`; Change
+ * password). Optimization moved to /optimization (plans/feat-optimization-page.md P2).
  */
 import { useQuery } from '@tanstack/react-query'
 import { Link, useRouterState } from '@tanstack/react-router'
@@ -39,9 +40,12 @@ import { CORE_SECTIONS } from './search'
 interface Row {
   key: string
   label: string
-  // A layer's own `personalSettingsLinks` entry carries its own route (e.g. `/settings/memory`), not one of the
-  // core's — same widening `LayerNavItem` uses for the app sidebar (edition.ts).
-  to: string
+  to:
+    | '/settings'
+    | '/settings/secrets'
+    | '/settings/optimization-tiers'
+    | '/account/appearance'
+    | '/account/password'
   section?: string
 }
 
@@ -57,58 +61,75 @@ function withLayer(rows: Row[], layer: readonly SettingsSection[]): Row[] {
   return out
 }
 
-export function SettingsLayout({ children }: { children: ReactNode }) {
+export function SettingsLayout({
+  children,
+  account = false,
+}: {
+  children: ReactNode
+  account?: boolean
+}) {
   const me = useQuery(meQuery)
   // Chat's breakpoint for an inline rail (ChatPage `wide`).
   const wide = useMediaQuery('(min-width: 1024px)')
   const [sheetOpen, setSheetOpen] = useState(false)
-  const { settingsSections, personalSettingsLinks } = useSlots()
+  const { settingsSections } = useSlots()
   const location = useRouterState({ select: (s) => s.location })
   const admin = me.data?.is_superuser === true
   const inGroup = (g: 'workspace' | 'security') => settingsSections.filter((s) => s.group === g)
-  const groups: { key: string; label: string; rows: Row[] }[] = [
-    ...(admin
-      ? [
-          {
-            key: 'workspace',
-            label: copy.nav.workspace,
-            rows: withLayer(
-              CORE_SECTIONS.map((k): Row => ({
-                key: k,
-                label: copy.sections[k].label,
-                to: '/settings',
-                // General is the default: its link carries no section.
-                section: k === 'general' ? undefined : k,
-              })),
-              inGroup('workspace'),
-            ),
-          },
-        ]
-      : []),
-    {
-      key: 'security',
-      label: copy.nav.security,
-      rows: [
-        ...withLayer([], admin ? inGroup('security') : []),
-        { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
-        { key: 'chat-context', label: copy.chatContext.label, to: '/settings/chat-context' },
-        // Every user's own, like Secrets/Chat context above — never gated by `admin` (personalSettingsLinks is
-        // a plain nav link to the layer's own route, not a `/settings?section=` page).
-        ...personalSettingsLinks.map((l): Row => ({ key: l.key, label: l.label, to: l.to })),
-      ],
-    },
-    {
-      key: 'account',
-      label: copy.nav.account,
-      rows: [
-        { key: 'appearance', label: copy.appearance.label, to: '/settings/appearance' },
-        { key: 'password', label: copy.password.label, to: '/settings/password' },
-      ],
-    },
-  ]
+  const groups: { key: string; label: string; rows: Row[] }[] = account
+    ? [
+        {
+          key: 'account',
+          label: copy.nav.account,
+          rows: [
+            { key: 'appearance', label: copy.appearance.label, to: '/account/appearance' },
+            { key: 'password', label: copy.password.label, to: '/account/password' },
+          ],
+        },
+      ]
+    : [
+        ...(admin
+          ? [
+              {
+                key: 'workspace',
+                label: copy.nav.workspace,
+                rows: withLayer(
+                  CORE_SECTIONS.flatMap((k): Row[] => [
+                    {
+                      key: k,
+                      label: copy.sections[k].label,
+                      to: '/settings',
+                      // General is the default: its link carries no section.
+                      section: k === 'general' ? undefined : k,
+                    },
+                    // A sub-page after Flow limits (plans/feat-context-optimization.md F4): its own route and read.
+                    ...(k === 'limits'
+                      ? [
+                          {
+                            key: 'optimization-tiers',
+                            label: copy.optimizationTiers.label,
+                            to: '/settings/optimization-tiers' as const,
+                          },
+                        ]
+                      : []),
+                  ]),
+                  inGroup('workspace'),
+                ),
+              },
+            ]
+          : []),
+        {
+          key: 'security',
+          label: copy.nav.security,
+          rows: [
+            ...withLayer([], admin ? inGroup('security') : []),
+            { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
+          ],
+        },
+      ]
   const known = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)))
   const raw = (location.search as { section?: unknown }).section
-  // A sub-page (Secrets, Chat context, Appearance, Password) is current by its path; the workspace page by `?section=`.
+  // A sub-page (Secrets, Tiers, Appearance, Password) is current by its path; the workspace page by `?section=`.
   const page = groups
     .flatMap((g) => g.rows)
     .find((r) => r.to === location.pathname && r.to !== '/settings')
@@ -128,6 +149,7 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
       linkProps={linkProps}
       onNavigate={onNavigate}
       framed={framed}
+      title={account ? copy.accountTitle : copy.title}
     />
   )
   return (
@@ -150,7 +172,9 @@ export function SettingsLayout({ children }: { children: ReactNode }) {
               </SheetContent>
             </Sheet>
           )}
-          <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
+          {/* `relative`: the scroll box is the positioning context, so an absolutely placed child (Radix's hidden form
+              input behind a Switch) scrolls inside it instead of stretching the document and moving the shell. */}
+          <div className="@container relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 @[768px]:pt-6">
               {inSidebar || wide ? null : (
                 <Button
@@ -183,6 +207,7 @@ interface NavProps {
   }
   /** Closes the sheet after a pick. */
   onNavigate?: () => void
+  title: string
   /** Beside the rail or in the sheet: the title is a 48 px header row, as Chat's rail has (in the sidebar it sits under Back). */
   framed?: boolean
 }
@@ -191,7 +216,7 @@ interface NavProps {
  * The sections: the app nav's own rows and group headers, the same in the sidebar (the drill-in panel), the column
  * beside the collapsed rail and the phone sheet, as Chat's rail is.
  */
-function SectionsNav({ groups, current, linkProps, onNavigate, framed = false }: NavProps) {
+function SectionsNav({ groups, current, linkProps, onNavigate, framed = false, title }: NavProps) {
   return (
     <nav aria-label={copy.nav.label} className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
       <p
@@ -201,7 +226,7 @@ function SectionsNav({ groups, current, linkProps, onNavigate, framed = false }:
         )}
       >
         <Settings aria-hidden className="size-4 text-muted-foreground" />
-        {copy.title}
+        {title}
       </p>
       {groups.map((g) => (
         <SidebarGroup key={g.key} className="px-3 py-0">

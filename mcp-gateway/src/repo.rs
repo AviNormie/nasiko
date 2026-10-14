@@ -32,6 +32,11 @@ pub enum SourceKind {
     /// The platform built this connector's container from uploaded source; its
     /// `url` was resolved via `ContainerRuntime::endpoint()`, never user-typed.
     UploadedBuild,
+    /// A platform-owned backend served by the control plane itself (loopback),
+    /// `provider_type = 'system'`. Exempt from the SSRF guard, tools are
+    /// exposed un-prefixed (`credentials::build_server_config`,
+    /// `router::route_tool`), never user-deletable.
+    System,
 }
 
 /// One connector — either a Composio toolkit or a custom MCP server.
@@ -44,6 +49,11 @@ pub struct McpConnector {
     pub display_name: Option<String>,
     pub logo_url: Option<String>,
     pub description: Option<String>,
+    /// The backend's own `initialize.instructions`, harvested at probe time
+    /// (`connectors::probe_initialize`) and forwarded verbatim by the
+    /// gateway's own `initialize` (`protocol::handle_initialize`). Distinct
+    /// from `description` — see `0054_workspace.sql`'s doc comment.
+    pub instructions: Option<String>,
     // composio-only
     pub auth_config_id: Option<String>,
     pub auth_scheme: Option<String>,
@@ -91,8 +101,12 @@ impl McpConnector {
             && self.oauth_client_id.is_some()
     }
     /// True only for a platform-built-and-deployed MCP server — see
-    /// `SourceKind::UploadedBuild`'s doc comment. Drives the SSRF-guard
-    /// `trusted` split (credentials.rs) and the delete/destroy-container fix.
+    /// `SourceKind::UploadedBuild`'s doc comment. One of the SSRF-guard
+    /// `trusted` split's two inputs (`credentials::build_server_config`
+    /// ORs this with `provider_type == "system"` — a platform-owned
+    /// loopback backend is trusted for the same "url was never
+    /// user-supplied" reason, just via a different column) and the
+    /// delete/destroy-container fix.
     pub fn is_uploaded_build(&self) -> bool {
         self.source_kind == SourceKind::UploadedBuild
     }
@@ -107,6 +121,8 @@ pub struct NewConnector {
     pub display_name: Option<String>,
     pub logo_url: Option<String>,
     pub description: Option<String>,
+    /// See [`McpConnector::instructions`]'s doc comment.
+    pub instructions: Option<String>,
     pub auth_config_id: Option<String>,
     pub auth_scheme: Option<String>,
     pub use_composio_managed: Option<bool>,
@@ -199,10 +215,10 @@ pub async fn create_connector(db: &PgPool, c: &NewConnector) -> Result<McpConnec
     let row = sqlx::query_as::<_, McpConnector>(
         r#"INSERT INTO mcp_connectors
              (provider_type, owner_id, name, display_name, logo_url, description,
-              auth_config_id, auth_scheme, use_composio_managed,
+              instructions, auth_config_id, auth_scheme, use_composio_managed,
               url, transport, auth_type, url_param_name, credential_header_name,
               headers, is_active, source_kind, build_status)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
            RETURNING *"#,
     )
     .bind(&c.provider_type)
@@ -211,6 +227,7 @@ pub async fn create_connector(db: &PgPool, c: &NewConnector) -> Result<McpConnec
     .bind(&c.display_name)
     .bind(&c.logo_url)
     .bind(&c.description)
+    .bind(&c.instructions)
     .bind(&c.auth_config_id)
     .bind(&c.auth_scheme)
     .bind(c.use_composio_managed)
@@ -316,14 +333,18 @@ pub async fn list_accessible_connectors(db: &PgPool, user_id: Uuid) -> Result<Ve
     Ok(rows)
 }
 
-/// Accessible custom (mcp_server) connectors only — for building generic backends.
+/// Accessible custom (mcp_server) and system connectors — for building generic
+/// backends. `system` rows are included alongside `mcp_server` rows: a system
+/// connector is inserted (by a later task) with a public grant, so it reaches
+/// every user through the exact same grant-based visibility path a shared
+/// `mcp_server` connector does — never a special case here.
 pub async fn list_accessible_mcp_connectors(
     db: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<McpConnector>> {
     let rows = sqlx::query_as::<_, McpConnector>(
         r#"SELECT * FROM mcp_connectors c
-           WHERE c.provider_type = 'mcp_server' AND c.is_active = true
+           WHERE c.provider_type IN ('mcp_server', 'system') AND c.is_active = true
              AND ( c.owner_id = $1
                 OR EXISTS (
                      SELECT 1 FROM mcp_connector_grants g
@@ -1010,6 +1031,22 @@ pub async fn list_connector_tools(
 ) -> Result<Vec<McpConnectorTool>> {
     let rows = sqlx::query_as::<_, McpConnectorTool>(
         "SELECT * FROM mcp_connector_tools WHERE connector_id = $1 ORDER BY tool_name",
+    )
+    .bind(connector_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// Just the synced tool names for a connector — lean alternative to
+/// [`list_connector_tools`] for [`MCPServerConfig::tool_names`]'s exact
+/// bare-name-ownership check (`credentials::build_server_config`), which
+/// needs nothing else off the row.
+///
+/// [`MCPServerConfig::tool_names`]: crate::types::MCPServerConfig::tool_names
+pub async fn list_connector_tool_names(db: &PgPool, connector_id: Uuid) -> Result<Vec<String>> {
+    let rows = sqlx::query_scalar::<_, String>(
+        "SELECT tool_name FROM mcp_connector_tools WHERE connector_id = $1 ORDER BY tool_name",
     )
     .bind(connector_id)
     .fetch_all(db)

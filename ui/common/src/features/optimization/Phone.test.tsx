@@ -40,11 +40,7 @@ describe('/optimization on a phone', () => {
     )
     expect(link).toBeInTheDocument()
     expect(
-      // The page's own header, not the app's top bar.
-      within(screen.getAllByRole('banner').find((h) => h.dataset.slot !== 'topbar')!).queryByRole(
-        'link',
-        { name: /^Your settings/ },
-      ),
+      within(screen.getByRole('banner')).queryByRole('link', { name: /^Your settings/ }),
     ).toBeNull()
     expect(within(lead).getByText(/Click a week to see its biggest senders\./)).toBeInTheDocument()
     await userEvent.click(within(lead).getByRole('button', { name: copy.lead.chart.table }))

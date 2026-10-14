@@ -259,7 +259,7 @@ describe('buildLanes (F27, O6)', () => {
     ])
     expect(m.fromCaller.get('span:a2')).toBe('B')
   })
-  it('caps lanes, colors the first five agents, and opens big flows on the Table', () => {
+  it('caps lanes, colours the first five agents, and opens big flows on the Table', () => {
     const calls = Array.from({ length: LANE_CAP + 2 }, (_, i) =>
       span(`p${i}`, i * 10, { agentId: `ag${i}`, agentName: `ag${i}` }),
     )

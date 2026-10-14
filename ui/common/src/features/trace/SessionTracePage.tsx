@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/toggle'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
+import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import {
   Select,
   SelectContent,
@@ -58,6 +59,7 @@ import { IN_PROGRESS_MS } from '@/features/observability/tuning'
 import type { TraceDetail, TraceEntry } from '@/features/observability/types'
 import { AgentLink } from '@/features/agents/components/AgentLink'
 import { useAgentsDirectory } from '@/features/agents/api'
+import { requestSpanOf } from '@/features/optimization/logic'
 import { sessionKeys, useSessionDetail } from '@/features/sessions/api'
 import type { SessionsSearch, TraceSearch } from '@/features/sessions/search'
 import { fmtLatency, fmtMoney, fmtShortDay, fmtTokens, fmtUtcDayTime } from '@/lib/format'
@@ -224,6 +226,11 @@ export function SessionTracePage({
     setSearch({ trace: traceId, span: s.node.span_id })
   }
   const position = selectedIndex >= 0 ? { index: selectedIndex + 1, of: walk.length } : undefined
+  // plans/feat-context-optimization.md 1B: the request span whose report the panel shows or points to.
+  const requestSpan = selected ? requestSpanOf(spans, selected) : null
+  const request = requestSpan
+    ? { span: requestSpan, onSelect: () => select(requestSpan) }
+    : undefined
   const parentName = selected?.node.parent_id
     ? spans.find((s) => s.node.id === selected.node.parent_id)?.node.name
     : undefined
@@ -332,6 +339,8 @@ export function SessionTracePage({
         actions={
           <>
             <OpenChatLink sessionId={sessionId} />
+            {/* The selected trace's flow: a flow's id is its trace id (plans/feat-flows.md F19). */}
+            {traceId ? <OpenFlowLink flowId={traceId} /> : null}
             {firstStart ? (
               <Button asChild variant="outline" size="sm">
                 <Link
@@ -464,6 +473,7 @@ export function SessionTracePage({
                       position={position}
                       onPrev={() => step(-1)}
                       onNext={() => step(1)}
+                      request={request}
                     />
                   </div>
                 ) : null}
@@ -487,6 +497,7 @@ export function SessionTracePage({
                       onPrev={() => step(-1)}
                       onNext={() => step(1)}
                       onClose={() => setSheetOpen(false)}
+                      request={request}
                     />
                   </SheetContent>
                 </Sheet>

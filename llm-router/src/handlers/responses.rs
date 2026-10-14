@@ -244,7 +244,13 @@ async fn translated_attempt(
         );
     }
     let mut guard = AttemptGuard::new(ctx, routed, attempt, started, parsed.stream);
-    let provider = provider_for(attempt, &ctx.http, &ctx.cfg).map_err(|error| {
+    let provider = provider_for(
+        &attempt.provider,
+        attempt.custom_endpoint.as_ref(),
+        &ctx.http,
+        &ctx.cfg,
+    )
+    .map_err(|error| {
         guard.fail("routing", &error);
         TranslatedAttemptError::Configuration(error)
     })?;
@@ -1011,6 +1017,10 @@ mod tests {
                     tier1_model: None,
                     tier2_model: None,
                     tier3_model: None,
+                    embedding_provider: None,
+                    embedding_model: None,
+                    embedding_api_key_secret_name: None,
+                    embedding_model_override: false,
                 }),
                 agent_pinned_model: None,
                 is_coding_agent: true,
@@ -1034,6 +1044,11 @@ mod tests {
             &self,
             _: &str,
         ) -> Result<Option<crate::resolver::CustomProvider>, sqlx::Error> {
+            Ok(None)
+        }
+        async fn fetch_org_embedding_default(
+            &self,
+        ) -> Result<Option<crate::resolver::OrgEmbeddingDefault>, sqlx::Error> {
             Ok(None)
         }
     }

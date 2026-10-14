@@ -50,7 +50,7 @@ describe("What's optimizing your tokens", () => {
     )
     // savings.rs counts every live agent in the workspace; the mock counts the agents mock's switches.
     const on = live().filter((a) => a.compress).length
-    const caveman = row(b, 'Smaller prompts')
+    const caveman = row(b, 'Smaller prompts (Caveman)')
     expect(
       await within(caveman).findByText(m.agentsOn(on, live().length), {}, T),
     ).toBeInTheDocument()
@@ -58,19 +58,24 @@ describe("What's optimizing your tokens", () => {
       'href',
       '/agents/mine',
     )
-    expect(row(b, 'Less code written')).toHaveTextContent(/Minimal-code mode/)
+    expect(row(b, 'Less code written (Ponytail)')).toHaveTextContent(
+      /Minimal-code mode \(Ponytail\)/,
+    )
     expect(row(b, m.comments)).toHaveTextContent(/in the workspace/)
   })
 
-  it('introduces PACMS in a tooltip on focus (B12)', async () => {
+  it('introduces each team name in a tooltip on hover or focus (B12)', async () => {
     renderApp('/optimization')
     const b = await block()
-    await within(b).findByText(m.history, {}, T)
+    await userEvent.hover(await within(b).findByText('Smaller prompts (Caveman)', {}, T))
+    expect((await screen.findAllByText(copy.codenames.caveman, {}, T)).length).toBeGreaterThan(0)
+    await userEvent.unhover(within(b).getByText('Smaller prompts (Caveman)'))
+    await userEvent.tab()
     within(b).getByText(m.history).focus()
     expect((await screen.findAllByText(copy.codenames.pacms, {}, T)).length).toBeGreaterThan(0)
   })
 
-  it('takes the program name from the server’s label, not the fallback copy', async () => {
+  it('builds the program name from the server’s label and program, not the fallback copy', async () => {
     server.use(
       http.get(SAVINGS, () =>
         HttpResponse.json({
@@ -82,7 +87,7 @@ describe("What's optimizing your tokens", () => {
     )
     renderApp('/optimization')
     const b = await block()
-    expect(await within(b).findByText('Trimmed prompts', {}, T)).toBeInTheDocument()
+    expect(await within(b).findByText('Trimmed prompts (Caveman)', {}, T)).toBeInTheDocument()
     expect(within(b).queryByText(m.caveman)).toBeNull()
   })
 
@@ -101,10 +106,10 @@ describe("What's optimizing your tokens", () => {
     )
     renderApp('/optimization')
     const b = await block()
-    const caveman = row(b, m.caveman)
+    const caveman = row(b, /\(Caveman\)$/)
     expect(await within(caveman).findByText(/^~.+ tokens saved$/, {}, T)).toBeInTheDocument()
     expect(within(caveman).queryByText(/estimated/)).toBeNull()
-    expect(within(row(b, m.ponytail)).queryByText(/tokens saved/)).toBeNull()
+    expect(within(row(b, /\(Ponytail\)$/)).queryByText(/tokens saved/)).toBeNull()
   })
 
   it('marks a saving that isn’t measured as estimated', async () => {
@@ -118,7 +123,7 @@ describe("What's optimizing your tokens", () => {
       ),
     )
     renderApp('/optimization')
-    const caveman = row(await block(), m.caveman)
+    const caveman = row(await block(), /\(Caveman\)$/)
     expect(
       await within(caveman).findByText(/^~.+ tokens saved \(estimated\)$/, {}, T),
     ).toBeInTheDocument()
