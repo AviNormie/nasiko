@@ -1,5 +1,3 @@
-'use client'
-
 import { type ReactNode, useCallback, useMemo } from 'react'
 import { clipRevealTransition } from './animation'
 import { defaultScatterColors, useChartHover, useChartStable, useYScale } from './chart-context'

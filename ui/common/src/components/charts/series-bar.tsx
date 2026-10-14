@@ -1,5 +1,3 @@
-'use client'
-
 import type { Transition } from 'motion/react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useMemo } from 'react'

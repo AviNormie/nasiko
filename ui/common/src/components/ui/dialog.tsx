@@ -2,8 +2,6 @@
  * shadcn `dialog`, with local edits to re-apply after any `shadcn add dialog` update:
  * - `DialogContent` takes `overlayClassName` (the onboarding guide blurs the page behind it).
  */
-"use client"
-
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { XIcon } from "lucide-react"

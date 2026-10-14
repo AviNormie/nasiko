@@ -2,8 +2,6 @@
  * shadcn `field` (new-york-v4), with one local edit to re-apply after any `shadcn add field`:
  * - accent text uses `text-primary-text`, not the bare primary text class (css.test.ts).
  */
-"use client"
-
 import { useMemo } from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
