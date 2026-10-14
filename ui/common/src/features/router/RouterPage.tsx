@@ -17,22 +17,23 @@ import { meQuery } from '@/lib/api/auth'
 import { cn } from '@/lib/utils'
 import { useAnnounce } from './announce'
 import {
+  // useBudgetAlerts,
+  // useBudgets,
+  // useBudgetStatus,
   useCatalog,
   useConfigs,
   useCustomProviders,
   useRegistry,
   useRowReads,
   useRowsFollowConfigs,
+  // useSaveBudget,
   useSecrets,
   useSetDefault,
   useUsageByAgent,
 } from './api'
-import { useBudgets, useBudgetStatus, useSaveBudget } from '@/features/budgets/api'
-import { capabilitiesQuery } from '@/features/budgets/availability'
-import { budgetResetsAt, sentenceName, toAlertOnly } from '@/features/budgets/budgets'
-import { copy as budgetCopy } from '@/features/budgets/copy'
-import { BudgetSheet, type BudgetMode } from '@/features/budgets/components/BudgetSheet'
-import { BudgetsSection } from '@/features/budgets/components/BudgetsSection'
+// import { budgetResetsAt, sentenceName, toAlertOnly } from './budgets'
+// import { BudgetSheet, type BudgetMode } from './components/BudgetSheet'
+// import { BudgetsSection } from './components/BudgetsSection'
 import { AgentsSection, type AgentRow, type SpendState } from './components/AgentsSection'
 import { Announcer } from './components/bits'
 import { RouterTitle } from './components/HowRouting'
@@ -55,8 +56,7 @@ import {
 } from './routing'
 import { ROUTER_TABS, type RouterSearch, type RouterTab, type SourceFilter } from './search'
 import { SPEND_LIMIT } from './tuning'
-import type { Budget } from '@/features/budgets/types'
-import type { AgentUsage, LlmConfig } from './types'
+import type { AgentUsage, /* Budget, */ LlmConfig } from './types'
 
 const FILTER_SOURCE: Record<SourceFilter, 'attached' | 'owner-default' | 'none'> = {
   attached: 'attached',
@@ -105,24 +105,22 @@ function Page({
   const registry = useRegistry()
   const usage = useUsageByAgent(ids.length > 0)
   const setDefault = useSetDefault()
-  // Budgets show as a tab once the server says it has them (plans/feat-budget-burn.md F11); their alerts, burn and
-  // causes live on /budgets, which the section links to (F10).
-  const caps = useQuery(capabilitiesQuery)
-  const hasBudgets = caps.data?.kind === 'available'
-  const budgets = useBudgets(hasBudgets)
-  // In parallel with the list; skipped only once the list itself failed.
-  const budgetStatus = useBudgetStatus(hasBudgets && !budgets.isError)
-  const switchBudget = useSaveBudget()
-  // The forecast's clock is when the status was read, so its elapsed days match the daily series it forecasts from.
-  // Before the first status read, only the reset date's fallback needs a clock: the mount time.
-  const [mountedAt] = useState(() => new Date())
-  const statusAt = useMemo(
-    () => (budgetStatus.dataUpdatedAt ? new Date(budgetStatus.dataUpdatedAt) : mountedAt),
-    [budgetStatus.dataUpdatedAt, mountedAt],
-  )
-  const resetsAt = budgetResetsAt(budgetStatus.data?.data, statusAt)
-  const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null)
-  const [switching, setSwitching] = useState<ReadonlySet<string>>(new Set())
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands.
+  // const budgets = useBudgets()
+  // // In parallel with the list; skipped only once the list itself failed.
+  // const budgetStatus = useBudgetStatus(!budgets.isError)
+  // const budgetAlerts = useBudgetAlerts(!budgets.isError)
+  // const switchBudget = useSaveBudget()
+  // // The forecast's clock is when the status was read, so its elapsed days match the daily series it forecasts from.
+  // // Before the first status read, only the reset date's fallback needs a clock: the mount time.
+  // const [mountedAt] = useState(() => new Date())
+  // const statusAt = useMemo(
+  //   () => (budgetStatus.dataUpdatedAt ? new Date(budgetStatus.dataUpdatedAt) : mountedAt),
+  //   [budgetStatus.dataUpdatedAt, mountedAt],
+  // )
+  // const resetsAt = budgetResetsAt(budgetStatus.data?.data, statusAt)
+  // const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null)
+  // const [switching, setSwitching] = useState<ReadonlySet<string>>(new Set())
   const announce = useAnnounce()
 
   const [editor, setEditor] = useState<EditorMode | null>(null)
@@ -132,13 +130,14 @@ function Page({
   const [updated, setUpdated] = useState<ReadonlyMap<string, number>>(new Map())
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents])
-  const agentLabel = useCallback(
-    (id: string) => {
-      const a = agentById.get(id)
-      return a ? a.display_name || a.name : undefined
-    },
-    [agentById],
-  )
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands.
+  // const agentLabel = useCallback(
+  //   (id: string) => {
+  //     const a = agentById.get(id)
+  //     return a ? a.display_name || a.name : undefined
+  //   },
+  //   [agentById],
+  // )
   const rows: AgentRow[] = useMemo(
     () => agents.map((agent, i) => ({ agent, read: reads[i] ?? { state: 'pending' } })),
     [agents, reads],
@@ -196,27 +195,28 @@ function Page({
         onError: (e) => announce(routerError(e).problem),
       },
     )
-  const onSwitchToAlert = (b: Budget) => {
-    setSwitching((s) => new Set(s).add(b.id))
-    const name = sentenceName(b, agentLabel)
-    switchBudget.mutate(
-      { mode: 'update', id: b.id, body: toAlertOnly(b) },
-      {
-        onSuccess: () => {
-          announce(budgetCopy.switchedToAlert(name))
-          // The switch button goes with the stop: keep keyboard focus in the row, on its Raise limit.
-          ;(document.querySelector(`[data-raise="${b.id}"]`) as HTMLElement | null)?.focus()
-        },
-        onError: (e) => announce(routerError(e).problem),
-        onSettled: () =>
-          setSwitching((s) => {
-            const n = new Set(s)
-            n.delete(b.id)
-            return n
-          }),
-      },
-    )
-  }
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands.
+  // const onSwitchToAlert = (b: Budget) => {
+  //   setSwitching((s) => new Set(s).add(b.id))
+  //   const name = sentenceName(b, agentLabel)
+  //   switchBudget.mutate(
+  //     { mode: 'update', id: b.id, body: toAlertOnly(b) },
+  //     {
+  //       onSuccess: () => {
+  //         announce(copy.switchedToAlert(name))
+  //         // The switch button goes with the stop: keep keyboard focus in the row, on its Raise limit.
+  //         ;(document.querySelector(`[data-raise="${b.id}"]`) as HTMLElement | null)?.focus()
+  //       },
+  //       onError: (e) => announce(routerError(e).problem),
+  //       onSettled: () =>
+  //         setSwitching((s) => {
+  //           const n = new Set(s)
+  //           n.delete(b.id)
+  //           return n
+  //         }),
+  //     },
+  //   )
+  // }
   const onDuplicate = (source: LlmConfig, without?: ClearableField) =>
     setEditor({
       kind: 'duplicate',
@@ -239,13 +239,7 @@ function Page({
   }
   // Every tab stays mounted (inactive ones `hidden`, so each keeps its state); a jump into another tab focuses once
   // that tab is shown.
-  // `#router-budgets` (Needs you, the session ledger) opens the Budgets tab.
-  const wanted: RouterTab =
-    search.tab ??
-    (typeof window !== 'undefined' && window.location.hash === '#router-budgets'
-      ? 'budgets'
-      : 'agents')
-  const tab: RouterTab = wanted === 'budgets' && !hasBudgets ? 'agents' : wanted
+  const tab: RouterTab = search.tab ?? 'agents'
   const pendingFocus = useRef<(() => void) | null>(null)
   useEffect(() => {
     const focus = pendingFocus.current
@@ -265,13 +259,14 @@ function Page({
     else pendingFocus.current = () => focusSection('router-agents')
   }
 
-  // TokenOps links to #router-budgets: scroll once the section and the agents table above it have their final height.
-  const budgetsReady =
-    !budgets.isPending && !owned.isPending && reads.every((r) => r.state !== 'pending')
-  useEffect(() => {
-    if (budgetsReady && window.location.hash === '#router-budgets')
-      document.getElementById('router-budgets')?.scrollIntoView({ block: 'start' })
-  }, [budgetsReady])
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands.
+  // // TokenOps links to #router-budgets: scroll once the section and the agents table above it have their final height.
+  // const budgetsReady =
+  //   !budgets.isPending && !owned.isPending && reads.every((r) => r.state !== 'pending')
+  // useEffect(() => {
+  //   if (budgetsReady && window.location.hash === '#router-budgets')
+  //     document.getElementById('router-budgets')?.scrollIntoView({ block: 'start' })
+  // }, [budgetsReady])
 
   if (owned.isError && !owned.data) {
     return (
@@ -343,13 +338,11 @@ function Page({
           <Tabs
             value={tab}
             onValueChange={(t) =>
-              setSearch({
-                tab: t === 'configs' || t === 'providers' || t === 'budgets' ? t : undefined,
-              })
+              setSearch({ tab: t === 'configs' || t === 'providers' ? t : undefined })
             }
           >
             <TabsList aria-label={copy.anchorsLabel}>
-              {ROUTER_TABS.filter((t) => t !== 'budgets' || hasBudgets).map((t) => (
+              {ROUTER_TABS.map((t) => (
                 <TabsTrigger key={t} value={t} className="px-3 pointer-coarse:min-h-11">
                   {copy.anchors[t]}
                 </TabsTrigger>
@@ -380,21 +373,20 @@ function Page({
                 onDefault={onDefault}
               />
             </TabsContent>
-            {hasBudgets ? (
-              <TabsContent value="budgets" forceMount hidden={tab !== 'budgets'} className="pt-3">
-                <BudgetsSection
-                  budgets={budgets}
-                  status={budgetStatus}
-                  statusAt={statusAt}
-                  agentName={agentLabel}
-                  resetsAt={resetsAt}
-                  pending={switching}
-                  onNew={() => setBudgetMode({ kind: 'create' })}
-                  onEdit={(b) => setBudgetMode({ kind: 'edit', budget: b })}
-                  onSwitchToAlert={onSwitchToAlert}
-                />
-              </TabsContent>
-            ) : null}
+            {/* Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands (as a tab).
+        <BudgetsSection
+          budgets={budgets}
+          status={budgetStatus}
+          statusAt={statusAt}
+          alerts={budgetAlerts}
+          agentName={agentLabel}
+          resetsAt={resetsAt}
+          pending={switching}
+          onNew={() => setBudgetMode({ kind: 'create' })}
+          onEdit={(b) => setBudgetMode({ kind: 'edit', budget: b })}
+          onSwitchToAlert={onSwitchToAlert}
+        />
+        */}
             <TabsContent value="providers" forceMount hidden={tab !== 'providers'} className="pt-3">
               <ProvidersSection
                 catalog={catalog}
@@ -438,6 +430,7 @@ function Page({
         onSaved={(id, at) => setUpdated((m) => new Map(m).set(id, at))}
       />
       <CustomProviderSheet mode={customMode} onClose={() => setCustomMode(null)} />
+      {/* Budgets hidden: no server support for /api/budgets yet (R-L10). Uncomment when it lands.
       <BudgetSheet
         mode={budgetMode}
         budgets={budgets.data ?? []}
@@ -451,6 +444,7 @@ function Page({
         resetsAt={resetsAt}
         onClose={() => setBudgetMode(null)}
       />
+      */}
       <DeleteConfigDialog
         config={deleting}
         reads={reads}

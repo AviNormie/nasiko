@@ -45,7 +45,7 @@ export function Crumbs({
     collapse && first && last ? [first, 'ellipsis', last] : items
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Breadcrumb aria-label="Levels">
+      <Breadcrumb aria-label="Breadcrumb">
         <BreadcrumbList className="gap-1 sm:gap-1">
           {shown.map((c, i) => (
             // The path up to this crumb: unique even when two units share a name.

@@ -47,15 +47,6 @@ export const HARNESS_MOCK_VARIANTS = [
   'optimization-down',
   'flows-empty',
   'flows-absent',
-  'hub-not-visible',
-  'hub-gate-error',
-  'hub-deleted',
-  'hub-markers-fail',
-  'hub-no-savings-row',
-  'hub-many-builds',
-  'events-absent',
-  'ledger-no-trace',
-  'home-budgets-absent',
   // Chat page variants (v1c DX1); harmless here, listed so the lists stay equal.
   'no-agents',
   'many-chats',
@@ -77,12 +68,6 @@ export const HARNESS_MOCK_VARIANTS = [
   'router-legacy',
   'router-budgets-empty',
   'router-budgets-fail',
-  // Budget page variants (plans/feat-budget-burn.md); same reason.
-  'budgets-empty',
-  'budgets-fail',
-  'budgets-absent',
-  'budgets-rl10-only',
-  'budgets-golden',
 ] as const
 
 const id = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))

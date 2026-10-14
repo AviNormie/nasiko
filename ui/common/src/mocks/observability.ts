@@ -367,42 +367,29 @@ export function sessionDetail(seed: Seed, s: MockSession): SessionDetail {
   } satisfies SessionDetail
 }
 
-/**
- * GET /session/list: created_at >= start_time, newest first, limit clamped 1–100. `extra` rows are other
- * chat_sessions (recorded harness chats, DB-only summaries) merged in before paging, as the server lists them all.
- */
+/** GET /session/list: created_at >= start_time, newest first, limit clamped 1–100. */
 export function sessionList(
   seed: Seed,
   p: { start_time?: string | null; limit?: string | null; offset?: string | null },
   now: number,
   tempoDown = false,
-  extra: readonly SessionSummary[] = [],
 ) {
   const parsed = p.start_time ? Date.parse(p.start_time) : Number.NaN
   const start = Number.isNaN(parsed) ? now - 7 * 86_400_000 : parsed
   const limit = Math.min(100, Math.max(1, Number.parseInt(p.limit ?? '', 10) || 25))
   const offset = Math.max(0, Number.parseInt(p.offset ?? '', 10) || 0)
   const data = observabilityData(seed)
-  const rows: { created: number; summary: () => SessionSummary }[] = [
-    ...data.sessions
-      .filter((s) => s.created >= start && s.created <= now)
-      .map((s) => ({
-        created: s.created,
-        summary: () => sessionSummary(seed, s, start, now, tempoDown),
-      })),
-    ...extra
-      .map((x) => ({ created: Date.parse(x.start_time ?? ''), summary: () => x }))
-      .filter((x) => x.created >= start && x.created <= now),
-  ].sort((a, b) => b.created - a.created)
-  const sessions = rows.slice(offset, offset + limit).map((r) => r.summary())
+  const inWindow = data.sessions.filter((s) => s.created >= start && s.created <= now)
+  const page = inWindow.slice(offset, offset + limit)
+  const sessions = page.map((s) => sessionSummary(seed, s, start, now, tempoDown))
   return {
     data: {
       sessions,
       total_agents: seed.agents.filter((a) => !a.deleted).length,
       successful_agents: sessions.filter((s) => s.num_traces != null).length,
       pagination: {
-        end_cursor: rows.length > offset + limit ? String(offset + limit) : null,
-        has_next_page: rows.length > offset + limit,
+        end_cursor: inWindow.length > offset + limit ? String(offset + limit) : null,
+        has_next_page: inWindow.length > offset + limit,
       },
     },
   }

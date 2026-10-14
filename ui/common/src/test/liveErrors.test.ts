@@ -55,9 +55,9 @@ async function errorFor(fx: Fx): Promise<ApiError> {
 const unknownRoute = load('errors/errors.unknown-route.json')
 const topTraces = load('tokenops/tokenops.top-traces.json')
 const budgets = [
-  'budgets/budgets.list.json',
-  'budgets/budgets.status.json',
-  'budgets/budgets.alerts.json',
+  'router/router.budgets.json',
+  'router/router.budgets-status.json',
+  'router/router.budgets-alerts.json',
 ].map(load)
 const noAuth = load('errors/errors.no-auth.json')
 const unknownAgent = load('errors/errors.unknown-agent.json')

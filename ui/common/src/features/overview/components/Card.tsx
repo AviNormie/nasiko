@@ -51,7 +51,7 @@ export function Card({
   return (
     // A container per card, so rows can adapt to the card's own width (/ship review).
     <UiCard asChild className={cn('@container/card min-w-0 gap-3 p-4', className)}>
-      <section aria-labelledby={id} data-testid={id} data-tour={id}>
+      <section aria-labelledby={id} data-testid={id}>
         <CardHeader className="flex min-h-6 items-center justify-between gap-2 px-0">
           {/* The meta wraps under the title in a narrow column rather than squeezing it. */}
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">

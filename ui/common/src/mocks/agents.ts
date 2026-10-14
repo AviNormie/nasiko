@@ -241,9 +241,6 @@ export function buildAgentsState(seed: Seed, hs: HarnessSeed, now: number): Agen
     }
   })
   for (const h of hs.agents) {
-    // Registered no later than its first recorded session (the seed spans 30 days); never "created today" with older use.
-    const first = Math.min(...hs.sessions.filter((x) => x.agent_id === h.id).map((x) => x.ts))
-    const created = Number.isFinite(first) ? iso(Math.min(first, Date.parse(hs.anchor))) : hs.anchor
     agents.push({
       id: h.id,
       name: h.name,
@@ -255,7 +252,7 @@ export function buildAgentsState(seed: Seed, hs: HarnessSeed, now: number): Agen
       tags: ['local', 'coding-agent'],
       skills: [],
       capabilities: {},
-      created_at: created,
+      created_at: hs.anchor,
       updated_at: hs.anchor,
       image: null,
       icon_url: null,

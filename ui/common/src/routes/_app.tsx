@@ -3,7 +3,6 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
-import { capabilitiesQuery } from '@/features/budgets/availability'
 import { BuildToasts } from '@/features/deploy/components/BuildToasts'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { followedCount, subscribeFollower } from '@/features/deploy/follower'
@@ -42,7 +41,6 @@ export const Route = createFileRoute('/_app')({
 })
 
 const NONE: readonly string[] = []
-const NO_BUDGETS: readonly string[] = ['/budgets']
 
 /** The shell plus the feature pieces it shows on every page (the shell itself never imports a feature). */
 function AppLayout() {
@@ -52,14 +50,10 @@ function AppLayout() {
   const navHidden = useSlots().navHidden
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
-  // Budgets show once the server says it has them (plans/feat-budget-burn.md F11, F13): hidden while the probe loads
-  // (no flicker), on a failure and on a server without budgets.
-  const budgets = useQuery(capabilitiesQuery)
-  const budgetsHidden = budgets.data?.kind === 'available' ? NONE : NO_BUDGETS
   return (
     <AppShell
       end={<BuildToasts />}
-      hidden={[...guideHidden, ...layerHidden, ...budgetsHidden]}
+      hidden={[...guideHidden, ...layerHidden]}
       badges={
         building
           ? { '/agents': { count: building, label: deployCopy.toast.agentsBadge(building) } }

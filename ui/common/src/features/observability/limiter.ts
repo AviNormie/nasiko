@@ -18,8 +18,6 @@ export function createLimiter(max: number) {
   }
 
   return async function run<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
-    // Already cancelled: its abort event has fired, so a queued wait would never settle.
-    if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
     if (active >= max) {
       await new Promise<void>((resolve, reject) => {
         const entry = { start: resolve, signal }

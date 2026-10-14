@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './../../common/src/routes/__root'
 import { Route as AppRouteImport } from './../../common/src/routes/_app'
 import { Route as LoginRouteImport } from './../../common/src/routes/login'
 import { Route as AppIndexRouteImport } from './../../common/src/routes/_app/index'
-import { Route as AppBudgetsRouteImport } from './../../common/src/routes/_app/budgets'
 import { Route as AppDeployRouteImport } from './../../common/src/routes/_app/deploy'
 import { Route as AppHarnessesRouteImport } from './../../common/src/routes/_app/harnesses'
 import { Route as AppOptimizationRouteImport } from './../../common/src/routes/_app/optimization'
@@ -59,11 +58,6 @@ const LoginRoute = LoginRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppBudgetsRoute = AppBudgetsRouteImport.update({
-  id: '/budgets',
-  path: '/budgets',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDeployRoute = AppDeployRouteImport.update({
@@ -236,7 +230,6 @@ const AppWorkflowsRunsRoute = AppWorkflowsRunsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
-  '/budgets': typeof AppBudgetsRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -273,7 +266,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
-  '/budgets': typeof AppBudgetsRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -313,7 +305,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
-  '/_app/budgets': typeof AppBudgetsRoute
   '/_app/deploy': typeof AppDeployRoute
   '/_app/harnesses': typeof AppHarnessesRoute
   '/_app/optimization': typeof AppOptimizationRoute
@@ -354,7 +345,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
-    | '/budgets'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -391,7 +381,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
-    | '/budgets'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -430,7 +419,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
-    | '/_app/budgets'
     | '/_app/deploy'
     | '/_app/harnesses'
     | '/_app/optimization'
@@ -493,13 +481,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/budgets': {
-      id: '/_app/budgets'
-      path: '/budgets'
-      fullPath: '/budgets'
-      preLoaderRoute: typeof AppBudgetsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/deploy': {
@@ -737,7 +718,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
-  AppBudgetsRoute: typeof AppBudgetsRoute
   AppDeployRoute: typeof AppDeployRoute
   AppHarnessesRoute: typeof AppHarnessesRoute
   AppOptimizationRoute: typeof AppOptimizationRoute
@@ -775,7 +755,6 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppBudgetsRoute: AppBudgetsRoute,
   AppDeployRoute: AppDeployRoute,
   AppHarnessesRoute: AppHarnessesRoute,
   AppOptimizationRoute: AppOptimizationRoute,

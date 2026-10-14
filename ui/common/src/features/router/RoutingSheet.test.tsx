@@ -234,8 +234,7 @@ describe('partial and interrupted plans', () => {
 
 describe('agent detail card', () => {
   it('the owner sees the card and can change routing from it', async () => {
-    // The full routing card (with Change routing) sits on Details; Overview's Routing layer card only links (PR1c).
-    renderApp(`/agents/${agentNamed('Research Agent').id}?tab=details`)
+    renderApp(`/agents/${agentNamed('Research Agent').id}`)
     const card = (await screen.findByRole('heading', { name: copy.cardTitle })).closest('section')!
     await waitFor(() => expect(card).toHaveTextContent(copy.overridden('gpt-4o')))
     await userEvent.click(within(card).getByRole('button', { name: copy.changeRouting }))
@@ -257,9 +256,8 @@ describe('agent detail card', () => {
   })
 
   it('a superuser on another owner’s agent sees owner labels and can’t pick a config', async () => {
-    // Details hosts the full card (PR1c).
     const other = seed.agents[13]!
-    renderApp(`/agents/${other.id}?tab=details`)
+    renderApp(`/agents/${other.id}`)
     const card = (await screen.findByRole('heading', { name: copy.cardTitle })).closest('section')!
     await waitFor(() => expect(card).toHaveTextContent(copy.source.ownerDefault))
     await userEvent.click(within(card).getByRole('button', { name: copy.changeRouting }))

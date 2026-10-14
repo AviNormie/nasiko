@@ -1,6 +1,7 @@
 // @vitest-environment node
 /** Overview pure logic (plans/feat-overview.md §5, §6, §10; eng review R3, R4, R8). */
 import { describe, expect, it } from 'vitest'
+import { overviewNarrative } from '@/features/narrative/overview'
 import {
   rateAgent,
   spikeDrivers,
@@ -9,7 +10,9 @@ import {
   type AgentHealthInput,
 } from './health'
 import { mergeNeeds } from './needs'
-import { rangeWindow } from './api'
+import { previousWindow, rangeWindow } from './api'
+import { overviewSearchSchema } from './search'
+import { stackSpend } from './stack'
 
 const NOW = Date.parse('2026-09-29T12:00:00Z')
 const H = 3_600_000
@@ -264,22 +267,7 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
         outside: 2,
       }),
       agents: ok([{ id: 'x', name: 'X', reason: 'crashed', budget: false }]),
-      budgets: ok([
-        {
-          id: 'bud',
-          label: 'Your monthly',
-          agentId: null,
-          crossed: 80,
-          state: 'warning' as const,
-          over: null,
-          stopped: false,
-          stops: false,
-          runsOutOn: null,
-          resetsAt: null,
-          period: 'month' as const,
-          covers: 'routed_calls' as const,
-        },
-      ]),
+      budgets: ok([{ id: 'bud', label: 'Your monthly', crossed: 80, state: 'warning' as const }]),
       sessions: ok({ failed: 3, checked: 25, agents: ['X'] }),
     })
     expect(n.rows.map((r) => r.key)).toEqual([
@@ -304,6 +292,85 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
   })
 })
 
+describe('overviewNarrative (§10, eng R2)', () => {
+  const month = { mtd: 4186, low: 12900, high: 13600, show: true, vsLastMonthPct: 31 }
+
+  it('says fleet spend, never "You\'ve spent"', () => {
+    const n = overviewNarrative({
+      month,
+      actionCount: 2,
+      waitingCount: 3,
+      otherCount: 0,
+      empty: false,
+    })
+    expect(n.money).toBe(
+      'The fleet has spent $4,186.00 this month, on pace for $12,900.00–$13,600.00 (up 31% vs the same days last month).',
+    )
+    expect(n.attention).toBe('2 agents need action and 3 requests are waiting for you.')
+  })
+
+  it('leaves out a clause whose data is missing, and never says "nothing" unless every source answered', () => {
+    expect(
+      overviewNarrative({
+        month: null,
+        actionCount: null,
+        waitingCount: null,
+        otherCount: 0,
+        empty: false,
+      }),
+    ).toEqual({ money: null, attention: null })
+    expect(
+      overviewNarrative({ month, actionCount: 0, waitingCount: 0, otherCount: 0, empty: false })
+        .attention,
+    ).toBeNull()
+    expect(
+      overviewNarrative({ month, actionCount: 0, waitingCount: 0, otherCount: 0, empty: true })
+        .attention,
+    ).toBe('Nothing needs you right now.')
+    expect(
+      overviewNarrative({
+        month: { ...month, mtd: 0 },
+        actionCount: 1,
+        waitingCount: 0,
+        otherCount: 2,
+        empty: false,
+      }),
+    ).toEqual({
+      money: 'The fleet has no spend yet this month.',
+      attention: '1 agent needs action and 2 other items need a look.',
+    })
+  })
+})
+
+describe('stackSpend', () => {
+  const pt = (date: string, spend: number) => ({
+    iso: `${date}T00:00:00.000Z`,
+    label: date,
+    spend,
+    operations: 0,
+    p95: null,
+    topAgent: null,
+    topAgentSpend: null,
+  })
+
+  it('splits each day into the drivers and Other, which is never negative', () => {
+    const { series, rows } = stackSpend(
+      [pt('2026-09-28', 10), pt('2026-09-29', 5), pt('2026-09-30', 0)],
+      [
+        { id: 'a', name: 'A', days: [pt('2026-09-28', 6), pt('2026-09-29', 4)] },
+        // Rounds a cent above the day on the 29th: capped at what is left.
+        { id: 'b', name: 'B', days: [pt('2026-09-28', 1), pt('2026-09-29', 1.01)] },
+      ],
+    )
+    expect(series.map((s) => s.key)).toEqual(['s0', 's1'])
+    expect(rows.map((r) => [r.s0, r.s1, r.other])).toEqual([
+      [6, 1, 3],
+      [4, 1, 0],
+      [0, 0, 0],
+    ])
+  })
+})
+
 describe('the page range', () => {
   const now = new Date('2026-10-01T15:30:00Z')
 
@@ -312,5 +379,15 @@ describe('the page range', () => {
     const w = rangeWindow('90d', now)
     expect(w.params.start_time).toBe('2026-07-04T00:00:00.000Z')
     expect(w.params.end_time).toBe('2026-10-01T15:30:00.000Z')
+    // The window before it is as long, ends where it starts, and has a key of its own.
+    const p = previousWindow(w)
+    expect(p.end.getTime()).toBe(w.start.getTime())
+    expect(w.end.getTime() - w.start.getTime()).toBe(p.end.getTime() - p.start.getTime())
+    expect(p.key).not.toBe(w.key)
+  })
+
+  it('drops a junk range rather than failing the page', () => {
+    expect(overviewSearchSchema.parse({ range: '1y' })).toEqual({ range: undefined })
+    expect(overviewSearchSchema.parse({ range: '90d' })).toEqual({ range: '90d' })
   })
 })

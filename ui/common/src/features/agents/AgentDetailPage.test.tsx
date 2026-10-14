@@ -636,12 +636,12 @@ describe('owner-controlled text', () => {
 })
 
 describe('Try it (chat plan §9)', () => {
-  it('a running agent links to Chat from the header, once', async () => {
+  it('a running agent links to Chat from the header and from Call this agent', async () => {
     renderApp(url(0))
     await title()
     const links = await screen.findAllByRole('link', { name: 'Try it' })
-    expect(links).toHaveLength(1)
-    expect(links[0]).toHaveAttribute('href', `/chat?agent=${running.id}`)
+    expect(links).toHaveLength(2)
+    for (const l of links) expect(l).toHaveAttribute('href', `/chat?agent=${running.id}`)
   })
 
   it('a harness has no Try it', async () => {

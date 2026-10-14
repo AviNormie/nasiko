@@ -59,11 +59,7 @@ const STATUS_WORD: Partial<Record<RecordedStatus, string>> = {
 }
 
 type Json = Record<string, unknown>
-export const isObject = (v: unknown): v is Json => !!v && typeof v === 'object' && !Array.isArray(v)
-
-/** A message's `metadata.coding_agent` record (`types/src/coding_agent.rs`), or null when it has none. */
-export const codingAgentOf = (metadata: unknown): Json | null =>
-  isObject(metadata) && isObject(metadata.coding_agent) ? metadata.coding_agent : null
+const isObject = (v: unknown): v is Json => !!v && typeof v === 'object' && !Array.isArray(v)
 
 /**
  * The calls on an assistant message: `metadata.coding_agent.tool_calls`, only when it is an array
@@ -73,7 +69,7 @@ export function toolCallsToSteps(
   metadata: unknown,
   warn: (msg: string) => void = (m) => console.warn(m),
 ): RecordedCalls | null {
-  const agent = codingAgentOf(metadata)
+  const agent = isObject(metadata) && isObject(metadata.coding_agent) ? metadata.coding_agent : null
   const calls = agent?.tool_calls
   if (!Array.isArray(calls)) return null
   const steps: RecordedStep[] = []

@@ -7,7 +7,7 @@
  * On narrow screens the table becomes a card list.
  */
 import { Download, ListTree } from 'lucide-react'
-import { createContext, use, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, use, useEffect, useMemo, useRef } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -20,7 +20,6 @@ import {
 } from '@/components/ui/select'
 import { AgentLink } from '@/features/agents/components/AgentLink'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { pageCount, pageOf } from '@/lib/paging'
 import { prefersReducedMotion } from '@/lib/useMediaQuery'
 import { cn } from '@/lib/utils'
 import { searchRows, sortRows, type AttributionRow } from '../attribution'
@@ -38,7 +37,6 @@ import {
 import type { SortKey } from '../search'
 import { Panel, PanelEmpty, PanelError, PanelSkeleton } from '@/components/shared/panel'
 import { Delta } from '@/components/shared/delta'
-import { Pager } from '@/components/shared/pager'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { SearchInput } from '@/components/shared/search-input'
 
@@ -70,7 +68,6 @@ export function AttributionTable({
   onViewTraces,
   onLast30,
   unpriced,
-  pageSize,
 }: {
   rows: AttributionRow[] | undefined
   view: 'agent' | 'workflow'
@@ -89,22 +86,8 @@ export function AttributionTable({
   /** Offered in the empty-window state; undefined when already on 30d (A2). */
   onLast30?: () => void
   unpriced: boolean
-  pageSize?: number
 }) {
   const visible = useMemo(() => sortRows(searchRows(rows ?? [], q), sort), [rows, q, sort])
-  const firstPage = () => {
-    const at = highlightId ? visible.findIndex((r) => r.id === highlightId) : -1
-    return pageSize && at >= 0 ? Math.floor(at / pageSize) : 0
-  }
-  const [page, setPage] = useState(firstPage)
-  const [pagedFor, setPagedFor] = useState({ visible, highlightId })
-  if (pagedFor.visible !== visible || pagedFor.highlightId !== highlightId) {
-    setPagedFor({ visible, highlightId })
-    setPage(firstPage())
-  }
-  const pages = pageSize ? pageCount(visible.length, pageSize) : 1
-  const current = Math.min(page, pages - 1)
-  const shown = pageSize ? pageOf(visible, current, pageSize) : visible
   const noun = view === 'agent' ? 'Agent' : 'Workflow'
   const sortOptions = (Object.keys(SORT_LABELS) as SortKey[]).filter(
     (s) => view === 'agent' || s !== 'hours',
@@ -207,7 +190,7 @@ export function AttributionTable({
       ) : (
         <>
           <DesktopTable
-            rows={shown}
+            rows={visible}
             view={view}
             sort={sort}
             prevUnavailable={prevUnavailable}
@@ -215,13 +198,12 @@ export function AttributionTable({
             onViewTraces={onViewTraces}
           />
           <MobileCards
-            rows={shown}
+            rows={visible}
             view={view}
             prevUnavailable={prevUnavailable}
             highlightId={highlightId}
             onViewTraces={onViewTraces}
           />
-          <Pager page={current} pages={pages} onPage={setPage} />
         </>
       )}
     </Panel>

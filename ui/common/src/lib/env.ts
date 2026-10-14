@@ -29,18 +29,12 @@ export const MOCKABLE = [
   'harnesses',
   'chat',
   'router',
-  // Budgets (plans/feat-budget-burn.md eng D1, D2): R-L10 and the burn contract. `router` brings it along.
-  'budgets',
-  // Partial live for budgets (budgets.md §15): the real server where it serves a feature, the golden mock elsewhere.
-  'budgets-fill',
   'deploy',
   'settings',
   'mcp',
   'workflows',
   'onboarding',
   'optimization',
-  // The proposed agent event log (plans/feat-agent-centric.md PR1a): change markers on the agent hub.
-  'events',
 ] as const
 export type Mockable = (typeof MOCKABLE)[number]
 
@@ -99,28 +93,6 @@ export function readEnv(
     partialMocks = partialMocks.filter((s) => s !== 'router')
   }
 
-  // budgets-fill answers budgets itself (live first, then the golden mock): it replaces `budgets`.
-  if (partialMocks.includes('budgets-fill') && partialMocks.includes('budgets')) {
-    console.warn(
-      '[ui-lab] VITE_NASIKO_MOCK: "budgets-fill" already answers budgets (live first, then the mock); ignoring "budgets".',
-    )
-    partialMocks = partialMocks.filter((s) => s !== 'budgets')
-  }
-  // Budgets used to be part of the router group (plans/feat-budget-burn.md eng D2): `router` keeps mocking them.
-  if (
-    partialMocks.includes('router') &&
-    !partialMocks.includes('budgets') &&
-    !partialMocks.includes('budgets-fill')
-  )
-    partialMocks = [...partialMocks, 'budgets']
-  // Budgets are counted from the seed agents' spend: without `agents` they would name agents the server doesn't have.
-  if (partialMocks.includes('budgets') && !partialMocks.includes('agents')) {
-    console.warn(
-      '[ui-lab] VITE_NASIKO_MOCK: "budgets" needs "agents" too; ignoring "budgets" (use VITE_NASIKO_MOCK=budgets,agents).',
-    )
-    partialMocks = partialMocks.filter((s) => s !== 'budgets')
-  }
-
   // Builds and uploads are derived from the seed agents: without `agents` the build rows would name agents the
   // real server doesn't have (plans/feat-deploy.md §9).
   if (partialMocks.includes('deploy') && !partialMocks.includes('agents')) {
@@ -164,15 +136,6 @@ export function readEnv(
     partialMocks = partialMocks.filter((s) => s !== 'optimization')
   }
 
-  // The event log describes the seed agents' changes (plans/feat-agent-centric.md, DX mocks): without the agents mock
-  // its markers would sit on agents the real server doesn't have.
-  if (partialMocks.includes('events') && !partialMocks.includes('agents')) {
-    console.warn(
-      '[ui-lab] VITE_NASIKO_MOCK: "events" needs "agents" too; ignoring "events" (use VITE_NASIKO_MOCK=events,agents).',
-    )
-    partialMocks = partialMocks.filter((s) => s !== 'events')
-  }
-
   // Dev defaults to the local OSS server; a production build defaults to its own origin
   // (the nasiko server serves both the API and the legacy UI).
   const fallbackUi = env.DEV ? 'http://localhost:8080' : (origin ?? '')
@@ -213,18 +176,3 @@ export function validHttpUrl(value: string): string | null {
 }
 
 export const env = readEnv()
-
-/**
- * A preview section may render (plans/feat-agent-centric.md eng, preview policy): true only in full mock mode or when
- * the feature's MOCKABLE group is mocked. It gates the section's queries and rendering, whatever the server answers,
- * so a preview never draws from an unexpected live response.
- */
-export function isPreview(group: Mockable, config: Pick<EnvConfig, 'mode' | 'partialMocks'> = env) {
-  // `router` implies `budgets` (eng D2), also for a config built by hand; `budgets-fill` previews budgets too.
-  return (
-    config.mode === 'mock' ||
-    config.partialMocks.includes(group) ||
-    (group === 'budgets' &&
-      (config.partialMocks.includes('router') || config.partialMocks.includes('budgets-fill')))
-  )
-}

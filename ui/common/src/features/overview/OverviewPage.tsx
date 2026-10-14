@@ -18,7 +18,6 @@ import { Link } from '@tanstack/react-router'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
@@ -84,7 +83,6 @@ function HeaderActions({
   return (
     <>
       <ToggleGroup
-        data-tour="overview-range"
         type="single"
         variant="outline"
         size="sm"
@@ -107,8 +105,6 @@ function HeaderActions({
         ))}
       </ToggleGroup>
       {setup ? <SetupGuide /> : null}
-      {/* No top bar here on desktop (phones keep it, with its own button). */}
-      <TourButton className="max-md:hidden" />
     </>
   )
 }
@@ -300,7 +296,7 @@ function Overview({
         asChild
         className="gap-0 overflow-hidden p-0 @[1100px]/overview:grid @[1100px]/overview:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"
       >
-        <section data-tour="overview-summary" aria-labelledby="overview-summary-title">
+        <section aria-labelledby="overview-summary-title">
           <h2 id="overview-summary-title" className="sr-only">
             {copy.summary}
           </h2>

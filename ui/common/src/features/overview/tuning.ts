@@ -26,8 +26,17 @@ export const IDLE_MIN_AGE_DAYS = 7
 /** Spike detection needs at least this many days to have a typical day. */
 export const MIN_SPIKE_DAYS = 3
 
+/** Top cost drivers in the Spend card: one per chart colour, the rest fold into Other. */
+export const TOP_DRIVERS = 5
+
 /** Needs you shows this many rows before its list scrolls (design review 2A). */
 export const NEEDS_VISIBLE_ROWS = 5
+/** Fleet health lists at most this many rated agents, Watch first. */
+export const HEALTH_LIST_ROWS = 5
+/** The Budgets card lists at most this many agent budgets, most used first. */
+export const BUDGET_AGENT_ROWS = 3
+/** Recent sessions shows this many rows. */
+export const RECENT_SESSION_ROWS = 5
 /** How often Needs you's "Checked …" label re-ages on an open tab. */
 export const CHECKED_TICK_MS = 30_000
 /** Returning to the page after this long refetches the inbox (design review 8A, the TokenOps rule). */

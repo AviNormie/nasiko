@@ -22,7 +22,6 @@ import { useSlots } from '@/app/edition-context'
 import type { SettingsSection } from '@/app/edition'
 import { ACTIVE_ROW, ROW } from '@/app/shell/rowStyles'
 import { SidebarPanel } from '@/app/shell/SidebarPanel'
-import { TopBar } from '@/app/shell/TopBar'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import {
@@ -47,7 +46,6 @@ interface Row {
     | '/settings/optimization-tiers'
     | '/account/appearance'
     | '/account/password'
-    | '/account/shortcuts'
   section?: string
 }
 
@@ -86,7 +84,6 @@ export function SettingsLayout({
           rows: [
             { key: 'appearance', label: copy.appearance.label, to: '/account/appearance' },
             { key: 'password', label: copy.password.label, to: '/account/password' },
-            { key: 'shortcuts', label: copy.shortcuts.label, to: '/account/shortcuts' },
           ],
         },
       ]
@@ -132,7 +129,7 @@ export function SettingsLayout({
       ]
   const known = new Set(groups.flatMap((g) => g.rows.map((r) => r.key)))
   const raw = (location.search as { section?: unknown }).section
-  // A sub-page (Secrets, Tiers, Appearance, Password, Shortcuts) is current by its path; the workspace page by `?section=`.
+  // A sub-page (Secrets, Tiers, Appearance, Password) is current by its path; the workspace page by `?section=`.
   const page = groups
     .flatMap((g) => g.rows)
     .find((r) => r.to === location.pathname && r.to !== '/settings')
@@ -155,55 +152,47 @@ export function SettingsLayout({
       title={account ? copy.accountTitle : copy.title}
     />
   )
-  const label = groups.flatMap((g) => g.rows).find((r) => r.key === current)?.label
   return (
-    <>
-      {/* Settings › Secrets; Account settings has no nav item of its own, so it is the first level. */}
-      <TopBar
-        root={account ? <Link to="/account/appearance">{copy.accountTitle}</Link> : undefined}
-        trail={label ? [label] : []}
-      />
-      <SidebarPanel panel={nav()}>
-        {(inSidebar) => (
-          // The page keeps its place in the tree whichever way the sections show, so a collapse never remounts it.
-          <div className="flex h-full min-h-0">
-            {inSidebar ? null : wide ? (
-              <aside className="flex w-60 shrink-0 flex-col border-r border-border">
-                {nav(true)}
-              </aside>
-            ) : (
-              <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-                <SheetContent side="left" className="w-[85vw] max-w-80 p-0">
-                  <SheetTitle className="sr-only">{copy.nav.label}</SheetTitle>
-                  {/* The sheet's close button sits top-right; start the list below it. */}
-                  <div className="flex h-full min-h-0 flex-col pt-4">
-                    {nav(true, () => setSheetOpen(false))}
-                  </div>
-                </SheetContent>
-              </Sheet>
-            )}
-            {/* `relative`: the scroll box is the positioning context, so an absolutely placed child (Radix's hidden form
+    <SidebarPanel panel={nav()}>
+      {(inSidebar) => (
+        // The page keeps its place in the tree whichever way the sections show, so a collapse never remounts it.
+        <div className="flex h-full min-h-0">
+          {inSidebar ? null : wide ? (
+            <aside className="flex w-60 shrink-0 flex-col border-r border-border">
+              {nav(true)}
+            </aside>
+          ) : (
+            <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+              <SheetContent side="left" className="w-[85vw] max-w-80 p-0">
+                <SheetTitle className="sr-only">{copy.nav.label}</SheetTitle>
+                {/* The sheet's close button sits top-right; start the list below it. */}
+                <div className="flex h-full min-h-0 flex-col pt-4">
+                  {nav(true, () => setSheetOpen(false))}
+                </div>
+              </SheetContent>
+            </Sheet>
+          )}
+          {/* `relative`: the scroll box is the positioning context, so an absolutely placed child (Radix's hidden form
               input behind a Switch) scrolls inside it instead of stretching the document and moving the shell. */}
-            <div className="@container relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
-              <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 @[768px]:pt-6">
-                {inSidebar || wide ? null : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="-ml-2 self-start text-muted-foreground pointer-coarse:min-h-11"
-                    onClick={() => setSheetOpen(true)}
-                  >
-                    <PanelLeft aria-hidden />
-                    {copy.nav.label}
-                  </Button>
-                )}
-                <div className="min-w-0">{children}</div>
-              </div>
+          <div className="@container relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 @[768px]:pt-6">
+              {inSidebar || wide ? null : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 self-start text-muted-foreground pointer-coarse:min-h-11"
+                  onClick={() => setSheetOpen(true)}
+                >
+                  <PanelLeft aria-hidden />
+                  {copy.nav.label}
+                </Button>
+              )}
+              <div className="min-w-0">{children}</div>
             </div>
           </div>
-        )}
-      </SidebarPanel>
-    </>
+        </div>
+      )}
+    </SidebarPanel>
   )
 }
 
@@ -229,11 +218,7 @@ interface NavProps {
  */
 function SectionsNav({ groups, current, linkProps, onNavigate, framed = false, title }: NavProps) {
   return (
-    <nav
-      data-tour="settings-sections"
-      aria-label={copy.nav.label}
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2"
-    >
+    <nav aria-label={copy.nav.label} className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
       <p
         className={cn(
           'flex items-center gap-2 px-5 text-sm font-semibold',

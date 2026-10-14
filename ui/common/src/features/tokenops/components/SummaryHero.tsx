@@ -4,8 +4,8 @@
  * the right. The narrative is the hero; the figures support it and never repeat a whole sentence. The spike clause links to that day's sessions and is a shared
  * `layoutId` source for the Sessions header morph.
  */
-import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+// Budgets hidden: Link served only the Budgets link below.
+// import { Link } from '@tanstack/react-router'
 import { m } from 'motion/react'
 import type { ReactNode } from 'react'
 import { Card } from '@/components/ui/card'
@@ -20,7 +20,6 @@ import { fmtCostPerOp, fmtInt, fmtMoney, fmtMoneyFloor, fmtShortDay } from '@/li
 import type { FinopsKpis } from '../types'
 import { PanelError } from '@/components/shared/panel'
 import { Delta } from '@/components/shared/delta'
-import { capabilitiesQuery } from '@/features/budgets/availability'
 
 export function SummaryHero({
   sentences,
@@ -50,7 +49,6 @@ export function SummaryHero({
   error: unknown
   onRetry: () => void
 }) {
-  const hasBudgets = useQuery(capabilitiesQuery).data?.kind === 'available'
   if (error) return <PanelError error={error} onRetry={onRetry} what="the summary" />
   const changePct = kpis?.total_spend.change_pct
   return (
@@ -122,20 +120,20 @@ export function SummaryHero({
           </Figure>
           <Figure
             label="Month-end at pace"
+            /* Budgets hidden: no server support for /api/budgets yet (R-L10). Restore when it lands.
             aside={
-              // Budgets (plans/feat-budget-burn.md F10) count their own populations, not this page's trace_usage, so
-              // only a link, and only on a server with budgets (F11).
-              hasBudgets ? (
-                <Link
-                  to="/budgets"
-                  aria-label="Budgets and their burn are on the Budgets page"
-                  title="Budgets and their burn are on the Budgets page"
-                  className="text-xs font-medium text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11"
-                >
-                  Budgets <span aria-hidden>→</span>
-                </Link>
-              ) : null
+              // LLM router R2 (A3): budgets use router-metered token_usage, not this page's trace_usage, so only a link.
+              <Link
+                to="/router"
+                hash="router-budgets"
+                aria-label="Budgets are on the LLM router page"
+                title="Budgets are on the LLM router page"
+                className="text-xs font-medium text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11"
+              >
+                Budgets <span aria-hidden>→</span>
+              </Link>
             }
+            */
             value={
               month?.show && month.low !== null && month.high !== null ? (
                 <>

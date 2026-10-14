@@ -3,7 +3,7 @@
  * route, so /login stays bare. Pages keep their own max width; Chat fills the viewport height.
  */
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
-import { type ComponentType, type ReactNode, useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
 import { cn } from '@/lib/utils'
@@ -21,18 +21,15 @@ const FULL_HEIGHT = /^\/(chat|settings|account)(\/|$)/
  */
 export function AppShell({
   end,
-  split: Split,
   badges,
   hidden,
 }: {
   end?: ReactNode
-  split?: ComponentType<{ path: string; children: ReactNode }> | null
   badges?: NavBadges
   /** Nav paths to leave out (onboarding hides Overview while its guide stands in for it). */
   hidden?: readonly string[]
 } = {}) {
-  const path = useRouterState({ select: (s) => s.location.pathname })
-  const fullHeight = FULL_HEIGHT.test(path)
+  const fullHeight = useRouterState({ select: (s) => FULL_HEIGHT.test(s.location.pathname) })
   // Controlled (v1c E1): the cookie wins; with none, the width default. Chat used to start as the icon rail so its
   // history column fit beside the nav; its history is the sidebar's drill-in panel now, so it needs the open sidebar.
   // Only a user toggle sets `choice`, and the sidebar writes the cookie then, so the default is never stored.
@@ -42,35 +39,6 @@ export function AppShell({
   // The drill-in slot (sidebarPanel.ts): the sidebar hands out `target`, a page's SidebarPanel portals into it.
   const [target, setTarget] = useState<HTMLElement | null>(null)
   const [panels, setPanels] = useState(0)
-  const inset = (
-    <SidebarInset
-      id="main"
-      tabIndex={-1}
-      className={cn('outline-none', fullHeight ? 'min-h-0' : 'mx-auto max-w-page')}
-    >
-      {/* Phones: a slim top bar with the menu button opens the nav sheet (§4.2). */}
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 md:hidden">
-        <SidebarTrigger aria-label={copy.openMenu} className="size-11" />
-        <Link
-          to="/"
-          activeOptions={{ exact: true }}
-          className="flex h-11 items-center gap-2 rounded-md px-2 text-sm font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
-        >
-          <img src="/mark-nasiko.svg" alt="" aria-hidden className="size-4" />
-          {copy.brand}
-        </Link>
-      </div>
-      {fullHeight ? (
-        <div className="min-h-0 flex-1">
-          <Outlet />
-        </div>
-      ) : (
-        <div className="w-full px-4 py-4">
-          <Outlet />
-        </div>
-      )}
-    </SidebarInset>
-  )
   return (
     <SidebarPanelContext value={{ target, setTarget, panels, setPanels }}>
       <SidebarProvider
@@ -89,7 +57,33 @@ export function AppShell({
           {copy.skipToContent}
         </Button>
         <AppSidebar badges={badges} hidden={hidden} />
-        {Split ? <Split path={path}>{inset}</Split> : inset}
+        <SidebarInset
+          id="main"
+          tabIndex={-1}
+          className={cn('outline-none', fullHeight ? 'min-h-0' : 'mx-auto max-w-page')}
+        >
+          {/* Phones: a slim top bar with the menu button opens the nav sheet (§4.2). */}
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 md:hidden">
+            <SidebarTrigger aria-label={copy.openMenu} className="size-11" />
+            <Link
+              to="/"
+              activeOptions={{ exact: true }}
+              className="flex h-11 items-center gap-2 rounded-md px-2 text-sm font-semibold focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+            >
+              <img src="/mark-nasiko.svg" alt="" aria-hidden className="size-4" />
+              {copy.brand}
+            </Link>
+          </div>
+          {fullHeight ? (
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
+          ) : (
+            <div className="w-full px-4 py-4">
+              <Outlet />
+            </div>
+          )}
+        </SidebarInset>
         {end}
       </SidebarProvider>
     </SidebarPanelContext>

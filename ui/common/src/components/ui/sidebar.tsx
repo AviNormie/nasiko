@@ -6,8 +6,7 @@
  * - the width transitions run 180 ms ease-out (`motion.ts` `durations.base`) and switch off under
  *   reduced motion (eng D11);
  * - `SidebarMenuSkeleton` is removed (unused; its random width failed oxlint's purity rule);
- * - ⌘B / Ctrl+B is ignored while typing (inputs, textareas, contenteditable) or when already handled
- *   (`isTypingTarget` lives in `@/lib/keys`, shared with the J/K Previous/Next keys);
+ * - ⌘B / Ctrl+B is ignored while typing (inputs, textareas, contenteditable) or when already handled;
  * - closing the phone sheet returns focus to the button that opened it (`SidebarTrigger` isn't a
  *   Radix trigger, so Radix can't restore it on its own);
  * - menu-button tooltips render only in the collapsed desktop rail (a hidden one still ate Escape).
@@ -22,7 +21,6 @@ import { cn } from "@/lib/utils"
 import { PanelLeftIcon } from "lucide-react"
 import { Slot } from "radix-ui"
 
-import { isTypingTarget } from "@/lib/keys"
 import { useMediaQuery } from "@/lib/useMediaQuery"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -50,6 +48,10 @@ const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
 /** The last SidebarTrigger pressed, so the phone sheet can hand focus back to it on close. */
 let lastOpener: HTMLElement | null = null
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select") !== null)
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"

@@ -34,11 +34,12 @@ if (typeof Element !== 'undefined') {
 }
 
 beforeEach(() => {
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    writable: true,
-    value: memoryStorage(),
-  })
+  for (const name of ['localStorage', 'sessionStorage'])
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      writable: true,
+      value: memoryStorage(),
+    })
 })
 
 // Animations finish instantly in tests: assertions never wait on a spring.
@@ -52,10 +53,8 @@ class ResizeObserverStub {
 }
 globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver
 // jsdom has no scrollIntoView; cmdk (the chat TargetPicker's list) calls it on the selected item.
-if (typeof Element !== 'undefined') {
+if (typeof Element !== 'undefined')
   Element.prototype.scrollIntoView ??= function scrollIntoView() {}
-  Element.prototype.scrollTo ??= function scrollTo() {}
-}
 
 // Full-page renders under a parallel run (or coverage instrumentation) can exceed the 1 s
 // findBy default on a busy machine, and a file's first render also pays for the React Compiler's

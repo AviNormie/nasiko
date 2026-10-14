@@ -1,114 +1,129 @@
 /**
- * The budgets mock's default world (plan feat-budget-burn B0): the app's seed traces as routed calls billed to each
- * agent's owner, the seed agents and their owners, and R-L10's three seeded budgets, all answered by the one engine
- * (`budgetEngine.ts`, the 1.0 contract, docs/requirements/budgets.md). R-L10's functions keep their signatures and
- * meaning (`budgets.test.ts`), now over the engine:
+ * The R2 budgets mock (plans/feat-llm-router.md §5, the proposed R-L10 contract in
+ * docs/designs/openruntime-llm-router-recommendations.md). No server has these endpoints yet: this module IS the
+ * contract's reference behaviour. Spend comes from the same seed traces as the router's spend column
+ * (`usageByAgent`): an owner budget sums the calls billed to the owner (no flow attribution in the seed, so a call is
+ * billed to the agent's owner), an agent budget sums every call to that agent. The period is the UTC calendar month.
  *
  * - A budget belongs to one user (`owner_id`: the agent's owner for an agent budget, whoever set it); one owner budget
  *   per user and one budget per agent, across all users.
- * - A `stop` budget refuses calls once spent: calls after the crossing never happened (the engine's refusal pass).
+ * - A `stop` budget refuses calls once spent: calls after the crossing aren't counted (they never reached a provider).
  * - Alerts are records: written when spend crosses a mark (at the crossing call's time) and never rewritten by an edit.
  *
  * Seeded limits are set from this month's spend, so the three states show on any date: the owner budget sits past
  * 80% (warning), the busiest agent is over its limit with Stop calls (exceeded, stopped), the next one is well under.
- * The golden world (`seed-budgets.ts`) is the other input, for the contract's fixtures (`budgets-golden`).
  */
-import { DEFAULT_THRESHOLDS } from '@/features/budgets/tuning'
+import { DEFAULT_THRESHOLDS } from '@/features/router/tuning'
 import type {
   Budget,
   BudgetAlert,
+  BudgetStatus,
   BudgetStatusResponse,
   CreateBudgetBody,
   UpdateBudgetBody,
-} from '@/features/budgets/types'
+} from '@/features/router/types'
 import type { MockAgent } from './agents'
-import {
-  accepted,
-  alertRows,
-  budgetView,
-  createBudget as engineCreate,
-  deleteBudget as engineDelete,
-  statusList,
-  toUnits,
-  updateBudget as engineUpdate,
-  versionAt,
-  type Viewer,
-  type WBudget,
-  type WCall,
-  type World,
-} from './budgetEngine'
-import { SEED_MODELS, type Seed } from './seed'
-import { ADMIN_ID } from './seed-harness'
-import { observabilityData } from './spanBuilder'
+import { MockHttpError } from './aggregate'
+import type { Seed } from './seed'
 
-export type BudgetMockStore = World
-
+const DAY = 86_400_000
 const pad = (n: number) => String(n).padStart(12, '0')
 const budgetId = (n: number) => `5eed000b-0000-4000-8000-${pad(n)}`
-const cents = (v: number) => Math.round(v * 100) / 100
+
+export interface BudgetMockStore {
+  /** `stoppedUntil`: mock-only, when a stop budget was switched off (calls it refused before then stay uncounted). */
+  budgets: (Budget & { stoppedUntil?: number })[]
+  alerts: BudgetAlert[]
+  next: number
+}
+
 const monthStart = (t: number) => {
   const d = new Date(t)
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)
 }
+const nextMonth = (t: number) => {
+  const d = new Date(t)
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)
+}
+const cents = (v: number) => Math.round(v * 100) / 100
 /** A `stop` budget always alerts at 100 (R-L10). */
 const marks = (thresholds: readonly number[], action: Budget['action']) =>
   [...new Set([...thresholds, ...(action === 'stop' ? [100] : [])])].sort((a, b) => a - b)
 
-/** The seed's traces as the router's calls: billed to the agent's owner (the seed has no flow attribution). */
-function seedCalls(seed: Seed, agents: readonly MockAgent[]): WCall[] {
+/**
+ * The calls a budget counts in [from, to], oldest first, as [ts, cost]. While a stop budget is spent the router
+ * refuses calls, so they aren't counted: through `to` while it is `stop`, and up to `stoppedUntil` after a switch to
+ * Alert only (refused calls never become spend after the fact).
+ */
+function counted(
+  b: Budget & { stoppedUntil?: number },
+  seed: Seed,
+  agents: readonly MockAgent[],
+  from: number,
+  to: number,
+): [number, number][] {
   const owner = new Map(agents.map((a) => [a.id, a.owner_id]))
-  const sessions = observabilityData(seed)
-  return seed.traces
-    .map((t): WCall => ({
-      call_id: t.trace_id,
-      at: t.ts,
-      source: 'routed',
-      agent_id: t.agent_id,
-      billed_user_id: owner.get(t.agent_id) ?? null,
-      flow_id: t.trace_id,
-      // The Sessions mock's chat session for the trace (`spanBuilder.ts`: one per agent per UTC day, the spike day's PR
-      // reviews their own), so a session's ledger and its session budget are the same session.
-      chat_session_id: sessions.traceById.get(t.trace_id)?.session.session_id ?? null,
-      turn_id: t.trace_id,
-      model: `${t.provider}/${t.model}`,
-      operation: t.workflow_id ? 'workflow' : 'chat',
-      input_tokens: t.input_tokens,
-      output_tokens: t.output_tokens,
-      // The seed's unpriced model costs $0: unpriced, as R-L10 counted it.
-      u: t.cost_usd === 0 ? null : toUnits(t.cost_usd),
-      routed: true,
-    }))
-    .sort((a, b) => a.at - b.at || a.call_id.localeCompare(b.call_id))
+  const rows = seed.traces
+    .filter(
+      (t) =>
+        t.ts >= from &&
+        t.ts <= to &&
+        (b.scope === 'agent' ? t.agent_id === b.agent_id : owner.get(t.agent_id) === b.owner_id),
+    )
+    .map((t): [number, number] => [t.ts, t.cost_usd])
+    .sort((x, y) => x[0] - y[0])
+  const refusing = b.action === 'stop' ? Infinity : (b.stoppedUntil ?? -Infinity)
+  const out: [number, number][] = []
+  let sum = 0
+  for (const r of rows) {
+    if (sum >= b.limit_usd && r[0] <= refusing) continue
+    out.push(r)
+    sum += r[1]
+  }
+  return out
 }
 
-/** Idle this long after its last call, a session has ended (BG-10's idle timeout, as the golden S1). */
-const SESSION_IDLE_MS = 60 * 60_000
+/** One entry per UTC day of the period up to and including `to`'s day, zeros included. */
+function dailySpend(rows: readonly [number, number][], from: number, to: number) {
+  const days = Math.floor((to - from) / DAY) + 1
+  const out = Array.from({ length: days }, (_, i) => ({
+    date: new Date(from + i * DAY).toISOString().slice(0, 10),
+    cost_usd: 0,
+  }))
+  for (const [ts, cost] of rows)
+    out[Math.min(days - 1, Math.floor((ts - from) / DAY))]!.cost_usd += cost
+  return out.map((d) => ({ ...d, cost_usd: cents(d.cost_usd) }))
+}
 
-/**
- * The chat sessions behind the seed's calls (BG-10: session budgets need them): one per `chat_session_id`, its user the
- * billed user, its agent the first call's, from its first call to an hour after its last (open while that is ahead).
- */
-function sessionsOf(calls: readonly WCall[], now: number): World['sessions'] {
-  const byId = new Map<string, WCall[]>()
-  for (const c of calls)
-    if (c.chat_session_id) byId.set(c.chat_session_id, [...(byId.get(c.chat_session_id) ?? []), c])
-  return [...byId].flatMap(([id, cs]) => {
-    const first = cs[0]!
-    const last = cs.at(-1)!
-    if (!first.billed_user_id || !first.agent_id) return []
-    const end = last.at + SESSION_IDLE_MS
-    return [
-      {
-        id,
-        title: '',
-        user_id: first.billed_user_id,
-        agent_id: first.agent_id,
-        // A minute before its first call: the session exists before its first turn (turn 0 is its start).
-        started_at: first.at - 60_000,
-        ended_at: end <= now ? end : null,
-      },
-    ]
-  })
+/** Append an alert for each mark this budget's spend crossed in [from, to] and that has none yet this period. */
+function recordCrossings(
+  s: BudgetMockStore,
+  b: Budget,
+  seed: Seed,
+  agents: readonly MockAgent[],
+  from: number,
+  to: number,
+) {
+  const period = new Date(from).toISOString().slice(0, 7)
+  const have = new Set(
+    s.alerts.filter((a) => a.budget_id === b.id && a.at.startsWith(period)).map((a) => a.threshold),
+  )
+  let sum = 0
+  for (const [ts, cost] of counted(b, seed, agents, from, to)) {
+    sum += cost
+    for (const t of b.thresholds) {
+      if (have.has(t) || sum < (b.limit_usd * t) / 100) continue
+      have.add(t)
+      s.alerts.push({
+        id: `${b.id}:${period}:${t}`,
+        budget_id: b.id,
+        threshold: t,
+        amount_usd: cents((b.limit_usd * t) / 100),
+        at: new Date(ts).toISOString(),
+        stopped: t >= 100 && b.action === 'stop',
+      })
+    }
+  }
 }
 
 export function buildBudgetState(
@@ -118,266 +133,203 @@ export function buildBudgetState(
   now: number,
   opts: { empty?: boolean } = {},
 ): BudgetMockStore {
-  const owners = [...new Set([user, ...agents.map((a) => a.owner_id)])]
-  const calls = seedCalls(seed, agents)
-  const w: World = {
-    adminId: ADMIN_ID,
-    edition: 'oss',
-    calls,
-    budgets: [],
-    users: owners.map((id) => ({
-      id,
-      name: id === ADMIN_ID ? 'admin' : `User ${id.slice(-4)}`,
-      role: id === ADMIN_ID ? 'superuser' : 'member',
-    })),
-    agents: agents.map((a) => ({
-      id: a.id,
-      name: a.display_name || a.name,
-      owner_id: a.owner_id,
-      harness: a.tags.includes('coding-agent'),
-      deleted: a.deleted,
-    })),
-    units: [],
-    members: [],
-    parents: [],
-    sessions: sessionsOf(calls, now),
-    meta: { exact_dedupe_from: null, membership_history_from: null },
-    watermarks: { routed: Infinity, traced: Infinity, harness_estimate: Infinity },
-    settings: {
-      team_identity: false,
-      unit_leads_write: false,
-      fiscal: [{ from: -Infinity, month: 1 }],
-      updated_at: monthStart(now),
-    },
-    prices: SEED_MODELS.filter((m) => m.inPerM > 0).map((m) => ({
-      provider: m.provider,
-      model: m.model,
-      input_per_mtok_usd: m.inPerM,
-      output_per_mtok_usd: m.outPerM,
-      cache_read_per_mtok_usd: null,
-      cache_creation_per_mtok_usd: null,
-      effective_from: new Date(Date.UTC(2026, 0, 1)).toISOString(),
-    })),
-    idPrefix: '5eed000b-0000-4000-8000-',
-    seq: 4,
-    rev: 0,
-  }
-  if (opts.empty) return w
+  const s: BudgetMockStore = { budgets: [], alerts: [], next: 1 }
+  if (opts.empty) return s
   // Created at the start of last month, so both periods' alerts are this budget's own history.
-  const created = monthStart(monthStart(now) - 1)
-  const from = monthStart(now)
+  const created = new Date(monthStart(monthStart(now) - 1)).toISOString()
   const mk = (
     n: number,
-    scope: 'owner' | 'agent',
+    scope: Budget['scope'],
     agent_id: string | null,
     limit: number,
     action: Budget['action'],
-  ): WBudget => ({
+  ): Budget => ({
     id: budgetId(n),
     scope,
     agent_id,
-    unit_id: null,
-    session_id: null,
     owner_id: user,
+    set_by: user,
+    period: 'month',
+    limit_usd: limit,
+    thresholds: marks(DEFAULT_THRESHOLDS, action),
+    action,
     created_at: created,
     updated_at: created,
-    versions: [
-      {
-        version: 1,
-        effective_from: created,
-        set_by: user,
-        period: 'month',
-        limit_usd: limit,
-        thresholds: marks(DEFAULT_THRESHOLDS, action),
-        forecast_thresholds: [100],
-        action,
-      },
-    ],
-    next_period: null,
-    deleted_at: null,
-    log: [],
   })
-  const used = (pick: (c: WCall) => boolean) =>
-    accepted(w)
-      .filter((c) => c.at >= from && c.at <= now && pick(c))
-      .reduce((t, c) => t + (c.u ?? 0), 0) / 1e8
-  // Agent limits from this month's spend first (in cents, no integer floors, so the states hold early on the 1st).
+  const from = monthStart(now)
+  const used = (b: Budget) =>
+    counted({ ...b, action: 'alert' }, seed, agents, from, now).reduce((t, [, c]) => t + c, 0)
+  // Limits from this month's spend, in cents (no integer floors), so the states hold even early on the 1st.
+  const owner = mk(1, 'owner', null, 0, 'alert')
+  owner.limit_usd = Math.max(0.01, cents(used(owner) / 0.85))
   const mine = agents
     .filter((a) => !a.deleted && a.owner_id === user && !a.tags.includes('coding-agent'))
-    .map((a) => ({ a, u: used((c) => c.agent_id === a.id) }))
+    .map((a) => ({ a, u: used(mk(0, 'agent', a.id, 0, 'alert')) }))
     .sort((x, y) => y.u - x.u || x.a.name.localeCompare(y.a.name))
+  s.budgets.push(owner)
   if (mine[0] && mine[0].u > 0)
-    w.budgets.push(mk(2, 'agent', mine[0].a.id, Math.max(0.01, cents(mine[0].u * 0.9)), 'stop'))
+    s.budgets.push(mk(2, 'agent', mine[0].a.id, Math.max(0.01, cents(mine[0].u * 0.9)), 'stop'))
   if (mine[1])
-    w.budgets.push(mk(3, 'agent', mine[1].a.id, Math.max(1, cents(mine[1].u * 3)), 'alert'))
-  w.rev++
-  // The owner budget after the stop budget has refused its calls, so it reads 85% of what really happened.
-  const owner = mk(1, 'owner', null, 0, 'alert')
-  owner.owner_id = user
-  owner.versions[0]!.limit_usd = Math.max(
-    0.01,
-    cents(used((c) => c.billed_user_id === user) / 0.85),
-  )
-  w.budgets.unshift(owner)
-  w.rev++
-  return w
-}
-
-/**
- * Keeps the world's agents and owners in step with the agents mock (a deploy or a delete in the session), so a budget
- * can be set on an agent made after the world was built. Spend comes only from the seed's traces.
- */
-export function syncAgents(w: BudgetMockStore, agents: readonly MockAgent[]) {
-  let changed = false
-  for (const a of agents) {
-    const have = w.agents.find((x) => x.id === a.id)
-    if (!have) {
-      w.agents.push({
-        id: a.id,
-        name: a.display_name || a.name,
-        owner_id: a.owner_id,
-        harness: a.tags.includes('coding-agent'),
-        deleted: a.deleted,
-      })
-      changed = true
-    } else if (!!have.deleted !== a.deleted || have.owner_id !== a.owner_id) {
-      have.deleted = a.deleted
-      have.owner_id = a.owner_id
-      changed = true
-    }
-    if (!w.users.some((u) => u.id === a.owner_id)) {
-      w.users.push({ id: a.owner_id, name: `User ${a.owner_id.slice(-4)}`, role: 'member' })
-      changed = true
-    }
+    s.budgets.push(mk(3, 'agent', mine[1].a.id, Math.max(1, cents(mine[1].u * 3)), 'alert'))
+  s.next = 4
+  const prev = monthStart(monthStart(now) - 1)
+  for (const b of s.budgets) {
+    recordCrossings(s, b, seed, agents, prev, from - 1)
+    recordCrossings(s, b, seed, agents, from, now)
   }
-  if (changed) w.rev++
+  return s
 }
 
-const viewer = (user: string, superuser = false): Viewer => ({ id: user, superuser })
+const own = (s: BudgetMockStore, user: string) => s.budgets.filter((b) => b.owner_id === user)
 
-/** The R-L10 view of a budget (its 1.0 fields are a superset). */
-const legacy = (w: World, b: WBudget, now: number) => budgetView(w, b, now) as unknown as Budget
+export const listBudgets = (s: BudgetMockStore, user: string): Budget[] =>
+  own(s, user).map(({ stoppedUntil: _u, ...b }) => b)
 
-/** The caller's budgets in the order they were made (R-L10 has no order; GET sorts them, §6.2). */
-export const listBudgets = (w: BudgetMockStore, user: string, now = Date.now()): Budget[] =>
-  w.budgets
-    .filter((b) => b.owner_id === user && b.deleted_at === null)
-    .map((b) => legacy(w, b, now))
+function find(s: BudgetMockStore, id: string, user: string) {
+  const b = own(s, user).find((x) => x.id === id)
+  if (!b) throw new MockHttpError(404, 'budget not found')
+  return b
+}
 
+function validate(limit: unknown, thresholds: unknown, action: unknown) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || cents(limit) <= 0)
+    throw new MockHttpError(400, 'limit_usd must be greater than 0')
+  if (
+    !Array.isArray(thresholds) ||
+    !thresholds.length ||
+    thresholds.some((t) => !Number.isInteger(t) || t < 1 || t > 100) ||
+    new Set(thresholds).size !== thresholds.length
+  ) {
+    throw new MockHttpError(400, 'thresholds must be whole percents from 1 to 100')
+  }
+  if (action !== 'alert' && action !== 'stop')
+    throw new MockHttpError(400, 'action must be alert or stop')
+}
+
+/** `agentOwner(id)` is the agent's owner id, or undefined for an unknown or deleted agent (both answer 403). */
 export function createBudget(
-  w: BudgetMockStore,
+  s: BudgetMockStore,
   user: string,
   body: CreateBudgetBody,
-  _agentOwner: (id: string) => string | undefined,
+  agentOwner: (id: string) => string | undefined,
   superuser: boolean,
   now: number,
 ): Budget {
-  return legacy(w, engineCreate(w, viewer(user, superuser), body, now), now)
+  if (body.scope !== 'owner' && body.scope !== 'agent')
+    throw new MockHttpError(400, 'scope must be owner or agent')
+  const thresholds = body.thresholds ?? [...DEFAULT_THRESHOLDS]
+  const action = body.action ?? 'alert'
+  validate(body.limit_usd, thresholds, action)
+  const agent_id = body.scope === 'agent' ? (body.agent_id ?? null) : null
+  const owner = body.scope === 'owner' ? user : agent_id ? agentOwner(agent_id) : undefined
+  if (!owner || (body.scope === 'agent' && owner !== user && !superuser))
+    throw new MockHttpError(403, 'not the agent owner')
+  // One owner budget per user, one budget per agent across all users.
+  if (
+    s.budgets.some((b) =>
+      body.scope === 'agent'
+        ? b.agent_id === agent_id
+        : b.scope === 'owner' && b.owner_id === owner,
+    )
+  )
+    throw new MockHttpError(409, 'budget already exists for this scope')
+  const iso = new Date(now).toISOString()
+  const b: Budget = {
+    id: budgetId(s.next++),
+    scope: body.scope,
+    agent_id,
+    owner_id: owner,
+    set_by: user,
+    period: 'month',
+    limit_usd: cents(body.limit_usd),
+    thresholds: marks(thresholds, action),
+    action,
+    created_at: iso,
+    updated_at: iso,
+  }
+  s.budgets.push(b)
+  return b
 }
 
 export function updateBudget(
-  w: BudgetMockStore,
+  s: BudgetMockStore,
   id: string,
   user: string,
   body: UpdateBudgetBody,
   now: number,
-  superuser = false,
 ): Budget {
-  return legacy(w, engineUpdate(w, viewer(user, superuser), id, body, now), now)
+  const b = find(s, id, user)
+  validate(body.limit_usd, body.thresholds, body.action)
+  if (body.expected_updated_at !== b.updated_at)
+    throw new MockHttpError(409, 'budget changed elsewhere')
+  if (b.action === 'stop' && body.action === 'alert') b.stoppedUntil = now
+  Object.assign(b, {
+    limit_usd: cents(body.limit_usd),
+    thresholds: marks(body.thresholds, body.action),
+    action: body.action,
+    set_by: user,
+    updated_at: new Date(now).toISOString(),
+  })
+  return b
 }
 
-export function deleteBudget(
-  w: BudgetMockStore,
-  id: string,
-  user: string,
-  superuser = false,
-  now = Date.now(),
-) {
-  engineDelete(w, viewer(user, superuser), id, now)
+export function deleteBudget(s: BudgetMockStore, id: string, user: string) {
+  const b = find(s, id, user)
+  s.budgets = s.budgets.filter((x) => x !== b)
 }
+
+/** The highest mark at or under `used / limit`, or null. */
+const crossedAt = (b: Budget, used: number) =>
+  [...b.thresholds].reverse().find((t) => used >= (b.limit_usd * t) / 100) ?? null
 
 export function budgetStatus(
-  w: BudgetMockStore,
-  _seed: Seed,
-  _agents: readonly MockAgent[],
+  s: BudgetMockStore,
+  seed: Seed,
+  agents: readonly MockAgent[],
   user: string,
   now: number,
 ): BudgetStatusResponse {
-  const st = statusList(w, viewer(user), { scope: null, id: null, limit: '100' }, now)
-  // The 1.0 row is a superset of R-L10's.
-  return { data: st.data as unknown as BudgetStatusResponse['data'], covers: 'routed_calls' }
+  const from = monthStart(now)
+  const owner = new Map(agents.map((a) => [a.id, a.owner_id]))
+  const data: BudgetStatus[] = own(s, user).map((b) => {
+    recordCrossings(s, b, seed, agents, from, now)
+    const daily = dailySpend(counted(b, seed, agents, from, now), from, now)
+    const used = cents(daily.reduce((t, d) => t + d.cost_usd, 0))
+    const crossed = crossedAt(b, used)
+    const exceeded = used >= b.limit_usd
+    const unpriced_calls = seed.traces.filter(
+      (t) =>
+        t.ts >= from &&
+        t.ts <= now &&
+        t.cost_usd === 0 &&
+        (b.scope === 'agent' ? t.agent_id === b.agent_id : owner.get(t.agent_id) === b.owner_id),
+    ).length
+    return {
+      budget_id: b.id,
+      used_usd: used,
+      unpriced_calls,
+      resets_at: new Date(nextMonth(now)).toISOString(),
+      state: exceeded ? 'exceeded' : crossed !== null ? 'warning' : 'ok',
+      crossed,
+      daily,
+      stopped: exceeded && b.action === 'stop',
+    }
+  })
+  return { data, covers: 'routed_calls' }
 }
 
-/** This period's and last period's threshold alerts on the caller's budgets, newest first. */
+/** This period's and last period's alerts on the caller's budgets, newest first. */
 export function budgetAlerts(
-  w: BudgetMockStore,
-  _seed: Seed,
-  _agents: readonly MockAgent[],
+  s: BudgetMockStore,
+  seed: Seed,
+  agents: readonly MockAgent[],
   user: string,
   now: number,
 ): BudgetAlert[] {
-  return alertRows(w, viewer(user), { scope: null, id: null }, now).map((a) => ({
-    ...a,
-    threshold: a.percent,
-  }))
-}
-
-/**
- * The ledger's proposed per-session read (AH-8, plans/feat-agent-centric.md PR1b): every budget that applies to one of
- * the caller's sessions, with what it recorded before the session started (this budget's own period) and per turn.
- * `sessionLimit` adds a session budget (the demo session has one). 1.0 replaces this read with
- * `GET /api/budgets?scope=session&id=` (budgets.md §12); B5 moves the ledger onto it.
- */
-export function sessionBudgets(
-  w: BudgetMockStore,
-  _seed: Seed,
-  _agents: readonly MockAgent[],
-  user: string,
-  session: {
-    agentId: string | null
-    start: number
-    turns: { turn_id: string; used_usd: number }[]
-  },
-  sessionLimit?: number,
-) {
-  const sessionUsed = cents(session.turns.reduce((t, x) => t + x.used_usd, 0))
-  const from = monthStart(session.start)
-  const period = new Date(from).toISOString().slice(0, 7)
-  const applies = w.budgets.filter(
-    (b) =>
-      b.owner_id === user &&
-      (b.scope === 'owner' || (b.scope === 'agent' && b.agent_id === session.agentId)),
-  )
-  const out = applies.map((b) => ({
-    budget_id: b.id,
-    scope: b.scope as 'owner' | 'agent',
-    limit_usd: versionAt(b, session.start).limit_usd,
-    period,
-    used_before_usd: cents(
-      accepted(w)
-        .filter(
-          (c) =>
-            c.at >= from &&
-            c.at < session.start &&
-            (b.scope === 'agent' ? c.agent_id === b.agent_id : c.billed_user_id === b.owner_id),
-        )
-        .reduce((t, c) => t + (c.u ?? 0), 0) / 1e8,
-    ),
-    session_used_usd: sessionUsed,
-    turns: session.turns,
-  }))
-  return sessionLimit
-    ? [
-        {
-          budget_id: 'session-budget',
-          scope: 'session' as const,
-          limit_usd: sessionLimit,
-          period: null,
-          used_before_usd: 0,
-          session_used_usd: sessionUsed,
-          turns: session.turns,
-        },
-        ...out,
-      ]
-    : out
+  for (const b of own(s, user)) recordCrossings(s, b, seed, agents, monthStart(now), now)
+  const ids = new Set(own(s, user).map((b) => b.id))
+  const since = new Date(monthStart(monthStart(now) - 1)).toISOString()
+  return s.alerts
+    .filter((a) => ids.has(a.budget_id) && a.at >= since && a.at <= new Date(now).toISOString())
+    .sort((x, y) => y.at.localeCompare(x.at) || y.threshold - x.threshold)
 }

@@ -17,7 +17,7 @@ export const copy = {
     skipStep: 'Skip this step',
     getStarted: 'Get started',
     continue: 'Continue',
-    finish: 'Go to Home',
+    finish: 'Go to Overview',
     left: (minutes: number) =>
       minutes
         ? `About ${minutes} min left · skip anytime`
@@ -160,8 +160,8 @@ export const copy = {
       line: 'Each agent has switches that trim what it sends to the model — bulky tool output, old chat history, long answers. Find them under Agent → Settings → Optimisation, and see what they saved on TokenOps.',
       beta: 'These are new and still being tuned, so try them on one agent first. You can turn any of them off at any time.',
     },
-    home: 'Open Home',
-    homeLine: 'Your agents, their spend and health, and what needs you',
+    overview: 'Open the Overview',
+    overviewLine: 'Spend, sessions and agent health',
     open: (page: string) => `Open ${page}`,
     openLine: 'Your suggested first screen',
   },

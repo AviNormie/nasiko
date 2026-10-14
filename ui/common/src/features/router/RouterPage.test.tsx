@@ -55,15 +55,11 @@ describe('layout', () => {
   it('shows the tabs in order, with summary tiles that count the rows', async () => {
     renderApp('/router')
     await ready()
-    // Budgets shows once the budgets probe says this server has them (plans/feat-budget-burn.md F11).
-    await waitFor(() =>
-      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-        copy.anchors.agents,
-        copy.anchors.configs,
-        copy.anchors.budgets,
-        copy.anchors.providers,
-      ]),
-    )
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      copy.anchors.agents,
+      copy.anchors.configs,
+      copy.anchors.providers,
+    ])
     // One tab at a time: Your agents first.
     expect(screen.queryByRole('heading', { name: copy.configsTitle })).toBeNull()
     expect(stripText()).toContain('19 agents')

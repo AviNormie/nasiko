@@ -13,13 +13,8 @@ describe('Agents catalog ?health= (ISSUE-001)', () => {
     renderApp('/agents?health=action')
     await screen.findByRole('button', { name: /Remove the Health: Needs action filter/ })
     const main = screen.getByRole('main')
-    // The top bar's breadcrumb is a list too.
-    const rows = () =>
-      within(main)
-        .getAllByRole('listitem')
-        .filter((li) => !li.closest('[data-slot="breadcrumb"]'))
-    await waitFor(() => expect(rows().length).toBeGreaterThan(0))
-    const items = rows()
+    await waitFor(() => expect(within(main).getAllByRole('listitem').length).toBeGreaterThan(0))
+    const items = within(main).getAllByRole('listitem')
     for (const li of items)
       expect(within(li).getByTestId('health-reason').textContent).toMatch(/^Why: \S/)
   })
