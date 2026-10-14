@@ -1,5 +1,3 @@
-'use client'
-
 import type { Variants } from 'motion/react'
 import { motion } from 'motion/react'
 import { memo } from 'react'

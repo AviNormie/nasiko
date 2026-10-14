@@ -1,5 +1,3 @@
-'use client'
-
 import { motion, useSpring, useTransform } from 'motion/react'
 import { type SpringConfig, useChartConfig } from '../chart-config-context'
 import { chartCssVars } from '../chart-context'
