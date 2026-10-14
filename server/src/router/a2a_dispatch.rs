@@ -1652,11 +1652,13 @@ async fn agent_stream(
                     yield Ok(to_sse(a2a::status_event(a2a::completed(&task_id, &context_id))));
                 }
 
+                // Guarded on 'running' like the other completion sites: a terminal
+                // 'failed'/'paused' is never downgraded by a later completion.
                 let _ = sqlx::query(
                     r#"UPDATE flows SET status = 'completed',
                        duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                        completed_at = now()
-                       WHERE flow_id = $1"#,
+                       WHERE flow_id = $1 AND status = 'running'"#,
                 ).bind(&flow_id_cleanup).execute(&db).await;
                 flow_events.remove(&flow_id_cleanup).await;
             }
@@ -1788,11 +1790,13 @@ async fn agent_stream(
 
             yield Ok(to_sse(a2a::status_event(a2a::completed(&task_id, &context_id))));
 
+            // Guarded on 'running' like the other completion sites: a terminal
+            // 'failed'/'paused' is never downgraded by a later completion.
             let _ = sqlx::query(
                 r#"UPDATE flows SET status = 'completed',
                    duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                    completed_at = now()
-                   WHERE flow_id = $1"#,
+                   WHERE flow_id = $1 AND status = 'running'"#,
             ).bind(&flow_id_cleanup).execute(&db).await;
             flow_events.remove(&flow_id_cleanup).await;
         };

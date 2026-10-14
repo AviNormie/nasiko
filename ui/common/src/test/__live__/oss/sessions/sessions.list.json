@@ -1,19 +1,19 @@
 {
   "fixture_version": 1,
   "id": "sessions.list",
-  "recorded_at": "2026-09-29T08:53:58.405Z",
+  "recorded_at": "2026-10-13T14:47:29.000Z",
   "window": {
-    "start": "2026-09-29T08:53:58.405Z",
-    "end": "2026-09-29T08:53:59.195Z"
+    "start": "2026-10-13T14:47:29.000Z",
+    "end": "2026-10-13T14:47:29.020Z"
   },
-  "anchor": "2026-09-29T08:53:49.244Z",
+  "anchor": "2026-10-13T14:46:26.338Z",
   "edition": "oss",
   "identity": "admin",
   "server": {
-    "sha": "ea233d201502a205e78339a7cb2688856b9ec2fa",
-    "dirty": false,
-    "openapi_sha256": "71f2d54fd3466adb48d9d26eed66afe028ed153262b6eeb57445c5b03b6bd9f7",
-    "binary_mtime": "2026-09-29T04:15:34.033Z"
+    "sha": "ef5607af2bc0fc5cbd2a390d2eade24fa92505fb",
+    "dirty": true,
+    "openapi_sha256": "abef657510d9e2f43f1592aae203b43075cf021a7b0417f6e03c853c4ca2fbb0",
+    "binary_mtime": "2026-10-13T14:11:28.341Z"
   },
   "request": {
     "method": "GET",
@@ -29,426 +29,508 @@
     "data": {
       "sessions": [
         {
-          "id": "5eed-sess-hr-helpdesk-2026-09-29",
-          "session_id": "5eed-sess-hr-helpdesk-2026-09-29",
-          "agent_id": "seed-hr-helpdesk",
-          "num_traces": 1,
-          "start_time": "2026-09-29T07:59:52.900Z",
-          "end_time": "2026-09-29T07:59:56.931Z",
-          "duration_ms": 4031,
+          "id": "5eed-sess-doc-writer-2026-10-13",
+          "session_id": "5eed-sess-doc-writer-2026-10-13",
+          "agent_id": "seed-doc-writer",
+          "num_traces": null,
+          "start_time": "2026-10-13T11:00:05.613Z",
+          "end_time": "2026-10-13T11:00:05.613Z",
+          "duration_ms": null,
           "first_input": null,
           "last_output": null,
           "token_usage": {
-            "total": 6650
+            "total": null
           },
-          "trace_latency_ms_p50": 4031,
-          "trace_latency_ms_p99": 4031,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.026391
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         },
         {
-          "id": "5eed-sess-sales-assistant-2026-09-29",
-          "session_id": "5eed-sess-sales-assistant-2026-09-29",
-          "agent_id": "seed-sales-assistant",
-          "num_traces": 3,
-          "start_time": "2026-09-29T07:50:39.912Z",
-          "end_time": "2026-09-29T08:35:10.367Z",
-          "duration_ms": 2670455,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Prep notes for the Acme renewal call\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Prepared the brief.\"}]}]",
-          "token_usage": {
-            "total": 31862
-          },
-          "trace_latency_ms_p50": 4400,
-          "trace_latency_ms_p99": 4442,
-          "cost_summary": {
-            "total": {
-              "cost": 0.08396
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-data-cleaner-2026-09-29",
-          "session_id": "5eed-sess-data-cleaner-2026-09-29",
-          "agent_id": "seed-data-cleaner",
-          "num_traces": 2,
-          "start_time": "2026-09-29T07:36:09.776Z",
-          "end_time": "2026-09-29T08:30:34.396Z",
-          "duration_ms": 3264620,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Data Cleaner task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
-          "token_usage": {
-            "total": 4233
-          },
-          "trace_latency_ms_p50": 2446,
-          "trace_latency_ms_p99": 3236,
-          "cost_summary": {
-            "total": {
-              "cost": 0.01523
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-sql-analyst-2026-09-29",
-          "session_id": "5eed-sess-sql-analyst-2026-09-29",
-          "agent_id": "seed-sql-analyst",
-          "num_traces": 3,
-          "start_time": "2026-09-29T07:17:07.975Z",
-          "end_time": "2026-09-29T07:44:39.534Z",
-          "duration_ms": 1651559,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Weekly active users by plan\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Returned the query and a 3-line summary.\"}]}]",
-          "token_usage": {
-            "total": 28752
-          },
-          "trace_latency_ms_p50": 4750,
-          "trace_latency_ms_p99": 4792,
-          "cost_summary": {
-            "total": {
-              "cost": 0.017102
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-meeting-notes-2026-09-29",
-          "session_id": "5eed-sess-meeting-notes-2026-09-29",
-          "agent_id": "seed-meeting-notes",
-          "num_traces": 2,
-          "start_time": "2026-09-29T07:06:46.184Z",
-          "end_time": "2026-09-29T07:33:08.486Z",
-          "duration_ms": 1582302,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Meeting Notes task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
-          "token_usage": {
-            "total": 26564
-          },
-          "trace_latency_ms_p50": 3161,
-          "trace_latency_ms_p99": 4277,
-          "cost_summary": {
-            "total": {
-              "cost": 0.003808
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-onboarding-guide-2026-09-29",
-          "session_id": "5eed-sess-onboarding-guide-2026-09-29",
+          "id": "5eed-sess-onboarding-guide-2026-10-13",
+          "session_id": "5eed-sess-onboarding-guide-2026-10-13",
           "agent_id": "seed-onboarding-guide",
-          "num_traces": 2,
-          "start_time": "2026-09-29T06:41:27.388Z",
-          "end_time": "2026-09-29T07:43:19.573Z",
-          "duration_ms": 3712185,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Onboarding Guide task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
+          "num_traces": null,
+          "start_time": "2026-10-13T08:11:02.252Z",
+          "end_time": "2026-10-13T08:11:02.252Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
           "token_usage": {
-            "total": 5613
+            "total": null
           },
-          "trace_latency_ms_p50": 3597,
-          "trace_latency_ms_p99": 6435,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.014873
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         },
         {
-          "id": "5eed-sess-research-agent-2026-09-29",
-          "session_id": "5eed-sess-research-agent-2026-09-29",
-          "agent_id": "seed-research-agent",
-          "num_traces": 3,
-          "start_time": "2026-09-29T06:36:25.287Z",
-          "end_time": "2026-09-29T07:06:28.870Z",
-          "duration_ms": 1803583,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What changed in the EU AI Act this month?\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Wrote a sourced summary with 6 citations.\"}]}]",
-          "token_usage": {
-            "total": 5222
-          },
-          "trace_latency_ms_p50": 4965,
-          "trace_latency_ms_p99": 6438,
-          "cost_summary": {
-            "total": {
-              "cost": 0.001155
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-invoice-parser-2026-09-29",
-          "session_id": "5eed-sess-invoice-parser-2026-09-29",
-          "agent_id": "seed-invoice-parser",
-          "num_traces": 4,
-          "start_time": "2026-09-29T06:11:30.358Z",
-          "end_time": "2026-09-29T08:02:58.622Z",
-          "duration_ms": 6688264,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Extract totals from INV-2231.pdf\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Extracted 12 line items; totals match.\"}]}]",
-          "token_usage": {
-            "total": 36602
-          },
-          "trace_latency_ms_p50": 4739,
-          "trace_latency_ms_p99": 7971,
-          "cost_summary": {
-            "total": {
-              "cost": 0.218332
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-legacy-migrator-2026-09-29",
-          "session_id": "5eed-sess-legacy-migrator-2026-09-29",
-          "agent_id": "",
-          "num_traces": 1,
-          "start_time": "2026-09-29T05:59:52.275Z",
-          "end_time": "2026-09-29T05:59:58.117Z",
-          "duration_ms": 5842,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Legacy Migrator task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
-          "token_usage": {
-            "total": 20308
-          },
-          "trace_latency_ms_p50": 5842,
-          "trace_latency_ms_p99": 5842,
-          "cost_summary": {
-            "total": {
-              "cost": 0.079128
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-legal-reviewer-2026-09-29",
-          "session_id": "5eed-sess-legal-reviewer-2026-09-29",
-          "agent_id": "seed-legal-reviewer",
-          "num_traces": 4,
-          "start_time": "2026-09-29T04:47:42.383Z",
-          "end_time": "2026-09-29T08:36:24.638Z",
-          "duration_ms": 13722255,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Legal Reviewer task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
-          "token_usage": {
-            "total": 6737
-          },
-          "trace_latency_ms_p50": 6704,
-          "trace_latency_ms_p99": 6973,
-          "cost_summary": {
-            "total": {
-              "cost": 0.028195
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-triage-router-2026-09-29",
-          "session_id": "5eed-sess-triage-router-2026-09-29",
-          "agent_id": "seed-triage-router",
-          "num_traces": 3,
-          "start_time": "2026-09-29T04:25:44.438Z",
-          "end_time": "2026-09-29T08:26:27.052Z",
-          "duration_ms": 14442614,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Route: \\\"invoice missing VAT\\\"\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Routed to the right team with priority.\"}]}]",
-          "token_usage": {
-            "total": 12677
-          },
-          "trace_latency_ms_p50": 4055,
-          "trace_latency_ms_p99": 4778,
-          "cost_summary": {
-            "total": {
-              "cost": 0.048983
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-code-reviewer-2026-09-29",
-          "session_id": "5eed-sess-code-reviewer-2026-09-29",
-          "agent_id": "seed-code-reviewer",
-          "num_traces": 9,
-          "start_time": "2026-09-29T04:22:19.132Z",
-          "end_time": "2026-09-29T08:52:30.199Z",
-          "duration_ms": 16211067,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Check PR #476 for SQL injection\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Left 4 review comments and requested changes.\"}]}]",
-          "token_usage": {
-            "total": 100666
-          },
-          "trace_latency_ms_p50": 5622,
-          "trace_latency_ms_p99": 7074,
-          "cost_summary": {
-            "total": {
-              "cost": 0.434165
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-support-bot-2026-09-29",
-          "session_id": "5eed-sess-support-bot-2026-09-29",
-          "agent_id": "seed-support-bot",
-          "num_traces": 3,
-          "start_time": "2026-09-29T03:12:50.403Z",
-          "end_time": "2026-09-29T07:47:12.974Z",
-          "duration_ms": 16462571,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Customer can't reset their password\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Resolved and replied to the customer.\"}]}]",
-          "token_usage": {
-            "total": 17642
-          },
-          "trace_latency_ms_p50": 6371,
-          "trace_latency_ms_p99": 6505,
-          "cost_summary": {
-            "total": {
-              "cost": 0.02874
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-translator-2026-09-29",
-          "session_id": "5eed-sess-translator-2026-09-29",
-          "agent_id": "seed-translator",
-          "num_traces": 5,
-          "start_time": "2026-09-29T02:19:20.651Z",
-          "end_time": "2026-09-29T08:26:21.863Z",
-          "duration_ms": 22021212,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Translate the onboarding email to German\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Translated and kept the formatting.\"}]}]",
-          "token_usage": {
-            "total": 43252
-          },
-          "trace_latency_ms_p50": 1973,
-          "trace_latency_ms_p99": 3431,
-          "cost_summary": {
-            "total": {
-              "cost": 0.006707
-            }
-          },
-          "session_annotations": [],
-          "session_annotation_summaries": []
-        },
-        {
-          "id": "5eed-sess-pricing-engine-2026-09-29",
-          "session_id": "5eed-sess-pricing-engine-2026-09-29",
+          "id": "5eed-sess-pricing-engine-2026-10-13",
+          "session_id": "5eed-sess-pricing-engine-2026-10-13",
           "agent_id": "seed-pricing-engine",
-          "num_traces": 2,
-          "start_time": "2026-09-29T01:25:25.674Z",
-          "end_time": "2026-09-29T07:29:03.547Z",
-          "duration_ms": 21817873,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Pricing Engine task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
+          "num_traces": null,
+          "start_time": "2026-10-13T07:03:09.665Z",
+          "end_time": "2026-10-13T07:03:09.665Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
           "token_usage": {
-            "total": 27715
+            "total": null
           },
-          "trace_latency_ms_p50": 4408,
-          "trace_latency_ms_p99": 4783,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.090873
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         },
         {
-          "id": "5eed-sess-summarizer-2026-09-29",
-          "session_id": "5eed-sess-summarizer-2026-09-29",
-          "agent_id": "seed-summarizer",
-          "num_traces": 9,
-          "start_time": "2026-09-29T01:01:19.543Z",
-          "end_time": "2026-09-29T08:03:41.426Z",
-          "duration_ms": 25341883,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"TL;DR of the Q3 board deck\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Wrote a 5-bullet summary.\"}]}]",
+          "id": "5eed-sess-legacy-migrator-2026-10-13",
+          "session_id": "5eed-sess-legacy-migrator-2026-10-13",
+          "agent_id": "seed-legacy-migrator",
+          "num_traces": null,
+          "start_time": "2026-10-13T06:53:09.713Z",
+          "end_time": "2026-10-13T06:53:09.713Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
           "token_usage": {
-            "total": 73812
+            "total": null
           },
-          "trace_latency_ms_p50": 5454,
-          "trace_latency_ms_p99": 7228,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.188707
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         },
         {
-          "id": "5eed-sess-qa-tester-2026-09-29",
-          "session_id": "5eed-sess-qa-tester-2026-09-29",
+          "id": "5eed-sess-data-cleaner-2026-10-13",
+          "session_id": "5eed-sess-data-cleaner-2026-10-13",
+          "agent_id": "seed-data-cleaner",
+          "num_traces": null,
+          "start_time": "2026-10-13T06:40:03.069Z",
+          "end_time": "2026-10-13T06:40:03.069Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-code-reviewer-2026-10-13",
+          "session_id": "5eed-sess-code-reviewer-2026-10-13",
+          "agent_id": "seed-code-reviewer",
+          "num_traces": null,
+          "start_time": "2026-10-13T06:11:30.358Z",
+          "end_time": "2026-10-13T06:11:30.358Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-meeting-notes-2026-10-13",
+          "session_id": "5eed-sess-meeting-notes-2026-10-13",
+          "agent_id": "seed-meeting-notes",
+          "num_traces": null,
+          "start_time": "2026-10-13T06:09:58.871Z",
+          "end_time": "2026-10-13T06:09:58.871Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-sales-assistant-2026-10-13",
+          "session_id": "5eed-sess-sales-assistant-2026-10-13",
+          "agent_id": "seed-sales-assistant",
+          "num_traces": null,
+          "start_time": "2026-10-13T06:09:50.420Z",
+          "end_time": "2026-10-13T06:09:50.420Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-legal-reviewer-2026-10-13",
+          "session_id": "5eed-sess-legal-reviewer-2026-10-13",
+          "agent_id": "seed-legal-reviewer",
+          "num_traces": null,
+          "start_time": "2026-10-13T05:48:35.512Z",
+          "end_time": "2026-10-13T05:48:35.512Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-security-scanner-2026-10-13",
+          "session_id": "5eed-sess-security-scanner-2026-10-13",
+          "agent_id": "seed-security-scanner",
+          "num_traces": null,
+          "start_time": "2026-10-13T05:04:08.637Z",
+          "end_time": "2026-10-13T05:04:08.637Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-hr-helpdesk-2026-10-13",
+          "session_id": "5eed-sess-hr-helpdesk-2026-10-13",
+          "agent_id": "seed-hr-helpdesk",
+          "num_traces": null,
+          "start_time": "2026-10-13T04:22:11.796Z",
+          "end_time": "2026-10-13T04:22:11.796Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-sql-analyst-2026-10-13",
+          "session_id": "5eed-sess-sql-analyst-2026-10-13",
+          "agent_id": "seed-sql-analyst",
+          "num_traces": null,
+          "start_time": "2026-10-13T03:13:45.745Z",
+          "end_time": "2026-10-13T03:13:45.745Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-invoice-parser-2026-10-13",
+          "session_id": "5eed-sess-invoice-parser-2026-10-13",
+          "agent_id": "seed-invoice-parser",
+          "num_traces": null,
+          "start_time": "2026-10-13T03:13:22.639Z",
+          "end_time": "2026-10-13T03:13:22.639Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-research-agent-2026-10-13",
+          "session_id": "5eed-sess-research-agent-2026-10-13",
+          "agent_id": "seed-research-agent",
+          "num_traces": null,
+          "start_time": "2026-10-13T02:10:07.896Z",
+          "end_time": "2026-10-13T02:10:07.896Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-support-bot-2026-10-13",
+          "session_id": "5eed-sess-support-bot-2026-10-13",
+          "agent_id": "seed-support-bot",
+          "num_traces": null,
+          "start_time": "2026-10-13T01:41:46.525Z",
+          "end_time": "2026-10-13T01:41:46.525Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-triage-router-2026-10-13",
+          "session_id": "5eed-sess-triage-router-2026-10-13",
+          "agent_id": "seed-triage-router",
+          "num_traces": null,
+          "start_time": "2026-10-13T01:35:01.077Z",
+          "end_time": "2026-10-13T01:35:01.077Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-translator-2026-10-13",
+          "session_id": "5eed-sess-translator-2026-10-13",
+          "agent_id": "seed-translator",
+          "num_traces": null,
+          "start_time": "2026-10-13T01:13:19.726Z",
+          "end_time": "2026-10-13T01:13:19.726Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
+          "token_usage": {
+            "total": null
+          },
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
+          "cost_summary": {
+            "total": {
+              "cost": null
+            }
+          },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
+          "session_annotations": [],
+          "session_annotation_summaries": []
+        },
+        {
+          "id": "5eed-sess-qa-tester-2026-10-13",
+          "session_id": "5eed-sess-qa-tester-2026-10-13",
           "agent_id": "seed-qa-tester",
-          "num_traces": 7,
-          "start_time": "2026-09-29T00:10:35.242Z",
-          "end_time": "2026-09-29T08:27:03.849Z",
-          "duration_ms": 29788607,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Run the checkout regression suite\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Ran 48 checks; 2 flaky.\"}]}]",
+          "num_traces": null,
+          "start_time": "2026-10-13T00:43:40.146Z",
+          "end_time": "2026-10-13T00:43:40.146Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
           "token_usage": {
-            "total": 51888
+            "total": null
           },
-          "trace_latency_ms_p50": 4899,
-          "trace_latency_ms_p99": 5746,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.01255
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         },
         {
-          "id": "5eed-sess-growth-analyst-2026-09-28",
-          "session_id": "5eed-sess-growth-analyst-2026-09-28",
-          "agent_id": "seed-growth-analyst",
-          "num_traces": 3,
-          "start_time": "2026-09-28T13:27:03.167Z",
-          "end_time": "2026-09-28T19:10:08.546Z",
-          "duration_ms": 20585379,
-          "first_input": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Help with a Growth Analyst task\"}]}]",
-          "last_output": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Done.\"}]}]",
+          "id": "5eed-sess-summarizer-2026-10-13",
+          "session_id": "5eed-sess-summarizer-2026-10-13",
+          "agent_id": "seed-summarizer",
+          "num_traces": null,
+          "start_time": "2026-10-13T00:27:40.813Z",
+          "end_time": "2026-10-13T00:27:40.813Z",
+          "duration_ms": null,
+          "first_input": null,
+          "last_output": null,
           "token_usage": {
-            "total": 15274
+            "total": null
           },
-          "trace_latency_ms_p50": 4237,
-          "trace_latency_ms_p99": 4814,
+          "trace_latency_ms_p50": null,
+          "trace_latency_ms_p99": null,
           "cost_summary": {
             "total": {
-              "cost": 0.032008
+              "cost": null
             }
           },
+          "status": null,
+          "failed_flows": 0,
+          "error_count": null,
           "session_annotations": [],
           "session_annotation_summaries": []
         }
       ],
       "total_agents": 22,
-      "successful_agents": 18,
+      "successful_agents": 0,
+      "matching_count": 19,
       "pagination": {
         "end_cursor": null,
         "has_next_page": false
       }
     }
-  }
+  },
+  "source": "no-trace-data"
 }

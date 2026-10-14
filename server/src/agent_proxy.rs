@@ -276,9 +276,15 @@ pub async fn agent_proxy(
             }
             None => serde_json::json!({}),
         };
+        // `session_id` is the same value as `metadata->>'context_id'`, promoted to
+        // a column so `session/list` can group and index by it (0058). The JSON
+        // stays as it is: `derive_boundary_signals` and the LLM gateway read it
+        // from there, and the column is written on this same insert so the two
+        // can never disagree.
+        let session_id = persist_info.as_ref().map(|i| i.session_id.clone());
         let _ = sqlx::query(
-            r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
-               VALUES ($1, $2, $3, $4, $5, 'running', $6)
+            r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata, session_id)
+               VALUES ($1, $2, $3, $4, $5, 'running', $6, $7)
                ON CONFLICT (flow_id) DO UPDATE
                   SET status = 'running', completed_at = NULL"#,
         )
@@ -288,6 +294,7 @@ pub async fn agent_proxy(
         .bind(&agent.name)
         .bind(title)
         .bind(&metadata)
+        .bind(session_id)
         .execute(&state.db)
         .await;
         // Membership record for the flow: the MCP gateway / LLM router only
@@ -578,6 +585,13 @@ pub async fn agent_proxy(
 
 /// Mark a direct-chat flow completed (fire-and-forget). `a2a_dispatch` marks
 /// its own flows; the proxy path never did, so they accumulated as 'running'.
+///
+/// Guarded on `status = 'running'`, so a terminal outcome is never downgraded.
+/// An inner call ending can otherwise complete the whole flow (FL-8), and this
+/// write races the `status = 'failed'` one in `a2a_dispatch`: whichever landed
+/// second won, so a recorded failure could silently become a success. Session
+/// status is derived from these rows (`observability::sessions_sql`), which
+/// makes the race visible as a session that reads "ok" after a failed request.
 fn complete_flow(db: &sqlx::PgPool, flow_id: &str) {
     let db = db.clone();
     let flow_id = flow_id.to_string();
@@ -586,7 +600,7 @@ fn complete_flow(db: &sqlx::PgPool, flow_id: &str) {
             r#"UPDATE flows SET status = 'completed',
                duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                completed_at = now()
-               WHERE flow_id = $1"#,
+               WHERE flow_id = $1 AND status = 'running'"#,
         )
         .bind(&flow_id)
         .execute(&db)

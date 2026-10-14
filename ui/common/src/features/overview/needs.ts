@@ -33,7 +33,11 @@ export interface NeedsInput {
   budgets: SourceState<
     { id: string; label: string; crossed: number | null; state: 'warning' | 'exceeded' }[]
   >
-  sessions: SourceState<{ failed: number; checked: number; agents: string[] }>
+  /**
+   * `failed` is the server's `matching_count` — every failed session in the
+   * window, not a sample. `agents` names the ones on the fetched page.
+   */
+  sessions: SourceState<{ failed: number; agents: string[] }>
 }
 
 export type NeedRow =
@@ -61,7 +65,6 @@ export type NeedRow =
       kind: 'sessions'
       severity: 'action'
       failed: number
-      checked: number
       agents: string[]
     }
 
