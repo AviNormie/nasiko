@@ -8,10 +8,8 @@ import { useLiveIndividual } from '@/features/harnesses/liveIndividual'
 import { mostlyUnpriced } from '@/features/harnesses/rollup'
 import { sessionRows, useChatSessions } from '@/features/chat/api'
 import { useWaiting } from '@/features/chat/waiting'
-import { STATUS_CHECK_ROWS } from '@/features/observability/tuning'
-import { tempoSafeStart, useFleetSessions, useSessionStatuses } from '@/features/sessions/api'
+import { useSessionPage } from '@/features/sessions/api'
 import type { Me } from '@/lib/api/auth'
-import { useQueries } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import { useAgentsDirectory } from '@/features/agents/api'
 import type { Agent } from '@/features/agents/types'
@@ -20,17 +18,11 @@ import { useBudgetStatus, useBudgets } from '@/features/router/api'
 import { budgetForecast, usedPercent, type Forecast } from '@/features/router/budgets'
 import type { BudgetAction, BudgetState } from '@/features/router/types'
 import { findSpike, type Spike } from '@/features/narrative/tokenops'
-import {
-  timeseriesQuery,
-  useCalendar,
-  useDashboard,
-  useSavings,
-  useTimeseries,
-} from '@/features/tokenops/api'
+import { useCalendar, useDashboard, useSavings, useTimeseries } from '@/features/tokenops/api'
 import { buildAttribution, type AttributionRow } from '@/features/tokenops/attribution'
 import { summarizeMonth, type MonthSummary } from '@/features/tokenops/forecast'
 import { zeroFillTimeline, type TimelinePoint } from '@/features/tokenops/series'
-import type { AgentFinopsRow, FinopsSpendTimeseries } from '@/features/tokenops/types'
+import type { AgentFinopsRow, FinopsAttributions } from '@/features/tokenops/types'
 import { summarizeOptimisation } from '@/features/tokenops/optimisation'
 import {
   monthKey,
@@ -43,7 +35,7 @@ import { isEndpointAbsent } from '@/lib/api/detect'
 import { copy } from './copy'
 import { mergeNeeds, type Needs, type NeedsInput, type SourceId } from './needs'
 import { stackSpend, type Stack } from './stack'
-import { DAY, TOP_DRIVERS } from './tuning'
+import { DAY, FAILED_SESSION_ROWS, RECENT_SESSION_ROWS, TOP_DRIVERS } from './tuning'
 import {
   RATED_STATUSES,
   rateAgent,
@@ -64,6 +56,56 @@ const usage = (rows: readonly AgentFinopsRow[] | undefined) => {
       cost: r.total_cost,
       operations: r.operations,
       p95: r.avg_latency_p95_ms ?? null,
+    })
+  return m
+}
+
+/**
+ * The agent attributions of the preceding window, rebuilt from `compare=previous`
+ * on the agent rows. `undefined` when the response didn't carry a comparison, so
+ * `buildAttribution` reports deltas as unavailable rather than as a drop to zero.
+ */
+const previousAttributions = (rows: readonly AgentFinopsRow[] | undefined) =>
+  rows?.some((r) => r.previous)
+    ? ({
+        view: 'agent' as const,
+        rows: rows.map((r) => ({
+          agent_id: r.agent_id,
+          agent_name: r.agent_name,
+          total_cost: r.previous?.total_cost ?? 0,
+          operations: r.previous?.operations ?? 0,
+          total_tokens: r.previous?.total_tokens ?? 0,
+          tool_call_count: r.previous?.tool_call_count ?? 0,
+          avg_latency_ms: r.previous?.avg_latency_ms ?? null,
+          avg_cost_per_operation: 0,
+          is_capped: false,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          avg_latency_p95_ms: null,
+          avg_latency_p99_ms: null,
+          version: null,
+          container_hours: 0,
+        })),
+      } satisfies FinopsAttributions)
+    : undefined
+
+/**
+ * The same windows, read off `compare=previous` instead of a second request.
+ * `null` when the caller didn't ask to compare, so "no previous data" stays
+ * distinguishable from "every agent spent nothing".
+ */
+const previousUsage = (rows: readonly AgentFinopsRow[] | undefined) => {
+  if (!rows?.some((r) => r.previous)) return null
+  const m = new Map<string, UsageWindow>()
+  for (const r of rows)
+    m.set(r.agent_id, {
+      cost: r.previous?.total_cost ?? 0,
+      operations: r.previous?.operations ?? 0,
+      // The comparison window only carries what a delta needs; p95 is not part
+      // of it, and inventing one would rate latency against a fabricated number.
+      p95: null,
     })
   return m
 }
@@ -108,8 +150,10 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
   )
   // First run (no agents but harnesses) fetches nothing else (design review 7A).
   const on = enabled && agents.length > 0
-  const cur = useDashboard(win7, {}, 'agent', 'current', on)
-  const prev = useDashboard(win7, {}, 'agent', 'previous', on)
+  // One dashboard, not two: `compare=previous` carries each agent's preceding
+  // window in the same response (the server already queried it for the KPI
+  // strip and used to discard the per-agent detail).
+  const cur = useDashboard(win7, {}, 'agent', 'current', on, true)
   const d30 = useDashboard(win30, {}, 'agent', 'current', on)
   const ts = useTimeseries(win30, {}, on)
   // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines when it lands.
@@ -135,7 +179,6 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
   const costFailed =
     on &&
     (cur.isError ||
-      prev.isError ||
       d30.isError ||
       ts.isError ||
       (budgets.isError && !budgetsAbsent) ||
@@ -145,7 +188,8 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
     if (!enabled || !dir.data) return null
     const t = now.getTime()
     const current = cur.data && !costFailed ? usage(cur.data.agents) : null
-    const previous = prev.data && !prev.isError ? usage(prev.data.agents) : null
+    // Same response as `current`, so it can no longer fail or arrive separately.
+    const previous = cur.data ? previousUsage(cur.data.agents) : null
     const perOp30 = new Map(
       (d30.data?.agents ?? []).map((r) => [r.agent_id, r.avg_cost_per_operation ?? null]),
     )
@@ -194,8 +238,6 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
     now,
     cur.data,
     costFailed,
-    prev.data,
-    prev.isError,
     d30.data,
     ts.data,
     win30,
@@ -214,8 +256,7 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
   )
   const budgetsSettled =
     budgetsAbsent || budgets.isError || budgetStatus.isSuccess || budgetStatus.isError
-  const ratingsPending =
-    on && (cur.isPending || prev.isPending || d30.isPending || ts.isPending || !budgetsSettled)
+  const ratingsPending = on && (cur.isPending || d30.isPending || ts.isPending || !budgetsSettled)
   return {
     isPending: dir.isPending || (on && cur.isPending),
     error: dir.error,
@@ -229,7 +270,7 @@ export function useFleetHealth(now: Date, enabled = true): FleetHealth {
     p95,
     retry: () => void dir.refetch(),
     retryCost: () => {
-      for (const q of [cur, prev, d30, ts, budgets, budgetStatus]) if (q.isError) void q.refetch()
+      for (const q of [cur, d30, ts, budgets, budgetStatus]) if (q.isError) void q.refetch()
     },
   }
 }
@@ -298,13 +339,17 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
   const thisMonth = utcMonthStart(now)
   const lastMonth = utcMonthStart(now, -1)
   const win = useMemo(() => rangeWindow(range, now), [range, now])
-  const winPrev = useMemo(() => previousWindow(win), [win])
   const calThis = useCalendar(monthKey(thisMonth), {}, enabled)
   const calLast = useCalendar(monthKey(lastMonth), {}, enabled)
-  const cur = useDashboard(win, {}, 'agent', 'current', enabled)
-  const prev = useDashboard(win, {}, 'agent', 'previous', enabled)
-  const ts = useTimeseries(win, {}, enabled)
-  const tsPrev = useTimeseries(winPrev, {}, enabled)
+  // Three requests where there were ten: the dashboard carries its own previous
+  // window, and one timeseries carries the fleet line, the previous window and a
+  // series per top driver. The drivers used to be one request each.
+  const cur = useDashboard(win, {}, 'agent', 'current', enabled, true)
+  const ts = useTimeseries(win, {}, enabled, {
+    groupByAgent: true,
+    top: TOP_DRIVERS,
+    compare: true,
+  })
   // Just after a UTC month rollover the kept-previous calendar is last month's: loading, never summarised as this month.
   const stale = calThis.isPlaceholderData || calLast.isPlaceholderData
   const summary = useMemo(
@@ -325,12 +370,13 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
       spend: pts.reduce((n, p) => n + p.spend_usd, 0),
       runs: pts.reduce((n, p) => n + p.operations, 0),
     })
-    const previous = tsPrev.data && !tsPrev.isPlaceholderData ? sum(tsPrev.data.points) : null
+    // Same response as the current window now (`compare=previous`).
+    const previous = ts.data.previous ? sum(ts.data.previous) : null
     return { ...sum(ts.data.points), previous }
-  }, [ts.data, ts.isPlaceholderData, tsPrev.data, tsPrev.isPlaceholderData])
+  }, [ts.data, ts.isPlaceholderData])
   const { drivers, other } = useMemo(() => {
     if (!cur.data) return { drivers: [], other: null }
-    const prevRows = prev.isError ? undefined : prev.data?.attributions
+    const prevRows = previousAttributions(cur.data.agents)
     const all = buildAttribution(cur.data.attributions, prevRows).sort((a, b) => b.cost - a.cost)
     const top = all.slice(0, TOP_DRIVERS)
     const rest = all.slice(TOP_DRIVERS)
@@ -352,26 +398,33 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
         unavailable: before === null,
       },
     }
-  }, [cur.data, prev.data, prev.isError])
-  // Each driver's own days: the same timeseries filtered by agent, under TokenOps' keys (its filtered view opens warm).
+  }, [cur.data])
+  // Each driver's own days, from the `group_by=agent` series on the one
+  // timeseries response. This was `useQueries` over one filtered request per
+  // driver — a fan-out whose size grew with the chart.
   const withSpend = useMemo(() => drivers.filter((d) => d.cost > 0), [drivers])
-  const parts = useQueries({
-    queries: withSpend.map((d) => ({ ...timeseriesQuery(win, { agent: d.id }), enabled })),
-    combine: combineSeries,
-  })
   const stack = useMemo(() => {
-    if (!withSpend.length || !days.length || parts.data.some((d) => d?.bucket !== 'day'))
-      return null
+    const series = ts.data?.series
+    if (!withSpend.length || !days.length || !series || ts.data?.bucket !== 'day') return null
+    // Keyed by agent id where the server resolved one, else by the raw name the
+    // series carries — the same name `top_agent_name` uses.
+    const byAgent = new Map(
+      series.filter((s) => !s.is_other).map((s) => [s.agent_id ?? s.agent_name ?? '', s]),
+    )
     return stackSpend(
       days,
-      withSpend.map((d, i) => ({
+      withSpend.map((d) => ({
         id: d.id,
         name: d.name,
-        days: zeroFillTimeline(parts.data[i]?.points ?? [], 'day', win.start, win.end),
+        days: zeroFillTimeline(
+          byAgent.get(d.id)?.points ?? byAgent.get(d.name)?.points ?? [],
+          'day',
+          win.start,
+          win.end,
+        ),
       })),
     )
-    // parts.data is structurally shared by combine, so it changes only when a series does.
-  }, [withSpend, days, parts.data, win])
+  }, [withSpend, days, ts.data, win])
   return {
     summary,
     isPending: calThis.isPending || calLast.isPending || stale,
@@ -381,7 +434,7 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
     totalsError: ts.error,
     days,
     stack,
-    stackPending: cur.isPending || parts.pending,
+    stackPending: cur.isPending || ts.isPending,
     spike: findSpike(days.map((p) => ({ date: p.iso.slice(0, 10), spend: p.spend }))),
     drivers,
     other,
@@ -391,27 +444,8 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
       void calThis.refetch()
       void calLast.refetch()
       void cur.refetch()
-      void prev.refetch()
       void ts.refetch()
-      void tsPrev.refetch()
-      parts.refetch()
     },
-  }
-}
-
-/** Module-level, so TanStack memoises it: `data` stays the same array until a series changes. */
-function combineSeries(
-  rs: {
-    data: FinopsSpendTimeseries | undefined
-    isError: boolean
-    isPending: boolean
-    refetch: () => unknown
-  }[],
-) {
-  return {
-    data: rs.map((r) => (r.isError ? undefined : r.data)),
-    pending: rs.some((r) => r.isPending),
-    refetch: () => rs.forEach((r) => r.isError && void r.refetch()),
   }
 }
 
@@ -424,14 +458,36 @@ export interface NeedsYou {
   sessions: ReturnType<typeof useRecentSessions>
 }
 
-/** The newest STATUS_CHECK_ROWS sessions of the last 7 days, status-checked with the Sessions page's keys (eng review R7). */
+/**
+ * The last 7 days' sessions, in two small reads under the Overview's own keys.
+ *
+ * This used to share the Sessions page's 100-row page and then fan out to
+ * `session/{id}` for the newest 25 and `trace/{id}` for 3 traces each — up to
+ * 100 browser requests, every one of them a trace-store read on the server, to
+ * compute one boolean per row. `session/list` now carries `status` and counts
+ * the matches in SQL, so the whole fan-out is two requests:
+ *
+ * - `recent` — the 5 rows the card shows.
+ * - `failed` — every failed session in the window. `matching_count` is the real
+ *   total, so Needs you states a fact instead of "N of the M latest checked".
+ */
 function useRecentSessions(now: Date, enabled: boolean) {
   const win = useMemo(() => resolveWindow({ preset: '7d' }, now), [now])
-  const start = useMemo(() => tempoSafeStart(win.start, now), [win.start, now])
-  const list = useFleetSessions(win.key, start, win.end, enabled)
-  const newest = useMemo(() => list.rows.slice(0, STATUS_CHECK_ROWS), [list.rows])
-  const status = useSessionStatuses(newest, now.getTime(), false)
-  return { list, newest, status }
+  const recent = useSessionPage(
+    win.key,
+    win.start,
+    win.end,
+    { limit: RECENT_SESSION_ROWS },
+    enabled,
+  )
+  const failed = useSessionPage(
+    win.key,
+    win.start,
+    win.end,
+    { limit: FAILED_SESSION_ROWS, status: 'failed' },
+    enabled,
+  )
+  return { recent, failed }
 }
 
 export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = true): NeedsYou {
@@ -448,7 +504,6 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   const sessions = useRecentSessions(now, enabled)
   // Stable inputs for the memo below: query result objects are new on every render.
   const { match, failedCold, isPending: waitingPending } = waiting
-  const statusKey = sessions.newest.map((r) => sessions.status.get(r.session_id) ?? '').join('|')
 
   const input: NeedsInput = useMemo(() => {
     const titles = new Map(sessionRows(chats.data).map((r) => [r.session_id, r.title]))
@@ -524,43 +579,30 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
                 ]
               }),
             }
-    const checking = sessions.newest.some((r) => sessions.status.get(r.session_id) === 'checking')
-    const failedRows = sessions.newest.filter((r) => sessions.status.get(r.session_id) === 'failed')
-    // Every check came back unknown (e.g. no trace store: session details answer 503): nothing was actually checked,
-    // so the source failed; it must never count as "no failures" (design 5A, QA ISSUE-005).
-    const settled = sessions.newest.filter((r) =>
-      ['ok', 'failed'].includes(sessions.status.get(r.session_id) ?? ''),
-    ).length
-    // Most of the sample must be checked for "no failures" to count (user decision, /ship adversarial finding 7);
-    // failures actually found always show.
-    const noneChecked =
-      !checking &&
-      !failedRows.length &&
-      sessions.newest.length > 0 &&
-      settled * 2 < sessions.newest.length
-    const sessionState: NeedsInput['sessions'] =
-      sessions.list.isError || noneChecked
-        ? { state: 'failed' }
-        : sessions.list.isPending || checking
-          ? { state: 'loading' }
-          : {
-              state: 'ok',
-              value: {
-                failed: failedRows.length,
-                // "N of M checked sessions failed": the sessions actually checked (user decision, /ship adversarial).
-                checked: settled,
-                agents: [
-                  ...new Set(
-                    failedRows.map((r) =>
-                      r.agent_id ? fleet.displayName(r.agent_id) : copy.needs.unknownAgent,
-                    ),
+    // One indexed read, filtered in SQL: `matching_count` is every failed session
+    // in the window, so this states a fact. It used to be a sample — the newest
+    // 25 rows, each status-checked by downloading its traces — which could only
+    // ever say "N of the M latest sessions checked failed", and counted as a
+    // failed source when too few of them came back (design 5A, QA ISSUE-005).
+    const sessionState: NeedsInput['sessions'] = sessions.failed.isError
+      ? { state: 'failed' }
+      : sessions.failed.isPending
+        ? { state: 'loading' }
+        : {
+            state: 'ok',
+            value: {
+              failed: sessions.failed.matchingCount,
+              agents: [
+                ...new Set(
+                  sessions.failed.rows.map((r) =>
+                    r.agent_id ? fleet.displayName(r.agent_id) : copy.needs.unknownAgent,
                   ),
-                ],
-              },
-            }
+                ),
+              ],
+            },
+          }
     return { requests, agents, budgets: budgetRows, sessions: sessionState }
-    // statusKey stands in for sessions.status (a new Map every render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `fleet` is a new object every render, so depending on it would re-run this on every render; every field read from it is listed individually below.
   }, [
     match,
     failedCold,
@@ -579,17 +621,17 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
     status.isError,
     status.isPending,
     dir.byId,
-    sessions.newest,
-    sessions.list.isError,
-    sessions.list.isPending,
-    statusKey,
+    sessions.failed.rows,
+    sessions.failed.matchingCount,
+    sessions.failed.isError,
+    sessions.failed.isPending,
   ])
 
   const needs = useMemo(() => mergeNeeds(input), [input])
   const stamps = [
     waiting.lastChecked,
     budgetsAbsent ? 0 : status.dataUpdatedAt,
-    sessions.list.dataUpdatedAt,
+    sessions.failed.dataUpdatedAt,
   ].filter((t) => t > 0)
   return {
     needs,
@@ -605,7 +647,10 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
         void budgets.refetch()
         void status.refetch()
       },
-      sessions: () => void sessions.list.refetch(),
+      sessions: () => {
+        void sessions.failed.refetch()
+        void sessions.recent.refetch()
+      },
     },
     sessions,
   }
