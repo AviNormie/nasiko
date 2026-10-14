@@ -53,6 +53,8 @@ fn agent_endpoint_empty_host() {
 fn resolved_agent_name_field() {
     let agent = ResolvedAgent {
         name: "my-agent".to_string(),
+        is_internal: false,
+        keeps_session_memory: false,
         transport_path: None,
         endpoint: None,
     };
@@ -65,6 +67,8 @@ fn resolved_agent_endpoint_may_be_absent() {
     // endpoint snapshot — callers fall back to a live runtime lookup.
     let agent = ResolvedAgent {
         name: "my-agent".to_string(),
+        is_internal: false,
+        keeps_session_memory: false,
         transport_path: None,
         endpoint: None,
     };
@@ -75,6 +79,8 @@ fn resolved_agent_endpoint_may_be_absent() {
 fn resolved_agent_endpoint_when_present() {
     let agent = ResolvedAgent {
         name: "my-agent".to_string(),
+        is_internal: false,
+        keeps_session_memory: false,
         transport_path: None,
         endpoint: Some(AgentEndpoint {
             host: "10.0.0.5".to_string(),
@@ -118,6 +124,8 @@ fn agent_endpoint_debug_contains_port() {
 fn resolved_agent_debug_contains_name() {
     let agent = ResolvedAgent {
         name: "agent-x".to_string(),
+        is_internal: false,
+        keeps_session_memory: false,
         transport_path: None,
         endpoint: None,
     };
@@ -146,6 +154,8 @@ fn agent_endpoint_clone_is_independent() {
 fn resolved_agent_clone_copies_all_fields() {
     let agent = ResolvedAgent {
         name: "n".to_string(),
+        is_internal: false,
+        keeps_session_memory: false,
         transport_path: None,
         endpoint: Some(AgentEndpoint {
             host: "h".to_string(),

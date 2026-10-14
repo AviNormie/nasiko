@@ -671,10 +671,9 @@ impl A2aClient {
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
         let mut body = self.build_message_body(Dialect::JsonRpc, true, message, &ctx, &[]);
-        // On `params.message.metadata`, not `params.metadata` — this method's
-        // only real caller (weave_surface.rs) sets `request_metadata` to carry
-        // `{skill: "generate-ui", ...}`, and the receiving agent's A2A server
-        // reads the skill id off the MESSAGE object it dispatches
+        // On `params.message.metadata`, not `params.metadata` — a caller sets
+        // `request_metadata` to carry e.g. `{skill: ...}`, and the receiving
+        // agent's A2A server reads the skill id off the MESSAGE object it dispatches
         // (`params.message.metadata.skill`), not off `params` itself.
         // `build_message_body`'s own `params.metadata` insertion above is a
         // separate, unrelated convention (e.g. traceparent forwarding for
