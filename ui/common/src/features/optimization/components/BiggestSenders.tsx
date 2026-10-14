@@ -12,12 +12,16 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AgentLink } from '@/features/agents/components/AgentLink'
+import { seriesAt } from '@/lib/chart'
 import { fmtUtcDayTime } from '@/lib/format'
 import type { Proposed } from '../api'
 import { copy } from '../copy'
 import { tokensShort } from '../lead'
 import type { TopRequest } from '../types'
 import { Outline } from './Outline'
+
+const SENT = seriesAt(0)
+const SAVED = seriesAt(1)
 
 export function BiggestSenders({
   result,
@@ -69,6 +73,7 @@ export function BiggestSenders({
             key={r.trace_id ?? `${r.agent_id}-${r.started_at}-${r.pool_tokens}-${i}`}
             className="border-t border-border px-4 py-2.5 text-sm first:border-t-0"
           >
+            <SentBar pool={r.pool_tokens} sent={r.sent_tokens} />
             <Chat r={r} />
             <span className="text-muted-foreground">
               {' · '}
@@ -127,5 +132,22 @@ function Chat({ r }: { r: TopRequest }) {
     >
       {title}
     </Link>
+  )
+}
+
+/** What this message carried against what it could have: sent solid, the rest in the chart's Saved colour. */
+function SentBar({ pool, sent }: { pool: number; sent: number }) {
+  if (pool <= 0) return null
+  return (
+    <span
+      aria-hidden
+      className="mb-1.5 flex h-1.5 w-full max-w-sm gap-0.5 overflow-hidden rounded-full"
+    >
+      <span
+        className="h-full rounded-l-full"
+        style={{ width: `${(Math.min(sent, pool) / pool) * 100}%`, backgroundColor: SENT.fill }}
+      />
+      <span className="h-full flex-1 rounded-r-full" style={{ backgroundColor: SAVED.fill }} />
+    </span>
   )
 }

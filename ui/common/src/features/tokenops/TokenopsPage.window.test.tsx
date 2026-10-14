@@ -106,8 +106,9 @@ describe('time control', () => {
 
   it('This month labels what the KPI Δ compares against', async () => {
     renderApp('/tokenops?open=all&preset=mtd')
-    const kpis = await screen.findByLabelText('Key metrics, This month')
-    expect(within(kpis).getByText(/^Δ vs the previous (day|\d+ days)$/)).toBeInTheDocument()
+    await screen.findByLabelText('Key metrics, This month')
+    const summary = screen.getByRole('region', { name: 'Summary' })
+    expect(within(summary).getByText(/^vs the previous (day|\d+ days)$/)).toBeInTheDocument()
   })
 })
 

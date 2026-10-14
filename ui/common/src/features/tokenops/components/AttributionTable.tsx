@@ -7,7 +7,7 @@
  * On narrow screens the table becomes a card list.
  */
 import { Download, ListTree } from 'lucide-react'
-import { createContext, use, useEffect, useMemo, useRef } from 'react'
+import { createContext, use, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -19,7 +19,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { AgentLink } from '@/features/agents/components/AgentLink'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { prefersReducedMotion } from '@/lib/useMediaQuery'
 import { cn } from '@/lib/utils'
 import { searchRows, sortRows, type AttributionRow } from '../attribution'
@@ -39,6 +38,12 @@ import { Panel, PanelEmpty, PanelError, PanelSkeleton } from '@/components/share
 import { Delta } from '@/components/shared/delta'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { SearchInput } from '@/components/shared/search-input'
+import { Segmented } from './Segmented'
+
+const VIEWS = [
+  { value: 'agent', label: 'Agents' },
+  { value: 'workflow', label: 'Workflows' },
+] as const
 
 const SORT_LABELS: Record<SortKey, string> = {
   cost: 'Highest spend',
@@ -48,6 +53,9 @@ const SORT_LABELS: Record<SortKey, string> = {
   hours: 'Most container hours',
   name: 'Name',
 }
+
+/** Rows shown before Show all. */
+const ROW_CAP = 10
 
 const HIGHLIGHT = 'bg-primary/10 ring-1 ring-primary/40'
 
@@ -88,6 +96,13 @@ export function AttributionTable({
   unpriced: boolean
 }) {
   const visible = useMemo(() => sortRows(searchRows(rows ?? [], q), sort), [rows, q, sort])
+  // The top rows answer "who"; the long tail waits behind Show all, so the section stays one screen. A search or a
+  // highlight from the scatter below the fold shows everything (CSV always exports every visible row).
+  const [expanded, setExpanded] = useState(false)
+  const highlightBelow =
+    !!highlightId && visible.slice(0, ROW_CAP).every((r) => r.id !== highlightId)
+  const all = expanded || !!q || highlightBelow || visible.length <= ROW_CAP + 2
+  const shown = all ? visible : visible.slice(0, ROW_CAP)
   const noun = view === 'agent' ? 'Agent' : 'Workflow'
   const sortOptions = (Object.keys(SORT_LABELS) as SortKey[]).filter(
     (s) => view === 'agent' || s !== 'hours',
@@ -121,21 +136,7 @@ export function AttributionTable({
       labelledBy="attribution-title"
       actions={
         <>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            value={view}
-            onValueChange={(v) => v && onView(v as 'agent' | 'workflow')}
-            aria-label="Group by"
-          >
-            <ToggleGroupItem value="agent" className="px-2.5 text-xs">
-              Agents
-            </ToggleGroupItem>
-            <ToggleGroupItem value="workflow" className="px-2.5 text-xs">
-              Workflows
-            </ToggleGroupItem>
-          </ToggleGroup>
+          <Segmented label="Group by" value={view} options={VIEWS} onChange={onView} />
           <Select value={sort} onValueChange={(v) => onSort(v as SortKey)}>
             <SelectTrigger size="sm" className="w-44" aria-label="Sort by">
               <SelectValue />
@@ -190,7 +191,7 @@ export function AttributionTable({
       ) : (
         <>
           <DesktopTable
-            rows={visible}
+            rows={shown}
             view={view}
             sort={sort}
             prevUnavailable={prevUnavailable}
@@ -198,12 +199,23 @@ export function AttributionTable({
             onViewTraces={onViewTraces}
           />
           <MobileCards
-            rows={visible}
+            rows={shown}
             view={view}
             prevUnavailable={prevUnavailable}
             highlightId={highlightId}
             onViewTraces={onViewTraces}
           />
+          {visible.length > ROW_CAP + 2 && !q && !highlightBelow ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-fit text-xs"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? `Show top ${ROW_CAP}` : `Show all ${visible.length}`}
+            </Button>
+          ) : null}
         </>
       )}
     </Panel>

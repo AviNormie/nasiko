@@ -1,5 +1,5 @@
 /**
- * TokenOps filters: the provider, model and agent chips (Radix Select), the KPI "More metrics" toggle, and the
+ * TokenOps filters: the provider, model and agent chips (Radix Select), the always-visible metrics, and the
  * breadcrumb and chips that clear a drill-down. (jsdom's missing pointer-capture and scrolling APIs, which Radix
  * Select calls, are stubbed in src/test/setup.ts.)
  */
@@ -83,31 +83,29 @@ describe('filter chips (Radix Select)', () => {
 })
 
 describe('drill-down chips and metrics', () => {
-  it('KPI "More metrics" toggles (replace), breadcrumb and filter chips clear the drill-down', async () => {
+  it('every metric is on the page at once; breadcrumb and filter chips clear the drill-down', async () => {
     const user = userEvent.setup()
     const { router } = renderApp(`/tokenops?open=all&day=${seed.spikeDate}&agent=${liveAgent.id}`)
     const kpis = await screen.findByLabelText(/^Key metrics/)
-    const depth = router.history.length
-    await user.click(within(kpis).getByRole('button', { name: /More metrics/ }))
-    expect(within(kpis).getByText('Active agents')).toBeInTheDocument()
-    await waitFor(() => expect(router.state.location.search).toMatchObject({ more: true }))
-    expect(router.history.length).toBe(depth)
-    await user.click(within(kpis).getByRole('button', { name: /Fewer metrics/ }))
-    expect(within(kpis).queryByText('Active agents')).toBeNull()
+    // No "More metrics" expander any more: the six tiles and the four secondary figures always show.
+    for (const label of ['Total spend', 'Operations', 'p95 latency', 'Active agents'])
+      expect(within(kpis).getByText(label)).toBeInTheDocument()
+    const more = screen.getByLabelText(/^More metrics/)
+    for (const label of ['Tokens', 'Tool calls', 'p50 latency', 'p99 latency'])
+      expect(within(more).getByText(label)).toBeInTheDocument()
 
-    const crumbs = screen.getByRole('navigation', { name: 'Drill-down' })
-    expect(within(crumbs).getByText(liveAgent.display_name)).toHaveAttribute(
+    // The drill path is the top bar's breadcrumb: TokenOps › day › agent.
+    const crumbs = () => screen.getByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs()).getByText(liveAgent.display_name)).toHaveAttribute(
       'aria-current',
-      'location',
+      'page',
     )
     await user.click(screen.getByRole('button', { name: 'Remove agent filter' }))
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('agent'))
-    await user.click(
-      within(screen.getByRole('navigation', { name: 'Drill-down' })).getByRole('button', {
-        name: 'Last 30 days',
-      }),
-    )
+    await user.click(within(crumbs()).getByRole('button', { name: 'TokenOps' }))
     await waitFor(() => expect(router.state.location.search).not.toHaveProperty('day'))
-    expect(screen.queryByRole('navigation', { name: 'Drill-down' })).toBeNull()
+    // Undrilled, the shell's breadcrumb is back: TokenOps is the current page, not a button.
+    expect(within(crumbs()).queryByRole('button', { name: 'TokenOps' })).toBeNull()
+    expect(router.state.location.search).toMatchObject({ preset: '30d' })
   })
 })

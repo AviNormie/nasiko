@@ -7,10 +7,9 @@
  * windows and the cards refresh together (design review 8A). Pending requests aren't refetched here: they already
  * refetch on focus (eng review correction).
  * The grids follow the page area's width, not the viewport, because the sidebar changes it (design review 1A). The summary
- * card holds the headline and the KPI tiles: side by side from 1100 px of content (tiles 2×2), stacked below (tiles 2
- * across from 560 px). Below it, from 1100 px, four columns: Spend then Recent
- * sessions on the left three, Needs you, Budgets and Quick actions down the right, then Recent chats beside Fleet health;
- * 2 columns from 700 px, 1 below. DOM order stays the priority order (Needs you first); wide layouts place cards
+ * is a bento: the headline in a lead card beside the KPI tiles (2×2) from 1100 px of content, stacked below (tiles 2
+ * across from 560 px). Below it, from 1100 px, twelve columns: Needs you and Spend each span the row, then Fleet health
+ * beside Recent sessions and Recent chats beside Quick actions; 2 columns from 700 px, 1 below. DOM order stays the priority order (Needs you first); wide layouts place cards
  * explicitly, so nothing leaves a hole with or without budgets.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -18,12 +17,14 @@ import { Link } from '@tanstack/react-router'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { Reveal, RevealItem } from '@/components/shared/reveal'
+import { SpotlightCard } from '@/components/aceternity/spotlight-card'
 import { StateCard } from '@/components/shared/state-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { useChatSessions } from '@/features/chat/api'
 import { overviewNarrative } from '@/features/narrative/overview'
 import { meQuery, type Me } from '@/lib/api/auth'
@@ -83,6 +84,7 @@ function HeaderActions({
   return (
     <>
       <ToggleGroup
+        data-tour="overview-range"
         type="single"
         variant="outline"
         size="sm"
@@ -105,6 +107,8 @@ function HeaderActions({
         ))}
       </ToggleGroup>
       {setup ? <SetupGuide /> : null}
+      {/* No top bar here on desktop (phones keep it, with its own button). */}
+      <TourButton className="max-md:hidden" />
     </>
   )
 }
@@ -131,22 +135,17 @@ const PLACE = {
       '@[1100px]/overview:col-span-2 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-4',
     actions: '@[1100px]/overview:col-start-4 @[1100px]/overview:row-start-3',
   },
-  // Quick actions takes the budget's place beside Spend, and Recent sessions spans the row.
+  // Redesign 2026-10-13: twelve columns from 1100 px. Needs you and Spend span the row; then Fleet health beside Recent
+  // sessions and Recent chats beside Quick actions, alternating widths. Heights match within a row, so no card
+  // stretches far past its content.
   none: {
-    needs:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-1 @[1100px]/overview:col-start-4 @[1100px]/overview:row-start-1',
-    spend:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-1 @[1100px]/overview:row-span-2',
+    needs: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-12',
+    spend: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-12',
     budget: '',
-    health:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-start-3 @[1100px]/overview:row-start-4',
-    sessions:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-4 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-3',
-    chats:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-start-1 @[1100px]/overview:row-start-4',
-    // Full width at 2 columns, so it doesn't sit alone at half width on the last row.
-    actions:
-      '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-1 @[1100px]/overview:col-start-4 @[1100px]/overview:row-start-2',
+    health: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-5',
+    sessions: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-7',
+    chats: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-7',
+    actions: '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-5',
   },
 } as const
 
@@ -260,7 +259,7 @@ function Overview({
     (!firstRun &&
       (spend.isPending ||
         (!spend.totals && !spend.totalsError) ||
-        needsYou.sessions.recent.isPending ||
+        needsYou.sessions.list.isPending ||
         chats.isPending))
   const [painted, setPainted] = useState(false)
   if (!painted && !coldPending) setPainted(true)
@@ -291,33 +290,45 @@ function Overview({
   const place = budgets ? PLACE.budgets : PLACE.none
   return (
     <Frame description={description} actions={actions}>
-      {/* The summary as one card like TokenOps' SummaryHero: the headline on the left, the KPI tiles 2×2 on the right. */}
-      <Card
-        asChild
-        className="gap-0 overflow-hidden p-0 @[1100px]/overview:grid @[1100px]/overview:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"
-      >
-        <section aria-labelledby="overview-summary-title">
-          <h2 id="overview-summary-title" className="sr-only">
-            {copy.summary}
-          </h2>
-          <div className="flex flex-col justify-center gap-4 p-5">
-            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary-text">
-              {copy.range.item(days)}
-            </Badge>
-            <Headline narrative={narrative} nothing={needs.empty} />
-            <MonthBar spend={spend} />
-            <Savings view={savings.view} isPending={savings.isPending} />
+      {/* The summary as a bento, as on TokenOps and Optimization: the headline in the lead card (the page's one effect
+          area), the four KPI tiles beside it, 2×2. */}
+      <section data-tour="overview-summary" aria-labelledby="overview-summary-title">
+        <h2 id="overview-summary-title" className="sr-only">
+          {copy.summary}
+        </h2>
+        <Reveal className="grid gap-3 @[1100px]/overview:grid-cols-12">
+          <RevealItem className="@[1100px]/overview:col-span-6">
+            <SpotlightCard className="h-full">
+              <div className="relative flex flex-1 flex-col justify-center gap-4 p-5">
+                <Badge
+                  variant="outline"
+                  className="border-primary/30 bg-primary/10 text-primary-text"
+                >
+                  {copy.range.item(days)}
+                </Badge>
+                <Headline narrative={narrative} nothing={needs.empty} />
+                <MonthBar spend={spend} />
+                <Savings view={savings.view} isPending={savings.isPending} />
+              </div>
+            </SpotlightCard>
+          </RevealItem>
+          <div className="grid grid-cols-1 gap-3 @[560px]/overview:grid-cols-2 @[1100px]/overview:col-span-6">
+            <RevealItem className="flex *:flex-1">
+              <SpendTile spend={spend} />
+            </RevealItem>
+            <RevealItem className="flex *:flex-1">
+              <RunsTile spend={spend} />
+            </RevealItem>
+            <RevealItem className="flex *:flex-1">
+              <AgentsTile fleet={fleet} />
+            </RevealItem>
+            <RevealItem className="flex *:flex-1">
+              <Harnesses data={harnesses} days={days} />
+            </RevealItem>
           </div>
-          {/* The tiles drop their own card chrome here: the hairlines between them are the grid's gap. */}
-          <div className="grid grid-cols-1 gap-px border-t border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-2 @[1100px]/overview:border-t-0 @[1100px]/overview:border-l">
-            <SpendTile spend={spend} />
-            <RunsTile spend={spend} />
-            <AgentsTile fleet={fleet} />
-            <Harnesses data={harnesses} days={days} />
-          </div>
-        </section>
-      </Card>
-      <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-4">
+        </Reveal>
+      </section>
+      <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-12">
         <NeedsYou
           data={needsYou}
           now={now.getTime()}
