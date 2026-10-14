@@ -3,8 +3,9 @@
  * `--animate-mark-draw` in index.css). A page shows it while its primary data loads, in place of section skeletons;
  * the router's pending UI (`RoutePending`) is the same loader. Reduced motion shows the filled mark, still.
  *
- * By default it sits in the middle of the content area (the viewport beside the sidebar, whatever the page header
- * above it), on a fixed layer that lets clicks through. `inline` centres it in its own box instead: a tab panel or a
+ * By default it sits in the middle of the content area (the viewport beside the sidebar and, when a layer's
+ * `shellSplit` panel is open, short of it: the slot sets `--shell-split-end` to the panel's width; whatever the page
+ * header above it), on a fixed layer that lets clicks through. `inline` centres it in its own box instead: a tab panel or a
  * column that loads after the page has shown (pass the box's height in `className`).
  */
 import { MARK_BARS } from '@/app/shell/markBars'
@@ -30,7 +31,7 @@ export function PageLoader({
         inline
           ? 'flex-1'
           : // The sidebar's gap is --sidebar-width, or --sidebar-width-icon in the collapsed rail; none outside the shell.
-            'pointer-events-none fixed inset-y-0 right-0 left-0 z-10 md:left-[var(--sidebar-width,0px)] md:group-has-[[data-slot=sidebar][data-collapsible=icon]]/sidebar-wrapper:left-(--sidebar-width-icon)',
+            'pointer-events-none fixed inset-y-0 right-[var(--shell-split-end,0px)] left-0 z-10 md:left-[var(--sidebar-width,0px)] md:group-has-[[data-slot=sidebar][data-collapsible=icon]]/sidebar-wrapper:left-(--sidebar-width-icon)',
         className,
       )}
     >
