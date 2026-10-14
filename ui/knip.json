@@ -17,7 +17,6 @@
         "*/*/src/main.tsx",
         "*/src/mocks.ts",
         "*/*/src/mocks/index.ts",
-        "*/*/src/genui/frame/runtime.tsx",
         "*/*/src/routes/**/*.tsx",
         "*/vite.config.ts",
         "*/*/vite.config.ts",
@@ -33,18 +32,12 @@
         "**/routeTree.gen.ts"
       ],
       "ignoreDependencies": [
-        "@assistant-ui/react",
-        "acorn",
         "@tanstack/react-query",
         "lucide-react",
         "motion",
-        "react-day-picker",
         "react-hook-form",
         "sonner",
-        "zod",
-        "zustand",
-        "sucrase",
-        "tailwindcss"
+        "zod"
       ]
     },
     "common": {
@@ -67,10 +60,6 @@
   "ignoreIssues": {
     "common/src/components/charts/**": [
       "duplicates",
-      "exports",
-      "types"
-    ],
-    "ee/web/src/genui/lang/**": [
       "exports",
       "types"
     ]

@@ -7,8 +7,6 @@
  * - Requests come from Chat's Waiting pipeline, so a superuser only sees requests provably theirs (eng review R5).
  */
 import type { HitlKind } from '@/features/chat/types'
-import { fmtMoney, fmtShortDay } from '@/lib/format'
-import { copy } from './copy'
 
 export type SourceId = 'requests' | 'agents' | 'budgets' | 'sessions'
 type SourceState<T> =
@@ -32,31 +30,10 @@ export interface NeedsInput {
   agents: SourceState<{ id: string; name: string; reason: string; budget: boolean }[]> & {
     incomplete?: boolean
   }
-  /** `incomplete`: a later page failed, so the rows are real but the source can't vouch for "nothing else". */
-  budgets: SourceState<BudgetItem[]> & { incomplete?: boolean }
+  budgets: SourceState<
+    { id: string; label: string; crossed: number | null; state: 'warning' | 'exceeded' }[]
+  >
   sessions: SourceState<{ failed: number; checked: number; agents: string[] }>
-}
-
-/** A budget that needs the viewer (plans/feat-budget-burn.md F8). */
-export interface BudgetItem {
-  id: string
-  label: string
-  /** An agent budget's agent: the row opens that agent's Budget section on its hub (B5). */
-  agentId: string | null
-  crossed: number | null
-  state: 'warning' | 'exceeded'
-  /** Dollars over its limit, when it is. */
-  over: number | null
-  /** Its calls are refused right now. */
-  stopped: boolean
-  /** It stops calls at its limit (else it alerts only): "runs out" only where calls stop (design 1C). */
-  stops: boolean
-  /** The day it is projected to reach its limit (At risk), before the reset. */
-  runsOutOn: string | null
-  resetsAt: string | null
-  /** For the detail line: what period and population it counts (a fleet budget counts all priced spend). */
-  period: 'month' | 'quarter' | 'session'
-  covers: 'routed_calls' | 'all_priced'
 }
 
 export type NeedRow =
@@ -71,7 +48,14 @@ export type NeedRow =
       reason: string
       budget: boolean
     }
-  | ({ key: string; kind: 'budget'; severity: 'watch' } & Omit<BudgetItem, 'id'>)
+  | {
+      key: string
+      kind: 'budget'
+      severity: 'watch'
+      label: string
+      crossed: number | null
+      state: 'warning' | 'exceeded'
+    }
   | {
       key: string
       kind: 'sessions'
@@ -118,18 +102,20 @@ export function mergeNeeds(i: NeedsInput): Needs {
       rows.push({ key: `agent-${a.id}`, kind: 'agent', severity: 'action', ...a })
   if (i.budgets.state === 'ok')
     for (const b of i.budgets.value)
-      rows.push({ ...b, key: `budget-${b.id}`, kind: 'budget', severity: 'watch' })
+      rows.push({
+        key: `budget-${b.id}`,
+        kind: 'budget',
+        severity: 'watch',
+        label: b.label,
+        crossed: b.crossed,
+        state: b.state,
+      })
   if (i.sessions.state === 'ok' && i.sessions.value.failed > 0)
     rows.push({ key: 'sessions', kind: 'sessions', severity: 'action', ...i.sessions.value })
 
   const states = ORDER.map((id) => [id, i[id].state] as const)
   const failed = states
-    .filter(
-      ([id, s]) =>
-        s === 'failed' ||
-        (id === 'agents' && i.agents.incomplete) ||
-        (id === 'budgets' && i.budgets.incomplete),
-    )
+    .filter(([id, s]) => s === 'failed' || (id === 'agents' && i.agents.incomplete))
     .map(([id]) => id)
   const loading = states.some(([, s]) => s === 'loading')
   return {
@@ -143,36 +129,5 @@ export function mergeNeeds(i: NeedsInput): Needs {
         ? i.requests.value.chats.reduce((n, c) => n + c.count, 0) + i.requests.value.outside
         : null,
     actionCount: i.agents.state === 'ok' ? i.agents.value.length : null,
-  }
-}
-
-/** A budget row's words (plans/feat-budget-burn.md F8). */
-export function budgetView(b: Omit<BudgetItem, 'id'>): { title: string; detail: string } {
-  const until = b.stopped && b.resetsAt ? fmtShortDay(b.resetsAt) : null
-  if (b.stopped)
-    return {
-      title: copy.needs.budgetStopped(b.label),
-      // At its limit exactly (a stop lands there), "over by $0.00" says nothing.
-      detail:
-        b.over && b.over >= 0.005
-          ? copy.needs.budgetOverBy(fmtMoney(b.over), until)
-          : copy.needs.budgetStoppedUntil(until),
-    }
-  if (b.state === 'exceeded')
-    return {
-      title: copy.needs.budget(b.label, 'exceeded', b.crossed),
-      detail:
-        b.over !== null
-          ? copy.needs.budgetOverBy(fmtMoney(b.over), null)
-          : copy.needs.budgetDetailFor(b.period, b.covers),
-    }
-  if (b.runsOutOn)
-    return {
-      title: copy.needs.budgetRunsOut(b.label, fmtShortDay(b.runsOutOn), b.stops),
-      detail: copy.needs.budgetProjected,
-    }
-  return {
-    title: copy.needs.budget(b.label, 'warning', b.crossed),
-    detail: copy.needs.budgetDetailFor(b.period, b.covers),
   }
 }

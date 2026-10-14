@@ -21,7 +21,7 @@ import { useNow } from '@/lib/useNow'
 import { ELAPSED_TICK_MS } from './tuning'
 import { openRegistryView } from './follower'
 import { dismissImport, importFor, startImport, subscribeUploads } from './uploads'
-import { StageList } from './components/StageList'
+import { ProgressSegments } from './components/ProgressSegments'
 import type { DeployStarted } from './UploadTab'
 
 export function RegistryTab({
@@ -137,12 +137,12 @@ export function RegistryTab({
             </Field>
             {importing ? (
               <div className="flex flex-col gap-2" data-testid="import-progress">
-                <StageList
+                <ProgressSegments
                   stages={stages}
                   sub={(s) =>
                     s.state === 'current'
                       ? `${fmtElapsed(clock - state.startedAt)} · ${copy.registry.usual}`
-                      : null
+                      : copy.build.pending
                   }
                 />
                 <p className="text-xs text-muted-foreground">{copy.registry.keepUsing}</p>

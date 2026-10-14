@@ -166,7 +166,7 @@ export function NeedsAttention() {
         error={null}
         onConfirm={() => confirm && run(confirm, pending)}
       >
-        <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-48">
+        <ScrollArea className="max-h-48">
           <ul className="m-0 flex list-none flex-col gap-1 p-0 text-sm">
             {pending.map((a) => (
               <li key={a.id}>

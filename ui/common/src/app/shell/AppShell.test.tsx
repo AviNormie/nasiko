@@ -55,8 +55,6 @@ describe('sidebar items', () => {
   it('lists every page with a name, even as the collapsed rail', async () => {
     renderApp('/tokenops')
     await screen.findByRole('navigation', { name: 'Main' })
-    // Budgets shows once the budgets probe answers (plans/feat-budget-burn.md F13).
-    await waitFor(() => navLink('Budgets'))
     // jsdom is 1024 px wide: no cookie means the first-visit rail (design review 9A).
     expect(sidebarState()).toBe('collapsed')
     for (const n of NAV_ITEMS)
@@ -72,11 +70,10 @@ describe('sidebar items', () => {
     ['/deploy', 'Agents'],
     ['/builds', 'Agents'],
     ['/chat', 'Chat'],
-    ['/', 'Home'],
+    ['/', 'Overview'],
   ])('marks %s as %s with aria-current', async (url, label) => {
     renderApp(url)
     await waitFor(() => expect(navLink(label)).toHaveAttribute('aria-current', 'page'))
-    await waitFor(() => navLink('Budgets'))
     // Exactly one current item on the whole page: the Nasiko link to Chat never competes (§3 rule 4).
     // (Pages may mark their own tabs; only the sidebar is checked.)
     expect(
@@ -117,7 +114,7 @@ describe('sidebar items', () => {
   it('shows a way back into the app on an unknown URL', async () => {
     renderApp('/no-such-page')
     await screen.findByRole('heading', { name: 'Page not found' })
-    expect(screen.getByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Back to Overview' })).toHaveAttribute('href', '/')
     expect(screen.getByRole('link', { name: 'Go to Chat' })).toHaveAttribute('href', '/chat')
   })
 
@@ -161,7 +158,7 @@ describe('sidebar items', () => {
 })
 
 describe('header brand link', () => {
-  it('goes Home through the router without marking itself current', async () => {
+  it('goes to the Overview through the router without marking itself current', async () => {
     wide()
     const { router } = renderApp('/agents')
     await screen.findByRole('navigation', { name: 'Main' })
@@ -170,7 +167,7 @@ describe('header brand link', () => {
     await userEvent.click(brand)
     await waitFor(() => expect(router.state.location.pathname).toBe('/'))
     expect(brand).not.toHaveAttribute('aria-current')
-    expect(navLink('Home')).toHaveAttribute('aria-current', 'page')
+    expect(navLink('Overview')).toHaveAttribute('aria-current', 'page')
   })
 
   it('leaves a modified click (new tab) to the browser', async () => {

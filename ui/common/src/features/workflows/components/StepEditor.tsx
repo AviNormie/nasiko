@@ -191,7 +191,7 @@ export function StepEditor({
     onChange(uids.map((u) => steps.find((s) => s.uid === u)).filter((s) => !!s))
 
   return (
-    <div data-tour="wf-steps" ref={root} id="editor" className="flex flex-col">
+    <div ref={root} id="editor" className="flex flex-col">
       {steps.length === 0 ? (
         <EmptyState title={copy.noSteps}>{copy.noStepsText}</EmptyState>
       ) : (

@@ -46,11 +46,7 @@ describe('Flows list', () => {
     const rec = recordRequests()
     renderApp('/flows')
     await table()
-    const pick = async (filter: string, option: string) => {
-      await userEvent.click(screen.getByRole('combobox', { name: filter }))
-      await userEvent.click(await screen.findByRole('option', { name: option }))
-    }
-    await pick(copy.list.kind, copy.list.kinds.workflow)
+    await userEvent.click(screen.getByRole('radio', { name: copy.list.kinds.workflow }))
     await waitFor(async () =>
       expect(await titles()).toEqual(
         expect.arrayContaining(['Quarterly report: draft the revenue section']),
@@ -59,7 +55,7 @@ describe('Flows list', () => {
     expect(await titles()).not.toContain(
       'Compare 2026 pricing for three vendors and draft a summary',
     )
-    await pick(copy.list.statusLabel, copy.list.statuses.failed)
+    await userEvent.click(screen.getByRole('radio', { name: copy.list.statuses.failed }))
     await waitFor(() =>
       expect(
         rec.urls.some(

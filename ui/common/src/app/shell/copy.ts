@@ -20,7 +20,7 @@ export const copy = {
     observe: 'Observe',
     org: 'Organization',
     lab: 'Lab',
-    home: 'Home',
+    overview: 'Overview',
     chat: 'Chat',
     agents: 'Agents',
     router: 'LLM router',
@@ -29,7 +29,6 @@ export const copy = {
     sessions: 'Sessions',
     flows: 'Flows',
     tokenops: 'TokenOps',
-    budgets: 'Budgets',
     optimization: 'Optimization',
     harnesses: 'Harnesses',
     settings: 'Settings',
@@ -45,7 +44,7 @@ export const copy = {
   notFound: {
     title: 'Page not found',
     body: "There's nothing at this address. It may have moved, or the link is mistyped.",
-    home: 'Back to Home',
+    home: 'Back to Overview',
     toChat: 'Go to Chat',
   },
   status: {

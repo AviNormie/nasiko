@@ -24,6 +24,7 @@ common/src/lib/api/schema.gen.ts
 common/src/test/__live__/
 # Stock shadcn output stays close to the registry so `shadcn diff` stays readable (local edits are listed per file).
 common/src/components/ui/
-ee/web/src/genui/lang/
+# Vendored verbatim from nasiko-cloud-rs (ee/web/src/weave/core/README.md).
+ee/web/src/weave/core/
 # Written by msw on install (package.json "msw.workerDirectory"); CI's npm ci regenerates it unformatted.
 public/mockServiceWorker.js

@@ -143,7 +143,7 @@ export interface FleetHealthSummary {
   byId: Map<string, AgentHealth>
   /** Watch agents, most reasons first, then by name. */
   watch: AgentHealth[]
-  /** Needs-action agents, for Needs you (the home's rows show every agent's rating). */
+  /** Needs-action agents, for Needs you (they don't repeat in the Fleet health card). */
   action: AgentHealth[]
 }
 

@@ -8,15 +8,22 @@
  *   F3 attribution  |  F5 cost × p95          F3 row "Traces" ─▶ ?agent=<id>&traces=true
  *   F4 traces drawer (sheet)
  *
- * The shell's top bar carries the time presets and the drill path (TokenOps › day › agent › Traces); the
- * page header keeps the title, freshness and filters. All state lives in the URL. Drill-downs push history (Back unwinds them); sort,
+ * All state lives in the URL. Drill-downs push history (Back unwinds them); sort,
  * search and the KPI expander replace it (A5).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, DollarSign, Info, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -43,7 +50,6 @@ import {
   type Filters,
 } from './api'
 import { compareOn, withoutWindow } from '@/app/shell/context'
-import { TopBar } from '@/app/shell/TopBar'
 import { tokenopsNarrative } from '@/features/narrative/tokenops'
 import { buildAttribution } from './attribution'
 import { summarizeMonth } from './forecast'
@@ -72,7 +78,7 @@ import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { SpendTimeline } from './components/SpendTimeline'
 import { SummaryHero } from './components/SummaryHero'
-import { CustomRange, InvalidRangeNote, TimePresets } from '@/components/shared/time-control'
+import { TimeControl } from '@/components/shared/time-control'
 import { TracesDrawer } from './components/TracesDrawer'
 
 export type SetSearch = (patch: Partial<TokenopsSearch>, opts?: { replace?: boolean }) => void
@@ -255,13 +261,14 @@ export function TokenopsPage({
           : ''
   const [closed, setClosed] = useState<ReadonlyMap<DisclosureId, string>>(new Map())
   // Opening This month also opens Spend over time above it, which pushes This month down:
-  // bring its header back to just under the top bar (the root's scroll-padding clears the bar; 8px of air on top).
+  // bring its header back to just under the sticky bar.
+  const stickyBar = useRef<HTMLDivElement>(null)
   const scrollToMonth = useRef(false)
   useEffect(() => {
     const header = document.getElementById('disclosure-month-title')
     if (!scrollToMonth.current || !header || !openSet(search.open).has('month')) return
     scrollToMonth.current = false
-    header.style.scrollMarginTop = '8px'
+    header.style.scrollMarginTop = `${(stickyBar.current?.offsetHeight ?? 0) + 8}px`
     header.scrollIntoView?.({
       block: 'start',
       behavior: prefersReducedMotion() ? 'auto' : 'smooth',
@@ -272,12 +279,12 @@ export function TokenopsPage({
    *
    * One function for both ways in — the in-page button and the Overview's link — because they are
    * the same request and must land in the same place. They did not: the button scrolled without the
-   * offset, so it stopped with the heading hidden behind the bar.
+   * sticky-bar offset, so it stopped with the heading hidden behind the bar.
    */
   const scrollToOptimise = () => {
     const header = document.getElementById('disclosure-optimise-title')
     if (!header) return false
-    header.style.scrollMarginTop = '8px'
+    header.style.scrollMarginTop = `${(stickyBar.current?.offsetHeight ?? 0) + 8}px`
     header.scrollIntoView?.({
       block: 'start',
       behavior: prefersReducedMotion() ? 'auto' : 'smooth',
@@ -420,91 +427,70 @@ export function TokenopsPage({
   const kpiCompareLabel =
     win.preset === 'mtd' ? `the previous ${mtdDays === 1 ? 'day' : `${mtdDays} days`}` : undefined
 
-  const time = {
-    preset: search.preset,
-    invalid: search.preset === 'custom' && win.preset !== 'custom',
-    from: search.from,
-    to: search.to,
-    today,
-    onChange: (n: Pick<TokenopsSearch, 'preset' | 'from' | 'to'>) =>
-      setSearch(
-        { preset: n.preset, from: n.from, to: n.to },
-        { replace: search.preset === 'custom' && n.preset === 'custom' },
-      ),
-  }
-
-  const filterControls = (
-    <>
-      <FilterSelect
-        label="Agent"
-        value={search.agent}
-        options={agentOptions.map((a) => ({ value: a.id, label: a.name }))}
-        onChange={(v) => setSearch({ agent: v, traces: undefined })}
-        extraLabel={agentLabel}
-      />
-      <FilterSelect
-        label="Provider"
-        value={search.provider}
-        options={(providers.data ?? []).map((p) => ({ value: p.provider, label: p.provider }))}
-        onChange={(v) => setSearch({ provider: v, model: undefined })}
-      />
-      <FilterSelect
-        label="Model"
-        value={search.model}
-        options={uniqueModels.map((m) => ({ value: m, label: m }))}
-        onChange={(v) => setSearch({ model: v })}
-      />
-    </>
-  )
-
   if (firstRun) return <FirstRun />
 
   return (
-    // The page's first load is the one page loader below the header (plan §8 Phase 9: one busy region).
+    // The page's first load is the one page loader below the sticky bar (plan §8 Phase 9: one busy region).
     <div className="flex flex-col gap-4">
-      {/* The top bar is the page's one sticky row: the presets and the drill path stay in view (A1). */}
-      <TopBar
-        {...drillTrail(search, agentLabel, setSearch)}
-        actions={
-          <>
-            <TimePresets {...time} />
-            {/* Custom dates sit beside the presets; a phone's bar has no room, so there they join the filters. */}
-            {isMd ? <CustomRange {...time} noteElsewhere /> : null}
-          </>
-        }
-        pinActions
-      />
-      {/* Left: what you are looking at and how fresh it is. Right: what narrows it, under the time presets. */}
-      <PageHeader
-        title="TokenOps"
-        description={
-          dash.dataUpdatedAt ? (
-            <span title="When this data was fetched">
-              Data as of {fmtLocalTime(dash.dataUpdatedAt, true)}
-            </span>
-          ) : null
-        }
-        actions={
-          isMd ? (
-            // A column, so the invalid-range note sits under the filters and both keep the right edge.
-            <div data-tour="tokenops-filters" className="flex flex-col items-end gap-1">
-              <div className="flex flex-wrap items-center justify-end gap-2">{filterControls}</div>
-              {time.invalid ? <InvalidRangeNote /> : null}
-            </div>
-          ) : null
-        }
-        className="mb-2"
-      />
-      {/* Phones: the custom dates and the filters scroll sideways in one row instead of wrapping (A1b). */}
-      {isMd ? null : (
-        <div
-          data-tour="tokenops-filters"
-          className="-mx-4 mb-2 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 [&>*]:shrink-0"
-        >
-          <CustomRange {...time} />
-          {filterControls}
+      {/* Sticky bar: title, time control, filters, breadcrumb, freshness (A1). */}
+      <div
+        ref={stickyBar}
+        className="sticky top-0 z-20 -mx-4 flex flex-col gap-2 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
+      >
+        <PageHeader
+          title="TokenOps"
+          actions={
+            <TimeControl
+              preset={search.preset}
+              invalid={search.preset === 'custom' && win.preset !== 'custom'}
+              from={search.from}
+              to={search.to}
+              today={today}
+              onChange={(n) =>
+                setSearch(
+                  { preset: n.preset, from: n.from, to: n.to },
+                  { replace: search.preset === 'custom' && n.preset === 'custom' },
+                )
+              }
+            />
+          }
+        />
+        {/* Chips scroll horizontally on narrow screens instead of growing the sticky bar (A1b). */}
+        <div className="-mx-4 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:overflow-visible md:px-0 [&>*]:shrink-0">
+          <FilterSelect
+            label="Agent"
+            value={search.agent}
+            options={agentOptions.map((a) => ({ value: a.id, label: a.name }))}
+            onChange={(v) => setSearch({ agent: v, traces: undefined })}
+            extraLabel={agentLabel}
+          />
+          <FilterSelect
+            label="Provider"
+            value={search.provider}
+            options={(providers.data ?? []).map((p) => ({ value: p.provider, label: p.provider }))}
+            onChange={(v) => setSearch({ provider: v, model: undefined })}
+          />
+          <FilterSelect
+            label="Model"
+            value={search.model}
+            options={uniqueModels.map((m) => ({ value: m, label: m }))}
+            onChange={(v) => setSearch({ model: v })}
+          />
+          <DrillCrumbs
+            win={win.label}
+            day={search.day}
+            agent={agentLabel}
+            traces={!!search.traces}
+            setSearch={setSearch}
+          />
+          <span
+            className="ml-auto text-xs text-muted-foreground"
+            title="When this data was fetched"
+          >
+            {dash.dataUpdatedAt ? `Data as of ${fmtLocalTime(dash.dataUpdatedAt, true)}` : null}
+          </span>
         </div>
-      )}
+      </div>
 
       {showLoader ? <PageLoader label="Loading TokenOps" /> : null}
       {showLoader ? null : unknownAgent ? (
@@ -565,7 +551,7 @@ export function TokenopsPage({
             }}
           />
 
-          <div data-tour="tokenops-sections" className="flex flex-col">
+          <div className="flex flex-col">
             <Disclosure
               id="spend"
               title="Spend over time"
@@ -847,38 +833,60 @@ function FilterSelect({
   )
 }
 
-/**
- * The drill path as the top bar's breadcrumb: TokenOps › day › agent › Traces. Each level above the current one is a
- * button that clears what sits below it; TokenOps clears the whole drill but keeps the window and the other filters.
- * With nothing drilled the shell's own breadcrumb stays.
- */
-function drillTrail(
-  search: TokenopsSearch,
-  agentLabel: string | undefined,
-  setSearch: SetSearch,
-): { root?: React.ReactNode; trail?: React.ReactNode[] } {
-  const { day, traces } = search
-  if (!day && !agentLabel && !traces) return {}
-  const levels: { label: string; clear: Partial<TokenopsSearch> }[] = [
-    { label: 'TokenOps', clear: { day: undefined, agent: undefined, traces: undefined } },
+function DrillCrumbs({
+  win,
+  day,
+  agent,
+  traces,
+  setSearch,
+}: {
+  win: string
+  day?: string
+  agent?: string
+  traces: boolean
+  setSearch: SetSearch
+}) {
+  if (!day && !agent && !traces) return null
+  const crumbs: { level: string; label: string; clear: Partial<TokenopsSearch> }[] = [
+    { level: 'window', label: win, clear: { day: undefined, agent: undefined, traces: undefined } },
   ]
-  if (day) levels.push({ label: fmtShortDay(day), clear: { agent: undefined, traces: undefined } })
-  if (agentLabel) levels.push({ label: agentLabel, clear: { traces: undefined } })
-  if (traces) levels.push({ label: 'Traces', clear: {} })
-  const [root, ...trail] = levels.map((l, i) =>
-    i === levels.length - 1 ? (
-      l.label
-    ) : (
-      <Button
-        variant="link"
-        className="h-auto p-0 text-sm font-normal text-muted-foreground hover:text-foreground"
-        onClick={() => setSearch(l.clear)}
-      >
-        {l.label}
-      </Button>
-    ),
+  if (day)
+    crumbs.push({
+      level: 'day',
+      label: fmtShortDay(day),
+      clear: { agent: undefined, traces: undefined },
+    })
+  if (agent) crumbs.push({ level: 'agent', label: agent, clear: { traces: undefined } })
+  if (traces) crumbs.push({ level: 'traces', label: 'Traces', clear: {} })
+  return (
+    <Breadcrumb aria-label="Drill-down">
+      <BreadcrumbList className="gap-1 text-xs sm:gap-1">
+        {crumbs.map((c, i) => (
+          <Fragment key={c.level}>
+            {i > 0 ? <BreadcrumbSeparator className="[&>svg]:size-3" /> : null}
+            <BreadcrumbItem className="gap-1">
+              {i === crumbs.length - 1 ? (
+                <BreadcrumbPage aria-current="location" className="font-medium">
+                  {c.label}
+                </BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink asChild>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs font-normal text-muted-foreground underline-offset-2 hover:text-foreground"
+                    onClick={() => setSearch(c.clear)}
+                  >
+                    {c.label}
+                  </Button>
+                </BreadcrumbLink>
+              )}
+            </BreadcrumbItem>
+          </Fragment>
+        ))}
+      </BreadcrumbList>
+    </Breadcrumb>
   )
-  return { root, trail }
 }
 
 function Notice({ tone, children }: { tone: 'info' | 'warning'; children: React.ReactNode }) {

@@ -21,8 +21,6 @@ export const traceSearchSchema = z.extend(sessionsSearchSchema, {
   trace: opt(z.string().check(z.trim(), z.minLength(1), z.maxLength(200))),
   /** HEX span id (what GET /span/{trace}/{span} matches), never the base64 `id`. */
   span: opt(z.string().check(z.regex(/^[0-9a-fA-F]{1,64}$/))),
-  /** The harness session ledger (plans/feat-agent-centric.md PR1b): one row per turn instead of the trace. */
-  view: opt(z.enum(['ledger'])),
 })
 
 export type TraceSearch = z.infer<typeof traceSearchSchema>

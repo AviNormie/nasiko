@@ -5,7 +5,7 @@
  * counted in All.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate, useRouterState, type HistoryState } from '@tanstack/react-router'
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { Bot, MoreHorizontal } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -36,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState } from '@/components/shared/state-card'
 import { DeployAgentButton } from '@/features/deploy/components/DeployAgentButton'
@@ -44,7 +45,6 @@ import { ErrorState } from '@/features/observability/StateCard'
 import { LogDrawer } from '@/features/sessions/LogDrawer'
 import { fmtInt, fmtMoney } from '@/lib/format'
 import { meQuery } from '@/lib/api/auth'
-import { useSiblingState } from '@/lib/siblings'
 import { cn } from '@/lib/utils'
 import {
   isUnavailable,
@@ -55,7 +55,7 @@ import {
   // useUsers,
   useWatchesStep,
 } from './api'
-import { AgentLinkTo, AgentsHeader, FirstRunSteps, StatusBadge } from './components/bits'
+import { AgentLinkTo, AgentsNav, FirstRunSteps, StatusBadge } from './components/bits'
 import { CopyMenuItem } from '@/components/shared/copy-button'
 import { LifecycleButtons, StopDialog } from './components/lifecycle'
 import { relTime } from './format'
@@ -121,7 +121,6 @@ export function MyAgentsPage({
       : tab === 'all'
         ? agents
         : agents.filter((r) => r.display === tab)
-  const linkState = useSiblingState(shown.map((r) => r.a.id))
   const count = (t: Tab) =>
     t === 'all'
       ? agents.length
@@ -131,19 +130,65 @@ export function MyAgentsPage({
 
   // const ownerId = useId()
   const header = (
-    <AgentsHeader
-      current="/agents/mine"
-      description={
-        <>
-          {copy.deployHint}{' '}
-          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
-            nasiko deploy
-          </code>
-        </>
-      }
-      // With no agents, the empty card offers Deploy itself.
-      action={q.data && rows.length === 0 ? null : <DeployAgentButton />}
-    />
+    <>
+      <PageHeader
+        title={
+          <>
+            {copy.mineTitle}
+            {q.data ? (
+              <span className="ml-2 text-base font-normal text-muted-foreground">
+                {agents.length}
+              </span>
+            ) : null}
+          </>
+        }
+        description={
+          <>
+            {copy.deployHint}{' '}
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]">
+              nasiko deploy
+            </code>
+          </>
+        }
+        actions={
+          <>
+            <DeployAgentButton />
+            {/* Owner picker and Agents link hidden for now.
+            {superuser && users.data ? (
+              <Field orientation="horizontal" className="w-auto gap-2">
+                <FieldLabel htmlFor={ownerId} className="font-normal text-muted-foreground">
+                  {copy.owner}
+                </FieldLabel>
+                <Select
+                  value={owner ?? ''}
+                  onValueChange={(v) => setSearch({ owner: v === me?.sub ? undefined : v })}
+                >
+                  <SelectTrigger id={ownerId} size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[...users.data.entries()].map(([id, name]) => (
+                      <SelectItem key={id} value={id}>
+                        {id === me?.sub ? `${name} (${copy.you})` : name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            ) : null}
+            <Link
+              to="/agents"
+              search={{}}
+              className="ml-1 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              {copy.catalogTitle} →
+            </Link>
+            */}
+          </>
+        }
+      />
+      <AgentsNav current="/agents/mine" />
+    </>
   )
 
   const deleted = useRouterState({ select: (s) => s.location.state.agentDeleted })
@@ -212,42 +257,34 @@ export function MyAgentsPage({
               </ul>
             </section>
           ) : null}
-          {/* One object: the status tabs are the table's top edge, a level below the section nav above. */}
-          <div
-            data-tour="mine-table"
-            id="your-agents-table"
-            className="rounded-lg border border-border"
+          {/* Radix tabs: arrow keys, Home/End and roving focus. The table below is the one panel. */}
+          <Tabs
+            value={tab}
+            onValueChange={(t) => setSearch({ tab: t === 'all' ? undefined : (t as Tab) })}
           >
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border p-2">
-              {/* Radix tabs: arrow keys, Home/End and roving focus. The table below is the one panel. */}
-              <Tabs
-                value={tab}
-                onValueChange={(t) => setSearch({ tab: t === 'all' ? undefined : (t as Tab) })}
-                className="max-w-full min-w-0"
-              >
-                <TabsList
-                  data-tour="mine-status-tabs"
-                  aria-label={copy.colStatus}
-                  className="max-w-full justify-start overflow-x-auto"
-                >
-                  {(['all', ...TAB_STATUSES, 'harnesses'] as Tab[]).map((t) => (
-                    <TabsTrigger key={t} value={t} aria-controls="your-agents-table">
-                      {tabLabel(t)}{' '}
-                      <span className="text-xs text-muted-foreground tabular-nums">{count(t)}</span>
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <div className="flex flex-wrap gap-x-4 text-xs text-muted-foreground sm:ml-auto">
-                {tab === 'all' && harnesses.length ? (
-                  <p>{copy.excludesHarnesses(harnesses.length)}</p>
-                ) : null}
-                {usage.isError ? <p>{copy.usageUnavailable}</p> : null}
-              </div>
-            </div>
-            {shown.length ? (
-              // shadcn Table, not DataTable: each row owns its lifecycle flow (hooks + Stop dialog), which
-              // DataTable's per-cell rendering can't share across a row's cells.
+            <TabsList
+              variant="line"
+              aria-label={copy.colStatus}
+              className="w-full max-w-full justify-start overflow-x-auto border-b border-border"
+            >
+              {(['all', ...TAB_STATUSES, 'harnesses'] as Tab[]).map((t) => (
+                <TabsTrigger key={t} value={t} className="min-h-10 flex-none px-3">
+                  {tabLabel(t)}
+                  <span className="rounded-full bg-muted px-1.5 text-xs">{count(t)}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <div className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
+            {tab === 'all' && harnesses.length ? (
+              <p>{copy.excludesHarnesses(harnesses.length)}</p>
+            ) : null}
+            {usage.isError ? <p>{copy.usageUnavailable}</p> : null}
+          </div>
+          {shown.length ? (
+            // shadcn Table, not DataTable: each row owns its lifecycle flow (hooks + Stop dialog), which
+            // DataTable's per-cell rendering can't share across a row's cells.
+            <div className="rounded-lg border border-border">
               <Table aria-label={copy.mineTitle}>
                 <TableHeader>
                   <TableRow className="text-xs hover:bg-transparent">
@@ -287,26 +324,24 @@ export function MyAgentsPage({
                       usage={usage.data?.get(a.id)}
                       usageFailed={usage.isError}
                       onLogs={() => setLogsFor(a)}
-                      linkState={linkState}
                     />
                   ))}
                 </TableBody>
               </Table>
-            ) : (
-              <EmptyState
-                icon={Bot}
-                title={copy.noAgentsInTab(tabLabel(tab))}
-                className="border-0"
-                action={
-                  <Button size="sm" variant="outline" onClick={() => setSearch({ tab: undefined })}>
-                    {copy.showAllAgents}
-                  </Button>
-                }
-              >
-                {copy.noAgentsInTabHint}
-              </EmptyState>
-            )}
-          </div>
+            </div>
+          ) : (
+            <EmptyState
+              icon={Bot}
+              title={copy.noAgentsInTab(tabLabel(tab))}
+              action={
+                <Button size="sm" variant="outline" onClick={() => setSearch({ tab: undefined })}>
+                  {copy.showAllAgents}
+                </Button>
+              }
+            >
+              {copy.noAgentsInTabHint}
+            </EmptyState>
+          )}
         </>
       )}
       {logsFor ? (
@@ -420,14 +455,12 @@ function AgentRow({
   usage,
   usageFailed,
   onLogs,
-  linkState,
 }: {
   agent: Agent
   display: DisplayStatus
   usage?: { turns: number; cost: number }
   usageFailed: boolean
   onLogs: () => void
-  linkState: () => HistoryState
 }) {
   const flow = useLifecycleFlow(agent.id)
   const name = agent.display_name || agent.name
@@ -438,7 +471,7 @@ function AgentRow({
   return (
     <TableRow>
       <TableCell className="max-w-0 min-w-40 px-4 py-2.5 whitespace-normal sm:w-2/5">
-        <AgentLinkTo id={agent.id} className="font-medium" state={linkState}>
+        <AgentLinkTo id={agent.id} className="font-medium">
           {name}
         </AgentLinkTo>
         <div className="truncate font-mono text-xs text-muted-foreground">{agent.name}</div>
@@ -504,12 +537,7 @@ function AgentRow({
               <DropdownMenuItem onSelect={onLogs}>{copy.viewLogs}</DropdownMenuItem>
             ) : null}
             <DropdownMenuItem asChild>
-              <Link
-                to="/agents/$agentId"
-                params={{ agentId: agent.id }}
-                search={{}}
-                state={linkState}
-              >
+              <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
                 {copy.openAgent}
               </Link>
             </DropdownMenuItem>

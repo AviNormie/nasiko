@@ -957,18 +957,8 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 50))
       const agentId = url.searchParams.get('agent_id')
       const cursor = url.searchParams.get('cursor')
-      // `?surface=<name>` lists that surface's `<name>_` sessions; the general list hides every namespaced id
-      // except the platform's own `ses_` (routes.rs `surface_predicate`).
-      const surface = url.searchParams.get('surface')
-      const inScope = (sid: string) =>
-        surface ? sid.startsWith(`${surface}_`) : !sid.includes('_') || sid.startsWith('ses_')
       const rows = [...chats.values()]
-        .filter(
-          (c) =>
-            c.row.user_id === ctx.userId() &&
-            (!agentId || c.row.agent_id === agentId) &&
-            inScope(c.row.session_id),
-        )
+        .filter((c) => c.row.user_id === ctx.userId() && (!agentId || c.row.agent_id === agentId))
         .map(listRow)
         .sort(
           (a, b) =>
@@ -1096,7 +1086,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
         role?: string
         content?: string
         usage?: Record<string, unknown>
-        file_parts?: unknown
       }
       if (body.role !== 'user' && body.role !== 'assistant')
         return text('role must be "user" or "assistant"', 400)
@@ -1113,10 +1102,6 @@ export function chatHandlers(ctx: ChatMockContext): HttpHandler[] {
         cost_usd: typeof u.cost_usd === 'number' ? u.cost_usd.toFixed(8) : null,
         usage_estimated: typeof u.estimated === 'boolean' ? u.estimated : null,
         trace_id: typeof u.trace_id === 'string' ? u.trace_id : null,
-        // Stored as sent (routes.rs `file_parts_json`): the Weave dock keeps its view on the message here.
-        ...(body.file_parts != null
-          ? { file_parts: body.file_parts as ChatMessage['file_parts'], has_file_parts: true }
-          : {}),
       }
       c.messages.push(saved)
       c.row = { ...c.row, updated_at: saved.timestamp }

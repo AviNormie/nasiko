@@ -37,8 +37,6 @@ export const transitions = {
   disclosure: { duration: s(durations.standard), ease },
   /** Shared-layout morphs (`layoutId`) keep Motion's default transition. */
   morph: {},
-  /** The tour's spotlight gliding from one target to the next: damped, so a long move settles without bouncing. */
-  spotlight: { type: 'spring', stiffness: 320, damping: 34 },
 } as const
 
 /** Row entrances: rise 6 px (new live rows drop 8 px), 30 ms stagger, `standard` timing. */
@@ -47,6 +45,4 @@ export const enter = {
   rise: 6,
   drop: -8,
   stagger: 0.03,
-  /** Words of a generated line (the tour's titles, Aceternity's Text Generate Effect), one after another. */
-  wordStagger: 0.06,
 } as const

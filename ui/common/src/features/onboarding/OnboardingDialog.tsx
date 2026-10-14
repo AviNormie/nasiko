@@ -8,8 +8,8 @@ import {
   ArrowRight,
   Check,
   Clock,
-  House,
   Info,
+  LayoutDashboard,
   Play,
   Plug,
   Scissors,
@@ -17,7 +17,6 @@ import {
   Sparkles,
   WandSparkles,
   X,
-  type LucideIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { NAV_ITEMS } from '@/app/shell/nav'
@@ -433,9 +432,9 @@ function Ready({
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Choice
-          icon={House}
-          title={copy.ready.home}
-          line={copy.ready.homeLine}
+          icon={LayoutDashboard}
+          title={copy.ready.overview}
+          line={copy.ready.overviewLine}
           onClick={onOverview}
         />
         {opens !== '/' ? (
@@ -457,7 +456,7 @@ function Choice({
   line,
   onClick,
 }: {
-  icon: LucideIcon
+  icon: typeof LayoutDashboard
   title: string
   line: string
   onClick: () => void

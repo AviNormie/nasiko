@@ -132,10 +132,7 @@ export function Composer({
         <label htmlFor="chat-composer" className="sr-only">
           {label ?? copy.composerLabel(agentName)}
         </label>
-        <div
-          data-tour="chat-composer"
-          className="rounded-xl border border-border bg-card shadow-xs focus-within:border-ring focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background"
-        >
+        <div className="rounded-xl border border-border bg-card shadow-xs focus-within:border-ring focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
           <Textarea
             id="chat-composer"
             ref={box}

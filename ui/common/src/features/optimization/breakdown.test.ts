@@ -1,7 +1,7 @@
 /** By agent's order (plans/feat-optimization-page.md R7B). */
 import { describe, expect, it } from 'vitest'
 import { sortAgents } from './breakdown'
-import { savedOf } from '@/lib/slice'
+import { savedOf } from './lead'
 
 const row = (agent_id: string, name: string, pool: number, sent: number, requests = 1) => ({
   agent_id,

@@ -11,7 +11,7 @@ function StatusPage() {
   return (
     <div className="flex max-w-2xl flex-col gap-4">
       <PageHeader title="Backend status" />
-      <Card data-tour="status-backend" className="gap-0 p-4 text-sm">
+      <Card className="gap-0 p-4 text-sm">
         <div>
           OSS nasiko-server via the Vite proxy: <strong data-testid="backend-state">{state}</strong>
         </div>

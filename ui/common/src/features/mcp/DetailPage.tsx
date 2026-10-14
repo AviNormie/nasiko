@@ -20,7 +20,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CopyButton, CopyMenuItem } from '@/components/shared/copy-button'
 import { PageHeader } from '@/components/shared/page-header'
-import { TopBar } from '@/app/shell/TopBar'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
 import { AgentMark } from '@/features/agents/components/bits'
@@ -115,14 +114,14 @@ function Detail({ id, search }: { id: string; search: DetailSearch }) {
     <div className="space-y-4">
       <Header connector={c} manage={manage} meName={me?.username} openPopup={openPopup} />
       <Tabs value={current} onValueChange={setTab}>
-        <TabsList data-tour="mcp-detail-tabs" className="max-w-full justify-start overflow-x-auto">
+        <TabsList className="max-w-full justify-start overflow-x-auto">
           {allowed.map((t) => (
             <TabsTrigger key={t} value={t}>
               {copy.tabsNames[t]}
             </TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent data-tour="mcp-detail-overview" value="overview" className="pt-3">
+        <TabsContent value="overview" className="pt-3">
           <OverviewTab connector={c} manage={manage} openPopup={openPopup} />
         </TabsContent>
         <TabsContent value="agents" className="pt-3">
@@ -166,8 +165,7 @@ function Header({
   const version = c.version ?? c.upload_info?.version
   const owner = c.is_owner ? copy.you : (c.owner_username ?? meName ?? '—')
   return (
-    <div data-tour="mcp-detail-header" className="flex items-start gap-3">
-      <TopBar trail={[label]} />
+    <div className="flex items-start gap-3">
       <AgentMark name={label} iconUrl={c.logo_url} size={40} />
       <PageHeader
         className="min-w-0 flex-1"
@@ -191,7 +189,7 @@ function Header({
           </span>
         }
         actions={
-          <div data-tour="mcp-detail-actions" className="flex items-start gap-2">
+          <div className="flex items-start gap-2">
             {status !== 'building' && status !== 'failed' ? (
               <ConnectControl
                 target={{

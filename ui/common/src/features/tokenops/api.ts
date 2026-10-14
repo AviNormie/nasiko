@@ -109,17 +109,14 @@ export function useCalendar(month: string, f: Filters, enabled: boolean) {
   return useQuery({ ...calendarQuery(month, f), placeholderData: keepPreviousData, enabled })
 }
 
-export function dayQuery(date: string | undefined, f: Filters) {
+export function useDay(date: string | undefined, f: Filters, enabled: boolean) {
   const path = withQuery(`${FINOPS}/spend-calendar/day`, { date, ...filterParams(f) })
-  return queryOptions({
+  return useQuery({
     queryKey: tokenopsKeys.day(date ?? '', f),
     queryFn: ({ signal }) => apiData<FinopsDayDrilldown>(path, { signal, schema: finopsDaySchema }),
+    enabled: enabled && !!date,
     meta: { path },
   })
-}
-
-export function useDay(date: string | undefined, f: Filters, enabled: boolean) {
-  return useQuery({ ...dayQuery(date, f), enabled: enabled && !!date })
 }
 
 /** PROPOSED endpoint — live servers return 404 until it exists (handled by the drawer). */
@@ -157,26 +154,20 @@ export function useProviders(enabled: boolean) {
  * Token-optimisation savings for the window. `scope` picks the rollup; every scope returns the
  * total and the category breakdown, so the panel needs one request rather than three.
  */
-export function savingsQuery(
-  win: ResolvedWindow,
-  f: Filters,
-  scope: 'total' | 'agent' | 'session',
-) {
-  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope })
-  return queryOptions({
-    queryKey: tokenopsKeys.savings(win.key, f, scope),
-    queryFn: ({ signal }) => apiData<SavingsData>(path, { signal }),
-    meta: { path },
-  })
-}
-
 export function useSavings(
   win: ResolvedWindow,
   f: Filters,
   scope: 'total' | 'agent' | 'session',
   enabled: boolean,
 ) {
-  return useQuery({ ...savingsQuery(win, f, scope), placeholderData: keepPreviousData, enabled })
+  const path = withQuery(`${FINOPS}/savings`, { ...win.params, ...filterParams(f), scope })
+  return useQuery({
+    queryKey: tokenopsKeys.savings(win.key, f, scope),
+    queryFn: ({ signal }) => apiData<SavingsData>(path, { signal }),
+    placeholderData: keepPreviousData,
+    enabled,
+    meta: { path },
+  })
 }
 
 /**

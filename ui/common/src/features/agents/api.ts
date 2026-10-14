@@ -22,7 +22,7 @@ import { onCacheReset } from '@/lib/queryClient'
 import { isSignedOutLocally, isSigningOut, signInGeneration } from '@/lib/session'
 import { apiData, apiFetch, ApiError, withQuery } from '@/lib/api/client'
 import { createLimiter } from '@/features/observability/limiter'
-import type { LogLine } from '@/features/observability/types'
+import type { LogLine, SessionListResponse, SessionSummary } from '@/features/observability/types'
 import { isUnauthorized } from '@/lib/api/detect'
 import type { components } from '@/lib/api/schema.gen'
 import {
@@ -46,6 +46,8 @@ import {
   LIVE_CARD_STALE_MS,
   LOG_LIMIT,
   POLL_MS,
+  SESSIONS_FALLBACK_MS,
+  SESSIONS_SCAN,
   USER_SEARCH_MAX,
   USER_SEARCH_MIN,
   USERS_LIMIT,
@@ -93,6 +95,7 @@ export const agentKeys = {
   errorLogs: (id: string) => ['agents', 'error-logs', id] as const,
   logs: (id: string, level: string) => ['agents', 'logs', id, level] as const,
   liveCard: (id: string) => ['agents', 'live-card', id] as const,
+  sessions: (name: string, createdAt: string) => ['agents', 'sessions', name, createdAt] as const,
   usage24h: ['agents', 'usage-24h'] as const,
   users: ['agents', 'users'] as const,
   userSearch: (q: string) => ['agents', 'user-search', q] as const,
@@ -489,6 +492,32 @@ export function useLiveCard(id: string, enabled: boolean) {
       apiFetch<unknown>(`/api/agents/${id}/.well-known/agent-card.json`, { signal }),
     enabled,
     staleTime: LIVE_CARD_STALE_MS,
+  })
+}
+
+/**
+ * Recent sessions: the first page of session/list (no agent filter server-side), matched by
+ * the raw agent name and created after the agent was (a deleted namesake's sessions drop).
+ */
+export function useAgentSessions(name: string, createdAt: string, enabled: boolean) {
+  return useQuery({
+    queryKey: agentKeys.sessions(name, createdAt),
+    queryFn: ({ signal }) =>
+      apiFetch<SessionListResponse>(
+        withQuery(`${OBS}/session/list`, {
+          start_time: createdAt || new Date(Date.now() - SESSIONS_FALLBACK_MS).toISOString(),
+          limit: SESSIONS_SCAN,
+          offset: 0,
+        }),
+        { signal },
+      ),
+    enabled: enabled && !!name,
+    select: (r): SessionSummary[] => {
+      const since = createdAt ? Date.parse(createdAt) : 0
+      return (r?.data?.sessions ?? []).filter(
+        (s) => s.agent_id === name && (!s.start_time || Date.parse(s.start_time) >= since),
+      )
+    },
   })
 }
 

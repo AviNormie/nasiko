@@ -39,7 +39,7 @@ describe('landing', () => {
     expect(screen.getByRole('heading', { name: 'Recent sessions' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Daily activity' })).toBeInTheDocument()
     expect(screen.queryByRole('table')).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Levels' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull()
     expect(statusLines()).toHaveLength(0)
     expect(document.body).not.toHaveTextContent(/Enterprise|org and team/i)
     // Mock data is a preview; the persona switcher is the EE layer's.

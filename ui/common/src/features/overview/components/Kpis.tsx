@@ -50,7 +50,7 @@ export const TILE = 'min-w-0 gap-2 p-4'
 const PENDING = <Skeleton className="h-8 w-28 motion-reduce:animate-none" />
 
 /** A tiny decorative chart under a figure: a line with a light area, or bars. */
-export function Spark({
+function Spark({
   points,
   kind,
   series,

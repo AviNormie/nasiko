@@ -14,7 +14,6 @@ import { Disclosure } from './disclosure'
 import { KpiTile } from './kpi-tile'
 import { PageLoader } from './page-loader'
 import { PageHeader } from './page-header'
-import { PrevNext } from './prev-next'
 import { Panel, PanelEmpty, PanelError, PanelSkeleton } from './panel'
 import { SearchInput } from './search-input'
 import { EmptyState, StateCard } from './state-card'
@@ -188,20 +187,3 @@ function ControlsDemo() {
 }
 
 export const Controls: Story = { render: () => <ControlsDemo /> }
-
-export const PrevNextSteps: Story = {
-  render: () => (
-    <div className="flex flex-col gap-2">
-      <PrevNext noun="agent" index={1} count={3} onPrev={() => {}} onNext={() => {}} />
-      <PrevNext noun="agent" index={0} count={3} onPrev={() => {}} onNext={() => {}} />
-      <PrevNext
-        noun="agent"
-        index={1}
-        count={3}
-        blocked="Save first"
-        onPrev={() => {}}
-        onNext={() => {}}
-      />
-    </div>
-  ),
-}

@@ -1,7 +1,7 @@
 /**
  * By agent (plans/feat-optimization-page.md R7B): the sort and the cut. Pure; tested in breakdown.test.ts.
  */
-import { savedOf } from '@/lib/slice'
+import { savedOf } from './lead'
 import type { AgentSort } from './search'
 import type { SavingsAgent } from './types'
 
