@@ -45,7 +45,8 @@ export function QuickActions({
   return (
     <Card id="overview-actions" title={copy.actions.title} className={className}>
       <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-2">
+        {/* Stacked beside Recent chats (from 1100 px), side by side when the card spans the row. */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-2 @[1100px]/overview:grid-cols-1">
           <Button asChild className={`justify-start ${TOUCH}`}>
             <Link to="/chat">
               <MessageSquare aria-hidden /> {copy.actions.newChat}

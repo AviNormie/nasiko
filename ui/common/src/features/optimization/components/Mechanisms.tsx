@@ -83,7 +83,7 @@ export function Mechanisms({
 
   return (
     <Panel title={m.title} subtitle={period} labelledBy="optimization-mechanisms-h">
-      <ul className="m-0 -mx-4 flex list-none flex-col p-0">
+      <ul className="m-0 grid list-none gap-3 p-0 md:grid-cols-2 2xl:grid-cols-4">
         <Row
           name={m.history}
           codename="pacms"
@@ -140,9 +140,9 @@ export function Mechanisms({
         />
       </ul>
       {absent ? (
-        <p className="m-0 border-t border-border pt-3 text-xs text-muted-foreground">{m.absent}</p>
+        <p className="m-0 text-xs text-muted-foreground">{m.absent}</p>
       ) : failed ? (
-        <p className="m-0 border-t border-border pt-3 text-xs text-muted-foreground">
+        <p className="m-0 text-xs text-muted-foreground">
           {m.failed}{' '}
           <Button
             variant="link"
@@ -188,8 +188,9 @@ function Row({
   saved: string | null
 }) {
   return (
-    <li className="flex flex-wrap items-start justify-between gap-x-6 gap-y-1 border-t border-border px-4 py-3 first:border-t-0">
-      <div className="flex min-w-60 flex-1 flex-col gap-0.5">
+    // A tile per mechanism: what it trims and where it is set on the left, its state now on the right.
+    <li className="flex flex-col justify-between gap-3 rounded-lg border bg-muted/20 p-4 transition-colors hover:border-foreground/20">
+      <div className="flex flex-col gap-0.5">
         <span className="text-sm font-medium">
           {codename ? <Codename label={name} name={codename} /> : name}
         </span>
@@ -198,7 +199,8 @@ function Row({
           {copy.mechanisms.setIn} {where}
         </span>
       </div>
-      <div className="flex flex-col items-start gap-0.5 sm:items-end sm:text-right">
+      {/* The state at the tile's foot, so every tile's figure sits on one line. */}
+      <div className="flex flex-col gap-0.5 border-t border-border pt-3">
         {state === undefined ? (
           <Skeleton aria-hidden className="h-4 w-28" />
         ) : state ? (

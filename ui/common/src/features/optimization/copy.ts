@@ -26,9 +26,9 @@ export const copy = {
     now: 'now',
     failedCheck: 'Couldn’t check your agents.',
     mine: (n: number, serverOff: boolean) =>
-      `${n} of your agents ${n === 1 ? 'has' : 'have'} Token optimization (Caveman) off${serverOff ? '.' : `, so ${n === 1 ? 'its' : 'their'} chats aren’t optimized.`}`,
+      `${n} of your agents ${n === 1 ? 'has' : 'have'} Token optimization (Caveman) off${serverOff ? '.' : ', so history compression is off for your chats.'}`,
     others: (n: number) =>
-      `${n} other ${n === 1 ? 'agent' : 'agents'} in the workspace ${n === 1 ? 'has' : 'have'} it off, so ${n === 1 ? 'its' : 'their'} chats aren’t optimized.`,
+      `${n} other ${n === 1 ? 'agent' : 'agents'} in the workspace ${n === 1 ? 'has' : 'have'} it off, so ${n === 1 ? 'its owner’s' : 'their owners’'} history compression is off.`,
     more: (n: number) => `and ${n} more`,
     turnOnMine: (n: number) => (n === 1 ? 'Turn it on' : `Turn on for your ${n}`),
     turnOnAll: (n: number) => (n === 1 ? 'Turn it on' : `Turn on for all ${n}`),
@@ -36,9 +36,9 @@ export const copy = {
     confirmTitle: (n: number) =>
       `Turn on Token optimization (Caveman) for ${n} ${n === 1 ? 'agent' : 'agents'}?`,
     confirmMine:
-      'Turns on compression and a concise-answer instruction for these agents’ requests and replies, in every chat that uses them. Each switch affects only its own agent.',
+      'History compression turns on for your chats once every agent you own allows it. The same switch also turns on LLM-router payload compression and a concise-answer instruction for these agents.',
     confirmOthers:
-      'These agents belong to other people. Turning it on compresses these agents’ requests and replies in every chat that uses them, including other people’s.',
+      'These agents belong to other people: their owners’ chats change, not yours. The same switch also turns on LLM-router payload compression and a concise-answer instruction for these agents.',
     confirm: (n: number) => (n === 1 ? 'Turn on' : `Turn on for ${n}`),
     owner: (name: string) => `owner ${name}`,
     failed: (name: string, reason: string) => `${name}: ${reason}`,
@@ -184,6 +184,12 @@ export const copy = {
       const extra = [cost ? `≈ ${cost}` : null, pct !== null ? `${pct}%` : null].filter(Boolean)
       return `${superuser ? 'All agents' : 'Agents you can access'} sent ~${sent} tokens where they would have sent ~${without}: ~${saved} fewer${extra.length ? ` (${extra.join(', ')})` : ''}.`
     },
+    /** The lead's four figures (redesign 2026-10-13); the baseline label is `preview.without`. */
+    figures: {
+      notBilled: 'Input not billed',
+      fewer: (pct: number) => `${pct}% fewer tokens`,
+      reported: (pct: number) => `${pct}% of requests reported`,
+    },
     /** C2. */
     basedOn: (reports: number, eligible: number, pct: number) =>
       `Based on ${reports.toLocaleString('en-US')} of ${eligible.toLocaleString('en-US')} requests (${pct}%).`,
@@ -206,12 +212,11 @@ export const copy = {
      * names those agents and fixes them.
      */
     compression: {
-      'all-on': 'History compression is on for your Orchestrator chats.',
+      'all-on': 'History compression is on for your chats: all your agents allow it.',
       'likely-on':
-        'History compression is likely on for your Orchestrator chats: the server’s own setting can still turn it off.',
+        'History compression is likely on for your chats: all your agents allow it, and the server’s own setting can still turn it off.',
       'server-off': 'History compression is off on this server.',
-      'no-agents':
-        'History compression is on for your Orchestrator chats unless the server turns it off.',
+      'no-agents': 'History compression is off for your chats: you own no agents.',
     },
     chart: {
       sent: 'Sent',

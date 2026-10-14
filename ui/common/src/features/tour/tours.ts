@@ -443,7 +443,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'tokenops-sections',
       side: 'top',
       title: 'Dig in',
-      body: 'Open a section: spend over time, savings, who drives cost, this month, or every metric.',
+      body: 'Every section is on the page: spend and this month, who drives cost, and savings. The bar above jumps between them.',
     },
   ],
 

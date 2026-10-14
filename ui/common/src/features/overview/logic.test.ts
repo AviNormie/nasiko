@@ -229,7 +229,7 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
     requests: ok({ chats: [], outside: 0 }),
     agents: ok([]),
     budgets: ok([]),
-    sessions: ok({ failed: 0, agents: [] }),
+    sessions: ok({ failed: 0, checked: 25, agents: [] }),
   }
   const chat = (sessionId: string, at: string) => ({
     sessionId,
@@ -268,7 +268,7 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
       }),
       agents: ok([{ id: 'x', name: 'X', reason: 'crashed', budget: false }]),
       budgets: ok([{ id: 'bud', label: 'Your monthly', crossed: 80, state: 'warning' as const }]),
-      sessions: ok({ failed: 3, agents: ['X'] }),
+      sessions: ok({ failed: 3, checked: 25, agents: ['X'] }),
     })
     expect(n.rows.map((r) => r.key)).toEqual([
       'request-a',
@@ -348,7 +348,9 @@ describe('stackSpend', () => {
     label: date,
     spend,
     operations: 0,
+    p50: null,
     p95: null,
+    p99: null,
     topAgent: null,
     topAgentSpend: null,
   })
