@@ -22,6 +22,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // ── OpenAI wire types (chat.completions) ─────────────────────────────────────
@@ -65,6 +68,10 @@ type chatResponse struct {
 		Message      chatMessage `json:"message"`
 		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -99,6 +106,18 @@ func newLLMClient() *llmClient {
 // chat sends one round to the LLM. traceparent is the inbound W3C trace context
 // header value (may be empty); forwarding it lets the gateway attribute the call.
 func (c *llmClient) chat(ctx context.Context, messages []chatMessage, tools []toolDef, traceparent string) (*chatMessage, error) {
+	// Explicit GenAI span: the loongsuite auto-instrumentation traces the raw
+	// HTTP call (method/URL/status/duration) but has no way to know this is an
+	// LLM call or to parse gen_ai usage out of the response body — that has to
+	// be recorded manually, same as the Rust agents' #[tracing::instrument] does.
+	ctx, span := otel.Tracer("github").Start(ctx, "ChatCompletion")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.String("gen_ai.provider.name", "openai"),
+		attribute.String("gen_ai.request.model", c.model),
+	)
+
 	reqBody := chatRequest{Model: c.model, Messages: messages, Tools: tools}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -133,6 +152,12 @@ func (c *llmClient) chat(ctx context.Context, messages []chatMessage, tools []to
 	if len(out.Choices) == 0 {
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
+
+	span.SetAttributes(
+		attribute.Int64("gen_ai.usage.input_tokens", int64(out.Usage.PromptTokens)),
+		attribute.Int64("gen_ai.usage.output_tokens", int64(out.Usage.CompletionTokens)),
+	)
+
 	return &out.Choices[0].Message, nil
 }
 
