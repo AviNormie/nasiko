@@ -20,13 +20,13 @@ const footer = async () =>
   ) as HTMLElement
 
 describe('Workspace footer', () => {
-  it('a superuser sees the tiers with Edit tiers; the OSS build says nothing about other editions', async () => {
+  it('a superuser sees the tiers in one line with Edit tiers; the OSS build says nothing about other editions', async () => {
     renderApp('/optimization')
     const f = await footer()
     expect(
       await within(f).findByText(copy.workspace.tierValues(500, 1000, 5000), {}, T),
     ).toBeInTheDocument()
-    expect(within(f).getByText(copy.workspace.tiers)).toBeInTheDocument()
+    expect(within(f).getByText(`${copy.workspace.tiers}:`)).toBeInTheDocument()
     expect(within(f).getByRole('link', { name: copy.workspace.editTiers })).toHaveAttribute(
       'href',
       '/settings/optimization-tiers',
@@ -39,7 +39,7 @@ describe('Workspace footer', () => {
     configureMocks({ variant: 'optimization-classic' })
     renderApp('/optimization')
     const f = await footer()
-    expect(await within(f).findByText(copy.workspace.defaults, {}, T)).toBeInTheDocument()
+    expect(await within(f).findByText(`${copy.workspace.defaults}:`, {}, T)).toBeInTheDocument()
     expect(within(f).getByText(copy.workspace.tierValues(500, 1000, 5000))).toBeInTheDocument()
   })
 

@@ -179,16 +179,13 @@ function PreferencesForm({
           control={form.control}
           name="enabled"
           render={({ field }) => (
-            // The row's control column is 20rem (sized for inputs); a switch sits at its far edge, by the card's.
-            <div className="flex @[640px]:justify-end">
-              <Switch
-                id={`${id}-enabled`}
-                checked={field.value}
-                onCheckedChange={field.onChange}
-                aria-describedby={`${id}-enabled-hint`}
-                aria-invalid={!!errorFor('enabled')}
-              />
-            </div>
+            <Switch
+              id={`${id}-enabled`}
+              checked={field.value}
+              onCheckedChange={field.onChange}
+              aria-describedby={`${id}-enabled-hint`}
+              aria-invalid={!!errorFor('enabled')}
+            />
           )}
         />
       </SettingRow>
@@ -217,25 +214,22 @@ function PreferencesForm({
             >
               {STRATEGIES.map((s) => (
                 <Label key={s} className={cn(TILE, off && 'cursor-not-allowed opacity-60')}>
-                  {/* The name heads the tile and is the radio's name; the words under it describe the choice. */}
+                  {/* The tile's words describe the choice; its name is the caption (6B). */}
                   <span
-                    className={cn(
-                      PICTURE,
-                      'flex flex-col gap-1 bg-card p-3 pr-8 @[640px]:min-h-24',
-                    )}
+                    id={`${id}-${s}-desc`}
+                    aria-hidden
+                    className={cn(PICTURE, 'block min-h-21 bg-card p-3 pr-8 text-muted-foreground')}
                   >
-                    <span className="font-medium text-foreground">
-                      <RadioGroupItem
-                        value={s}
-                        className="sr-only"
-                        aria-describedby={`${id}-${s}-desc`}
-                      />
-                      {copy.strategies[s].label}
-                    </span>
-                    <span id={`${id}-${s}-desc`} aria-hidden className="text-muted-foreground">
-                      {copy.strategies[s].hint}
-                    </span>
+                    {copy.strategies[s].hint}
                     <Chosen />
+                  </span>
+                  <span className="px-0.5 text-muted-foreground group-has-[[data-state=checked]]:font-medium group-has-[[data-state=checked]]:text-foreground">
+                    <RadioGroupItem
+                      value={s}
+                      className="sr-only"
+                      aria-describedby={`${id}-${s}-desc`}
+                    />
+                    {copy.strategies[s].label}
                   </span>
                 </Label>
               ))}

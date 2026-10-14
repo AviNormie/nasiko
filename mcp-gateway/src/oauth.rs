@@ -872,6 +872,8 @@ mod tests {
                 tool_search_meta_limit: 0,
                 openai_api_key: None,
                 embedding_model: "".to_string(),
+                gateway_instructions: String::new(),
+                identity_signing_key: b"test-identity-signing-key".to_vec(),
             },
             providers: Providers {
                 composio: None,
@@ -893,6 +895,7 @@ mod tests {
             display_name: None,
             logo_url: None,
             description: None,
+            instructions: None,
             auth_config_id: None,
             auth_scheme: None,
             use_composio_managed: None,

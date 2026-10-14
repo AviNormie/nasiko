@@ -34,11 +34,12 @@ if (typeof Element !== 'undefined') {
 }
 
 beforeEach(() => {
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    writable: true,
-    value: memoryStorage(),
-  })
+  for (const name of ['localStorage', 'sessionStorage'])
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      writable: true,
+      value: memoryStorage(),
+    })
 })
 
 // Animations finish instantly in tests: assertions never wait on a spring.

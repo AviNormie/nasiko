@@ -133,6 +133,9 @@ impl RoutingEngine for OssRoutingEngine {
             self.embedding_model.clone(),
             Arc::clone(&self.history_embedding_cache),
         );
+        // Resolved before the join: the workspace override is a borrow, and a temporary inside the
+        // join would not outlive it.
+        let tiers = self.config.context_tiers.with_overrides(pool).await;
         let (agents, history) = tokio::join!(
             agent_registry::get_agents_for_user(req.user_id, &req.org_granted_agent_ids, pool),
             context_selection::fetch_for_user(
@@ -141,7 +144,10 @@ impl RoutingEngine for OssRoutingEngine {
                 &req.session_id,
                 &history_store,
                 &req.query,
-                &self.config.context_tiers,
+                &tiers,
+                // Orchestrator-routed: the Orchestrator's own model reads this history, so no
+                // agent's switch gates it and the deployment flag alone decides.
+                true,
             ),
         );
         let agents = agents?;

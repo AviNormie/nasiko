@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { BetaBadge } from '@/components/shared/beta-badge'
 import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
+import { Codename } from '@/features/optimization/components/Codename'
 import { ApiError } from '@/lib/api/client'
 import { useSetCompression } from '../api'
 import { Section } from '../components/bits'
@@ -28,7 +29,7 @@ export function TokenOptimization({ agent }: { agent: AgentView }) {
     // Main's intro is the subtitle and the switch has its own label, so the title isn't printed twice; the row is the
     // Features rows' Field layout (review: design).
     <Section
-      title={copy.tokenOptimization}
+      title={<Codename label={copy.tokenOptimization} name="caveman" />}
       subtitle={copy.tokenOptimizationIntro}
       action={<BetaBadge />}
     >

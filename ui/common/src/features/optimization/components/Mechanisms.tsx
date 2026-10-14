@@ -1,11 +1,11 @@
 /**
  * What's optimizing your tokens (plans/feat-optimization-page.md §11, ledger B12): every mechanism that cuts tokens,
  * what it trims, where it is set and its state now, so nobody has to know that PACMS is a personal setting while
- * caveman and ponytail are per-agent switches. Program names come from the savings data's own
- * `label` where it answers.
+ * caveman and ponytail are per-agent switches. Programs carry their internal names in brackets (B12), from the savings
+ * data's own `label` and `program` where it answers.
  *
  * - History selection: your own setting, on this page (Your settings); tier sizes are a superuser setting.
- * - Smaller prompts, Less code written, Prompt comments: switches on each agent's Settings tab
+ * - Smaller prompts (Caveman), Less code written (Ponytail), Prompt comments: switches on each agent's Settings tab
  *   (P5: this block links there, it never edits them). Counts (workspace-wide) and savings come from `/finops/savings`
  *   (main's real endpoint, synced from nasiko-cloud-rs `c8052fed` `savings.rs`); a server without it keeps the rows and links (R2B) and says what will show.
  */
@@ -16,6 +16,7 @@ import { Panel } from '@/components/shared/panel'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSavings } from '@/features/tokenops/api'
+import { programName } from '@/features/tokenops/optimisation'
 import type { ResolvedWindow } from '@/features/tokenops/window'
 import { isEndpointAbsent } from '@/lib/api/detect'
 import { budgetQuery, strategyQuery } from '../api'
@@ -62,7 +63,7 @@ export function Mechanisms({
   const programRow = (id: 'caveman' | 'ponytail', fallback: string) => {
     const p = program(id)
     return {
-      name: p ? p.label : fallback,
+      name: p ? programName(p.label, p.program) : fallback,
       saved:
         p && p.saved_tokens > 0
           ? m.saved(tokensShort(p.saved_tokens), p.basis !== 'measured')
@@ -82,7 +83,7 @@ export function Mechanisms({
 
   return (
     <Panel title={m.title} subtitle={period} labelledBy="optimization-mechanisms-h">
-      <ul className="m-0 grid list-none gap-3 p-0 md:grid-cols-2 2xl:grid-cols-4">
+      <ul className="m-0 -mx-4 flex list-none flex-col p-0">
         <Row
           name={m.history}
           codename="pacms"
@@ -116,6 +117,7 @@ export function Mechanisms({
         />
         <Row
           name={caveman.name}
+          codename="caveman"
           trims={m.cavemanTrims}
           where={<AgentsLink label={m.cavemanWhere} />}
           state={count(cov?.agents_with_compress_enabled, cov?.agents_total)}
@@ -123,6 +125,7 @@ export function Mechanisms({
         />
         <Row
           name={ponytail.name}
+          codename="ponytail"
           trims={m.ponytailTrims}
           where={<AgentsLink label={m.ponytailWhere} />}
           state={count(cov?.agents_with_minimal_code_enabled)}
@@ -137,9 +140,9 @@ export function Mechanisms({
         />
       </ul>
       {absent ? (
-        <p className="m-0 text-xs text-muted-foreground">{m.absent}</p>
+        <p className="m-0 border-t border-border pt-3 text-xs text-muted-foreground">{m.absent}</p>
       ) : failed ? (
-        <p className="m-0 text-xs text-muted-foreground">
+        <p className="m-0 border-t border-border pt-3 text-xs text-muted-foreground">
           {m.failed}{' '}
           <Button
             variant="link"
@@ -185,9 +188,8 @@ function Row({
   saved: string | null
 }) {
   return (
-    // A tile per mechanism: what it trims and where it is set on the left, its state now on the right.
-    <li className="flex flex-col justify-between gap-3 rounded-lg border bg-muted/20 p-4 transition-colors hover:border-foreground/20">
-      <div className="flex flex-col gap-0.5">
+    <li className="flex flex-wrap items-start justify-between gap-x-6 gap-y-1 border-t border-border px-4 py-3 first:border-t-0">
+      <div className="flex min-w-60 flex-1 flex-col gap-0.5">
         <span className="text-sm font-medium">
           {codename ? <Codename label={name} name={codename} /> : name}
         </span>
@@ -196,8 +198,7 @@ function Row({
           {copy.mechanisms.setIn} {where}
         </span>
       </div>
-      {/* The state at the tile's foot, so every tile's figure sits on one line. */}
-      <div className="flex flex-col gap-0.5 border-t border-border pt-3">
+      <div className="flex flex-col items-start gap-0.5 sm:items-end sm:text-right">
         {state === undefined ? (
           <Skeleton aria-hidden className="h-4 w-28" />
         ) : state ? (

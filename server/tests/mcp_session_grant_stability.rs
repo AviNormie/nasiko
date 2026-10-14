@@ -139,6 +139,8 @@ fn mcp_state(db: PgPool) -> McpState {
             tool_search_meta_limit: 0,
             openai_api_key: None,
             embedding_model: "".to_string(),
+            gateway_instructions: String::new(),
+            identity_signing_key: b"test-identity-signing-key".to_vec(),
         },
         providers: Providers {
             composio: None,
@@ -161,6 +163,9 @@ fn mcp_session(connector_id: Uuid, backend_url: &str) -> ResolvedSession {
             headers: HashMap::new(),
             transport: "streamable_http".into(),
             trusted: false,
+            system: false,
+            tool_names: vec![],
+            instructions: None,
         }],
         connected_toolkits: vec![],
         toolkit_to_connector: HashMap::new(),
@@ -319,6 +324,7 @@ async fn session_grant_spans_messages_in_the_only_chat_for_the_agent() {
         &resolved,
         &perms,
         Some(&msg1_trace),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     )
     .await;
     assert_eq!(
@@ -356,6 +362,7 @@ async fn session_grant_spans_messages_in_the_only_chat_for_the_agent() {
         &resolved,
         &perms,
         Some(&msg2_trace),
+        Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
     )
     .await;
     assert!(
@@ -426,6 +433,7 @@ async fn session_grant_is_not_attributed_to_a_more_recent_concurrent_chat_with_n
         &resolved,
         &perms,
         Some(&msg1_trace),
+        Some("d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"),
     )
     .await;
     let hitl_id = res1["error"]["data"]["hitl_request_id"]
@@ -536,6 +544,7 @@ async fn session_grant_never_leaks_across_concurrent_chats_even_when_the_other_i
         &resolved,
         &perms,
         Some(&traceparent(msg1_trace)),
+        Some(msg1_trace),
     )
     .await;
     let hitl_id = res1["error"]["data"]["hitl_request_id"]
@@ -578,6 +587,7 @@ async fn session_grant_never_leaks_across_concurrent_chats_even_when_the_other_i
         &resolved,
         &perms,
         Some(&traceparent(msg2_trace)),
+        Some(msg2_trace),
     )
     .await;
     assert!(
@@ -596,6 +606,7 @@ async fn session_grant_never_leaks_across_concurrent_chats_even_when_the_other_i
         &resolved,
         &perms,
         Some(&traceparent(msg3_trace)),
+        Some(msg3_trace),
     )
     .await;
     assert_eq!(
@@ -651,6 +662,7 @@ async fn session_grant_row_is_keyed_by_the_chat_session_id_not_the_trace_id() {
         &resolved,
         &perms,
         Some(&trace),
+        Some("ddddddddddddddddddddddddddddddd1"),
     )
     .await;
     let hitl_id = res["error"]["data"]["hitl_request_id"]
@@ -765,6 +777,7 @@ async fn session_grant_from_an_orchestrator_chat_does_not_leak_into_a_direct_cha
         &resolved,
         &perms,
         Some(&traceparent(msg1_trace)),
+        Some(msg1_trace),
     )
     .await;
     let hitl_id = res1["error"]["data"]["hitl_request_id"]
@@ -809,6 +822,7 @@ async fn session_grant_from_an_orchestrator_chat_does_not_leak_into_a_direct_cha
         &resolved,
         &perms,
         Some(&traceparent(msg2_trace)),
+        Some(msg2_trace),
     )
     .await;
     assert_eq!(

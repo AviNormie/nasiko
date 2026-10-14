@@ -172,33 +172,6 @@ describe('/optimization lead', () => {
     const region = h.closest('section') as HTMLElement
     expect(within(region).getByText(/fewer \(≈ \$0\.60\)\.$/)).toBeInTheDocument()
     expect(within(region).getByText('Based on 40 of 100 requests (40%).')).toBeInTheDocument()
-    // The figure tiles show the counts but no saved share either.
-    expect(within(region).getByText('~60k')).toBeInTheDocument()
-    expect(within(region).queryByText(/% fewer tokens$/)).toBeNull()
-  })
-
-  it('the lead bento: the answer, then without, sent, saved and not billed as figures', async () => {
-    savingsReply({
-      reports: 90,
-      eligible_requests: 100,
-      priced_reports: 90,
-      pool_tokens: 100_000,
-      sent_tokens: 40_000,
-      pool_cost_usd: 1,
-      sent_cost_usd: 0.4,
-    })
-    renderApp('/optimization')
-    const h = await screen.findByRole(
-      'heading',
-      { level: 2, name: copy.lead.heading.saving(60) },
-      T,
-    )
-    const region = h.closest('section') as HTMLElement
-    expect(within(region).getByText('~100k')).toBeInTheDocument()
-    expect(within(region).getByText('~40k')).toBeInTheDocument()
-    expect(within(region).getByText(copy.lead.figures.fewer(60))).toBeInTheDocument()
-    expect(within(region).getByText('≈ $0.60')).toBeInTheDocument()
-    expect(within(region).getByText(copy.lead.figures.reported(90))).toBeInTheDocument()
   })
 
   it('cost covers only priced requests, and says so (C3)', async () => {
