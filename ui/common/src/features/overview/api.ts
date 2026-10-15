@@ -1,27 +1,41 @@
 /**
- * The Overview's shared data (plans/feat-overview.md §5, eng review R1), now the home's (plans/feat-agent-centric.md
- * PR2a): `useFleetHealth()` is the one source of the fleet ratings, called by the home, the agent hub and the Agents
- * catalog while `?health=` is set, so all apply the same rules to the same directory rows; `useNeedsYou()` feeds Needs
- * you. Both reuse existing query keys, so TokenOps and the Agents pages open warm.
+ * The Overview's shared data (plans/feat-overview.md §5, eng review R1): `useFleetHealth()` is the one source of the
+ * fleet ratings, called by the Overview and by the Agents catalog while `?health=` is set, so both apply the same
+ * rules to the same directory rows. It reuses existing query keys, so TokenOps and the Agents pages open warm.
  */
+import { isNotVisible, useUsage } from '@/features/harnesses/api'
+import { useLiveIndividual } from '@/features/harnesses/liveIndividual'
+import { mostlyUnpriced } from '@/features/harnesses/rollup'
 import { sessionRows, useChatSessions } from '@/features/chat/api'
 import { useWaiting } from '@/features/chat/waiting'
-import { checkSessions } from '@/features/observability/sessions'
-import { STATUS_CHECK_ROWS } from '@/features/observability/tuning'
-import { tempoSafeStart, useFleetSessions, useSessionStatuses } from '@/features/sessions/api'
+import { useSessionPage } from '@/features/sessions/api'
 import type { Me } from '@/lib/api/auth'
 import { useCallback, useMemo } from 'react'
-import { useSlots } from '@/app/edition-context'
 import { useAgentsDirectory } from '@/features/agents/api'
 import type { Agent } from '@/features/agents/types'
 import { displayStatus, isHarness } from '@/features/agents/status'
-import { useDashboard, useTimeseries } from '@/features/tokenops/api'
-import { zeroFillTimeline } from '@/features/tokenops/series'
-import type { AgentFinopsRow } from '@/features/tokenops/types'
-import { resolveWindow, type ResolvedWindow } from '@/features/tokenops/window'
-import type { Range } from './search'
+import { useBudgetStatus, useBudgets } from '@/features/router/api'
+import { budgetForecast, usedPercent, type Forecast } from '@/features/router/budgets'
+import type { BudgetAction, BudgetState } from '@/features/router/types'
+import { findSpike, type Spike } from '@/features/narrative/tokenops'
+import { useCalendar, useDashboard, useSavings, useTimeseries } from '@/features/tokenops/api'
+import { buildAttribution, type AttributionRow } from '@/features/tokenops/attribution'
+import { summarizeMonth, type MonthSummary } from '@/features/tokenops/forecast'
+import { zeroFillTimeline, type TimelinePoint } from '@/features/tokenops/series'
+import type { AgentFinopsRow, FinopsAttributions } from '@/features/tokenops/types'
+import { summarizeOptimisation } from '@/features/tokenops/optimisation'
+import {
+  monthKey,
+  resolveWindow,
+  utcMonthStart,
+  type ResolvedWindow,
+} from '@/features/tokenops/window'
+import { RANGE_DAYS, type Range } from './search'
+import { isEndpointAbsent } from '@/lib/api/detect'
 import { copy } from './copy'
 import { mergeNeeds, type Needs, type NeedsInput, type SourceId } from './needs'
+import { stackSpend, type Stack } from './stack'
+import { DAY, FAILED_SESSION_ROWS, RECENT_SESSION_ROWS, TOP_DRIVERS } from './tuning'
 import {
   RATED_STATUSES,
   rateAgent,
@@ -32,7 +46,7 @@ import {
   type UsageWindow,
 } from './health'
 
-/** Agents the ratings cover: every visible agent except coding harnesses (never rated). */
+/** Agents the ratings cover: every visible agent except coding harnesses (rated on the Harnesses card). */
 const RATED = new Set<string>(RATED_STATUSES)
 
 const usage = (rows: readonly AgentFinopsRow[] | undefined) => {
@@ -42,6 +56,56 @@ const usage = (rows: readonly AgentFinopsRow[] | undefined) => {
       cost: r.total_cost,
       operations: r.operations,
       p95: r.avg_latency_p95_ms ?? null,
+    })
+  return m
+}
+
+/**
+ * The agent attributions of the preceding window, rebuilt from `compare=previous`
+ * on the agent rows. `undefined` when the response didn't carry a comparison, so
+ * `buildAttribution` reports deltas as unavailable rather than as a drop to zero.
+ */
+const previousAttributions = (rows: readonly AgentFinopsRow[] | undefined) =>
+  rows?.some((r) => r.previous)
+    ? ({
+        view: 'agent' as const,
+        rows: rows.map((r) => ({
+          agent_id: r.agent_id,
+          agent_name: r.agent_name,
+          total_cost: r.previous?.total_cost ?? 0,
+          operations: r.previous?.operations ?? 0,
+          total_tokens: r.previous?.total_tokens ?? 0,
+          tool_call_count: r.previous?.tool_call_count ?? 0,
+          avg_latency_ms: r.previous?.avg_latency_ms ?? null,
+          avg_cost_per_operation: 0,
+          is_capped: false,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          avg_latency_p95_ms: null,
+          avg_latency_p99_ms: null,
+          version: null,
+          container_hours: 0,
+        })),
+      } satisfies FinopsAttributions)
+    : undefined
+
+/**
+ * The same windows, read off `compare=previous` instead of a second request.
+ * `null` when the caller didn't ask to compare, so "no previous data" stays
+ * distinguishable from "every agent spent nothing".
+ */
+const previousUsage = (rows: readonly AgentFinopsRow[] | undefined) => {
+  if (!rows?.some((r) => r.previous)) return null
+  const m = new Map<string, UsageWindow>()
+  for (const r of rows)
+    m.set(r.agent_id, {
+      cost: r.previous?.total_cost ?? 0,
+      operations: r.previous?.operations ?? 0,
+      // The comparison window only carries what a delta needs; p95 is not part
+      // of it, and inventing one would rate latency against a fabricated number.
+      p95: null,
     })
   return m
 }
@@ -75,10 +139,8 @@ export interface FleetHealth {
 /**
  * Ratings for every visible agent. `enabled: false` (the Agents catalog without `?health=`) fetches and computes
  * nothing. There are no per-agent `/deployment` reads: the recent-crash rule was dropped (/ship review).
- * `fleetSeries: false` (anyone but a superuser) never reads the fleet-wide spend series, which isn't ACL-scoped
- * (plans/feat-agent-centric.md eng "Health input contract"): there is no spike check then, only the ACL-scoped dashboards.
  */
-export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): FleetHealth {
+export function useFleetHealth(now: Date, enabled = true): FleetHealth {
   const dir = useAgentsDirectory(enabled)
   const win7 = useMemo(() => resolveWindow({ preset: '7d' }, now), [now])
   const win30 = useMemo(() => resolveWindow({ preset: '30d' }, now), [now])
@@ -88,13 +150,19 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
   )
   // First run (no agents but harnesses) fetches nothing else (design review 7A).
   const on = enabled && agents.length > 0
-  const cur = useDashboard(win7, {}, 'agent', 'current', on)
-  const prev = useDashboard(win7, {}, 'agent', 'previous', on)
+  // One dashboard, not two: `compare=previous` carries each agent's preceding
+  // window in the same response (the server already queried it for the KPI
+  // strip and used to discard the per-agent detail).
+  const cur = useDashboard(win7, {}, 'agent', 'current', on, true)
   const d30 = useDashboard(win30, {}, 'agent', 'current', on)
-  const ts = useTimeseries(win30, {}, on && fleetSeries)
-  // Budgets are Enterprise only (docs/requirements/budgets.md): a stopped budget is an agent's reason where the
-  // edition has them. An OSS build answers settled-and-empty without a request, so ratings never wait on it.
-  const budgetInputs = useSlots().budgets.useOverviewBudgets(on)
+  const ts = useTimeseries(win30, {}, on)
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines when it lands.
+  // const budgets = useBudgets(on)
+  // const budgetsAbsent = isEndpointAbsent(budgets.error)
+  const budgets = useBudgets(false)
+  const budgetsAbsent = true
+  // Only once the list answered: on a server without budgets (bare 404) no status request goes out.
+  const budgetStatus = useBudgetStatus(on && budgets.isSuccess)
   const deployedCount = useMemo(
     () => agents.filter((a) => RATED.has(displayStatus(a.status, false))).length,
     [agents],
@@ -111,23 +179,22 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
   const costFailed =
     on &&
     (cur.isError ||
-      prev.isError ||
       d30.isError ||
-      (fleetSeries && ts.isError) ||
-      budgetInputs.failed)
+      ts.isError ||
+      (budgets.isError && !budgetsAbsent) ||
+      budgetStatus.isError)
 
   const summary = useMemo(() => {
     if (!enabled || !dir.data) return null
     const t = now.getTime()
     const current = cur.data && !costFailed ? usage(cur.data.agents) : null
-    const previous = prev.data && !prev.isError ? usage(prev.data.agents) : null
+    // Same response as `current`, so it can no longer fail or arrive separately.
+    const previous = cur.data ? previousUsage(cur.data.agents) : null
     const perOp30 = new Map(
       (d30.data?.agents ?? []).map((r) => [r.agent_id, r.avg_cost_per_operation ?? null]),
     )
     const days =
-      // Gate the data, not just the fetch: a disabled query still hands out a cached fleet series (TokenOps fills the same
-      // key), which a member must never be rated on (review: security, Codex P1).
-      fleetSeries && ts.data?.bucket === 'day'
+      ts.data?.bucket === 'day'
         ? zeroFillTimeline(ts.data.points, 'day', win30.start, win30.end).map((p) => ({
             date: p.iso.slice(0, 10),
             spend: p.spend,
@@ -135,7 +202,13 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
           }))
         : []
     const spikes = spikeDrivers(days, uniqueByName(dir.byNameAll), t)
-    const budgetByAgent = budgetInputs.byAgent
+    const budgetByAgent = new Map<string, { stopped: boolean; exceeded: boolean }>()
+    const statusById = new Map((budgetStatus.data?.data ?? []).map((st) => [st.budget_id, st]))
+    for (const b of budgets.data ?? []) {
+      const st = statusById.get(b.id)
+      if (b.agent_id && st)
+        budgetByAgent.set(b.agent_id, { stopped: st.stopped, exceeded: st.state === 'exceeded' })
+    }
     return summarizeFleet(
       agents.map((a) =>
         rateAgent(
@@ -165,13 +238,11 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     now,
     cur.data,
     costFailed,
-    prev.data,
-    prev.isError,
     d30.data,
     ts.data,
-    fleetSeries,
     win30,
-    budgetInputs.byAgent,
+    budgets.data,
+    budgetStatus.data,
   ])
 
   const p95 = useMemo(
@@ -183,13 +254,9 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
       ),
     [cur.data],
   )
-  const ratingsPending =
-    on &&
-    (cur.isPending ||
-      prev.isPending ||
-      d30.isPending ||
-      (fleetSeries && ts.isPending) ||
-      !budgetInputs.settled)
+  const budgetsSettled =
+    budgetsAbsent || budgets.isError || budgetStatus.isSuccess || budgetStatus.isError
+  const ratingsPending = on && (cur.isPending || d30.isPending || ts.isPending || !budgetsSettled)
   return {
     isPending: dir.isPending || (on && cur.isPending),
     error: dir.error,
@@ -203,10 +270,7 @@ export function useFleetHealth(now: Date, enabled = true, fleetSeries = true): F
     p95,
     retry: () => void dir.refetch(),
     retryCost: () => {
-      // Never the fleet series for a member: Retry must not send the request the gate withholds.
-      for (const q of [cur, prev, d30, ...(fleetSeries ? [ts] : [])])
-        if (q.isError) void q.refetch()
-      budgetInputs.retry()
+      for (const q of [cur, d30, ts, budgets, budgetStatus]) if (q.isError) void q.refetch()
     },
   }
 }
@@ -219,25 +283,211 @@ export function rangeWindow(range: Range, now: Date): ResolvedWindow {
   return resolveWindow({ preset: 'custom', from, to }, now)
 }
 
+/** The previous window of the same length, as a window of its own (its own query key). */
+export function previousWindow(win: ResolvedWindow): ResolvedWindow {
+  return {
+    ...win,
+    start: win.prevStart,
+    end: win.prevEnd,
+    params: win.prevParams,
+    key: `${win.key}|previous`,
+  }
+}
+
+export interface Spend {
+  /** Month-to-date and forecast from the fleet-wide calendar (eng review R2): said as fleet spend. */
+  summary: MonthSummary | null
+  isPending: boolean
+  error: unknown
+  /** The range's length in days (for per-day averages and "last N days"). */
+  rangeDays: number
+  /** Fleet spend and runs (operations) over the range and the window before it, from the fleet-wide timeseries;
+   *  `previous` is null while it loads or when it failed. */
+  totals: {
+    spend: number
+    runs: number
+    previous: { spend: number; runs: number } | null
+  } | null
+  /** The range's timeseries failed: no totals, no chart. */
+  totalsError: unknown
+  /** The range's UTC days, zero-filled (fleet-wide). */
+  days: TimelinePoint[]
+  /** Those days split by the top drivers plus Other; null while their series load, or when one failed (the chart
+   *  then draws the fleet total alone). */
+  stack: Stack | null
+  /** The drivers or their series are still loading: the chart waits rather than redraw as a stack. */
+  stackPending: boolean
+  /** The 30-day peak when it is a spike (TokenOps' rule); may fall before the strip. */
+  spike: Spike | null
+  /** The top cost drivers over the range, ACL-scoped (only agents you can access). */
+  drivers: AttributionRow[]
+  /** Every other accessible agent, summed; null when there are none. `deltaPct` is null without a previous cost. */
+  other: {
+    count: number
+    cost: number
+    sharePct: number
+    deltaPct: number | null
+    unavailable: boolean
+  } | null
+  driversError: unknown
+  /** Some calls in the range had no price: totals are a floor. */
+  unpriced: boolean
+  retry(): void
+}
+
+export function useSpend(now: Date, range: Range, enabled = true): Spend {
+  const thisMonth = utcMonthStart(now)
+  const lastMonth = utcMonthStart(now, -1)
+  const win = useMemo(() => rangeWindow(range, now), [range, now])
+  const calThis = useCalendar(monthKey(thisMonth), {}, enabled)
+  const calLast = useCalendar(monthKey(lastMonth), {}, enabled)
+  // Three requests where there were ten: the dashboard carries its own previous
+  // window, and one timeseries carries the fleet line, the previous window and a
+  // series per top driver. The drivers used to be one request each.
+  const cur = useDashboard(win, {}, 'agent', 'current', enabled, true)
+  const ts = useTimeseries(win, {}, enabled, {
+    groupByAgent: true,
+    top: TOP_DRIVERS,
+    compare: true,
+  })
+  // Just after a UTC month rollover the kept-previous calendar is last month's: loading, never summarised as this month.
+  const stale = calThis.isPlaceholderData || calLast.isPlaceholderData
+  const summary = useMemo(
+    () =>
+      calThis.data && calLast.data && !stale
+        ? summarizeMonth(calThis.data.days, calLast.data.days, now)
+        : null,
+    [calThis.data, calLast.data, stale, now],
+  )
+  const days = useMemo(
+    () =>
+      ts.data?.bucket === 'day' ? zeroFillTimeline(ts.data.points, 'day', win.start, win.end) : [],
+    [ts.data, win],
+  )
+  const totals = useMemo(() => {
+    if (ts.data?.bucket !== 'day' || ts.isPlaceholderData) return null
+    const sum = (pts: readonly { spend_usd: number; operations: number }[]) => ({
+      spend: pts.reduce((n, p) => n + p.spend_usd, 0),
+      runs: pts.reduce((n, p) => n + p.operations, 0),
+    })
+    // Same response as the current window now (`compare=previous`).
+    const previous = ts.data.previous ? sum(ts.data.previous) : null
+    return { ...sum(ts.data.points), previous }
+  }, [ts.data, ts.isPlaceholderData])
+  const { drivers, other } = useMemo(() => {
+    if (!cur.data) return { drivers: [], other: null }
+    const prevRows = previousAttributions(cur.data.agents)
+    const all = buildAttribution(cur.data.attributions, prevRows).sort((a, b) => b.cost - a.cost)
+    const top = all.slice(0, TOP_DRIVERS)
+    const rest = all.slice(TOP_DRIVERS)
+    if (!rest.length) return { drivers: top, other: null }
+    const topIds = new Set(top.map((r) => r.id))
+    const cost = rest.reduce((n, r) => n + r.cost, 0)
+    // The previous window's cost of everyone outside the top: an agent new to the top was "other" before.
+    const before =
+      prevRows?.view === 'agent'
+        ? prevRows.rows.reduce((n, r) => n + (topIds.has(r.agent_id) ? 0 : r.total_cost), 0)
+        : null
+    return {
+      drivers: top,
+      other: {
+        count: rest.length,
+        cost,
+        sharePct: rest.reduce((n, r) => n + r.sharePct, 0),
+        deltaPct: before ? ((cost - before) / before) * 100 : null,
+        unavailable: before === null,
+      },
+    }
+  }, [cur.data])
+  // Each driver's own days, from the `group_by=agent` series on the one
+  // timeseries response. This was `useQueries` over one filtered request per
+  // driver — a fan-out whose size grew with the chart.
+  const withSpend = useMemo(() => drivers.filter((d) => d.cost > 0), [drivers])
+  const stack = useMemo(() => {
+    const series = ts.data?.series
+    if (!withSpend.length || !days.length || !series || ts.data?.bucket !== 'day') return null
+    // Keyed by agent id where the server resolved one, else by the raw name the
+    // series carries — the same name `top_agent_name` uses.
+    const byAgent = new Map(
+      series.filter((s) => !s.is_other).map((s) => [s.agent_id ?? s.agent_name ?? '', s]),
+    )
+    return stackSpend(
+      days,
+      withSpend.map((d) => ({
+        id: d.id,
+        name: d.name,
+        days: zeroFillTimeline(
+          byAgent.get(d.id)?.points ?? byAgent.get(d.name)?.points ?? [],
+          'day',
+          win.start,
+          win.end,
+        ),
+      })),
+    )
+  }, [withSpend, days, ts.data, win])
+  return {
+    summary,
+    isPending: calThis.isPending || calLast.isPending || stale,
+    error: calThis.error ?? calLast.error,
+    rangeDays: RANGE_DAYS[range],
+    totals,
+    totalsError: ts.error,
+    days,
+    stack,
+    stackPending: cur.isPending || ts.isPending,
+    spike: findSpike(days.map((p) => ({ date: p.iso.slice(0, 10), spend: p.spend }))),
+    drivers,
+    other,
+    driversError: cur.error,
+    unpriced: (cur.data?.summary.unpriced_calls ?? 0) > 0,
+    retry: () => {
+      void calThis.refetch()
+      void calLast.refetch()
+      void cur.refetch()
+      void ts.refetch()
+    },
+  }
+}
+
 export interface NeedsYou {
   needs: Needs
   /** The oldest answer among the sources that answered (design review 8A's "Checked …"), or 0. */
   lastChecked: number
   retry: Record<SourceId, () => void>
-  /** The newest sessions of the last 7 days and their checked status (eng review R7); the home counts failures per agent. */
+  /** The newest sessions of the last 7 days and their checked status, shared with Recent sessions (eng review R7). */
   sessions: ReturnType<typeof useRecentSessions>
-  /** The pending-requests match this card used, so the home counts requests per agent without a second matcher. */
-  waiting: ReturnType<typeof useWaiting>
 }
 
-/** The newest STATUS_CHECK_ROWS sessions of the last 7 days, status-checked with the Sessions page's keys (eng review R7). */
+/**
+ * The last 7 days' sessions, in two small reads under the Overview's own keys.
+ *
+ * This used to share the Sessions page's 100-row page and then fan out to
+ * `session/{id}` for the newest 25 and `trace/{id}` for 3 traces each — up to
+ * 100 browser requests, every one of them a trace-store read on the server, to
+ * compute one boolean per row. `session/list` now carries `status` and counts
+ * the matches in SQL, so the whole fan-out is two requests:
+ *
+ * - `recent` — the 5 rows the card shows.
+ * - `failed` — every failed session in the window. `matching_count` is the real
+ *   total, so Needs you states a fact instead of "N of the M latest checked".
+ */
 function useRecentSessions(now: Date, enabled: boolean) {
   const win = useMemo(() => resolveWindow({ preset: '7d' }, now), [now])
-  const start = useMemo(() => tempoSafeStart(win.start, now), [win.start, now])
-  const list = useFleetSessions(win.key, start, win.end, enabled)
-  const newest = useMemo(() => list.rows.slice(0, STATUS_CHECK_ROWS), [list.rows])
-  const status = useSessionStatuses(newest, now.getTime(), false)
-  return { list, newest, status }
+  const recent = useSessionPage(
+    win.key,
+    win.start,
+    win.end,
+    { limit: RECENT_SESSION_ROWS },
+    enabled,
+  )
+  const failed = useSessionPage(
+    win.key,
+    win.start,
+    win.end,
+    { limit: FAILED_SESSION_ROWS, status: 'failed' },
+    enabled,
+  )
+  return { recent, failed }
 }
 
 export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = true): NeedsYou {
@@ -245,20 +495,15 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
   const chats = useChatSessions()
   // The fleet's directory, not a second observer: one enabled late would refetch a failed list and flicker it pending.
   const dir = { byId: fleet.byId }
-  // Budgets (plans/feat-budget-burn.md F8): the viewer's scope's At risk, or R-L10's own list on an older server.
-  const shownAsAgent = (agentId: string) =>
-    // The agent row shows only its first reason: a stop listed lower down isn't said there.
-    fleet.summary?.byId.get(agentId)?.reasons[0]?.code === 'budgetStopped'
-  const agentLabel = (agentId: string) => {
-    const a = dir.byId.get(agentId)
-    return a?.display_name || a?.name
-  }
-  // Budgets are Enterprise only: an OSS build's source is absent, so Needs you simply never lists a budget row.
-  const budgetNeeds = useSlots().budgets.useBudgetNeeds(me, enabled, agentLabel, shownAsAgent)
+  // Budgets hidden: no server support for /api/budgets yet (R-L10). Restore the commented lines when it lands.
+  // const budgets = useBudgets(enabled)
+  // const budgetsAbsent = isEndpointAbsent(budgets.error)
+  const budgets = useBudgets(false)
+  const budgetsAbsent = true
+  const status = useBudgetStatus(enabled && budgets.isSuccess)
   const sessions = useRecentSessions(now, enabled)
   // Stable inputs for the memo below: query result objects are new on every render.
   const { match, failedCold, isPending: waitingPending } = waiting
-  const statusKey = sessions.newest.map((r) => sessions.status.get(r.session_id) ?? '').join('|')
 
   const input: NeedsInput = useMemo(() => {
     const titles = new Map(sessionRows(chats.data).map((r) => [r.session_id, r.title]))
@@ -303,26 +548,53 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
               // Rows are real, but with a cost input down the source can't vouch that nothing else needs action.
               incomplete: fleet.costFailed,
             }
-    const budgetRows = budgetNeeds.value
-    const failedRows = sessions.newest.filter((r) => sessions.status.get(r.session_id) === 'failed')
-    // The rule the hub shares (observability/sessions.ts `checkSessions`): most of the sample must answer before "no
-    // failures" counts, and "N of M checked sessions failed" counts the sessions actually checked (user decisions).
-    const verdict = checkSessions({
-      listError: sessions.list.isError,
-      listPending: sessions.list.isPending,
-      verdicts: sessions.newest.map((r) => sessions.status.get(r.session_id)),
-    })
-    const sessionState: NeedsInput['sessions'] =
-      verdict.state !== 'ok'
-        ? verdict
+    const budgetRows: NeedsInput['budgets'] = budgetsAbsent
+      ? { state: 'absent' }
+      : budgets.isError || status.isError
+        ? { state: 'failed' }
+        : budgets.isPending || status.isPending
+          ? { state: 'loading' }
+          : {
+              state: 'ok',
+              value: (budgets.data ?? []).flatMap((b) => {
+                const st = status.data?.data.find((x) => x.budget_id === b.id)
+                // A stopped agent budget is skipped only when its agent row already says so (a stopped, harness or unlisted
+                // agent isn't rated, so the budget row must stay; /ship adversarial).
+                const shownAsAgent =
+                  !!b.agent_id &&
+                  !!fleet.summary?.byId
+                    .get(b.agent_id)
+                    ?.reasons.some((r) => r.code === 'budgetStopped')
+                if (!st || st.state === 'ok' || (st.stopped && shownAsAgent)) return []
+                const agent = b.agent_id ? dir.byId.get(b.agent_id) : undefined
+                return [
+                  {
+                    id: b.id,
+                    label: b.agent_id
+                      ? agent?.display_name || agent?.name || copy.needs.anAgent
+                      : copy.needs.yourBudget,
+                    crossed: st.crossed,
+                    state: st.state === 'warning' ? 'warning' : 'exceeded',
+                  } as const,
+                ]
+              }),
+            }
+    // One indexed read, filtered in SQL: `matching_count` is every failed session
+    // in the window, so this states a fact. It used to be a sample — the newest
+    // 25 rows, each status-checked by downloading its traces — which could only
+    // ever say "N of the M latest sessions checked failed", and counted as a
+    // failed source when too few of them came back (design 5A, QA ISSUE-005).
+    const sessionState: NeedsInput['sessions'] = sessions.failed.isError
+      ? { state: 'failed' }
+      : sessions.failed.isPending
+        ? { state: 'loading' }
         : {
             state: 'ok',
             value: {
-              failed: verdict.failed,
-              checked: verdict.checked,
+              failed: sessions.failed.matchingCount,
               agents: [
                 ...new Set(
-                  failedRows.map((r) =>
+                  sessions.failed.rows.map((r) =>
                     r.agent_id ? fleet.displayName(r.agent_id) : copy.needs.unknownAgent,
                   ),
                 ),
@@ -330,8 +602,7 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
             },
           }
     return { requests, agents, budgets: budgetRows, sessions: sessionState }
-    // statusKey stands in for sessions.status (a new Map every render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `fleet` is a new object every render, so depending on it would re-run this on every render; every field read from it is listed individually below.
   }, [
     match,
     failedCold,
@@ -342,20 +613,28 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
     fleet.ratingsPending,
     fleet.costFailed,
     fleet.displayName,
-    budgetNeeds.value,
-    sessions.newest,
-    sessions.list.isError,
-    sessions.list.isPending,
-    statusKey,
+    budgetsAbsent,
+    budgets.data,
+    budgets.isError,
+    budgets.isPending,
+    status.data,
+    status.isError,
+    status.isPending,
+    dir.byId,
+    sessions.failed.rows,
+    sessions.failed.matchingCount,
+    sessions.failed.isError,
+    sessions.failed.isPending,
   ])
 
   const needs = useMemo(() => mergeNeeds(input), [input])
-  const stamps = [waiting.lastChecked, budgetNeeds.stamp, sessions.list.dataUpdatedAt].filter(
-    (t) => t > 0,
-  )
+  const stamps = [
+    waiting.lastChecked,
+    budgetsAbsent ? 0 : status.dataUpdatedAt,
+    sessions.failed.dataUpdatedAt,
+  ].filter((t) => t > 0)
   return {
     needs,
-    waiting,
     lastChecked: stamps.length ? Math.min(...stamps) : 0,
     retry: {
       requests: waiting.retry,
@@ -364,9 +643,161 @@ export function useNeedsYou(now: Date, me: Me, fleet: FleetHealth, enabled = tru
         fleet.retry()
         if (fleet.costFailed) fleet.retryCost()
       },
-      budgets: budgetNeeds.retry,
-      sessions: () => void sessions.list.refetch(),
+      budgets: () => {
+        void budgets.refetch()
+        void status.refetch()
+      },
+      sessions: () => {
+        void sessions.failed.refetch()
+        void sessions.recent.refetch()
+      },
     },
     sessions,
   }
+}
+
+interface HarnessLine {
+  id: string
+  cost: number | null
+  /** More than half the turns unpriced: the cost reads "unpriced" (the Harnesses page rule). */
+  unpriced: boolean
+}
+
+export interface HarnessSummary {
+  isPending: boolean
+  error: unknown
+  /** The org endpoint is absent (a bare 404): these are the viewer's own numbers (plans/feat-harness-org-view.md §4). */
+  ownOnly: boolean
+  /** A coded 404: nothing visible at the landing scope. */
+  notVisible: boolean
+  connected: number
+  activeDevs: number | null
+  harnesses: HarnessLine[]
+  retry(): void
+}
+
+/** Coding harnesses over the range: the landing request (no scope, the server picks), else the viewer's own usage. */
+export function useHarnessSummary(now: Date, me: Me, range: Range): HarnessSummary {
+  const win = useMemo(() => rangeWindow(range, now), [range, now])
+  const usage = useUsage(me.sub, { ...win.params }, win.key, true)
+  const absent = isEndpointAbsent(usage.error)
+  const live = useLiveIndividual(me.sub, win, false, absent)
+  if (absent) {
+    const h = live.data?.harnesses.filter((x) => x.registered) ?? []
+    return {
+      isPending: live.loading || (!live.data && !live.error),
+      error: live.error,
+      ownOnly: true,
+      notVisible: false,
+      connected: h.length,
+      activeDevs: null,
+      harnesses: h
+        .map((x) => ({ id: x.harness, cost: x.cost_usd, unpriced: false }))
+        .sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)),
+      retry: live.refetch,
+    }
+  }
+  // The landing request has no group_by=user, so its first page holds the whole answer (no cursor).
+  const d = usage.data?.pages[0]
+  const by = (d?.by_harness ?? []).filter((x) => x.registered_devs > 0 || x.turns > 0)
+  return {
+    isPending: usage.isPending,
+    error: isNotVisible(usage.error) ? null : usage.error,
+    ownOnly: false,
+    notVisible: isNotVisible(usage.error),
+    connected: by.length,
+    activeDevs: d?.totals.active_devs ?? null,
+    harnesses: by
+      .map((x) => ({ id: x.harness, cost: x.cost_usd, unpriced: mostlyUnpriced(x) }))
+      .sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)),
+    retry: () => void usage.refetch(),
+  }
+}
+
+export interface BudgetLine {
+  id: string
+  /** The agent's display name; null for the viewer's own monthly budget. */
+  name: string | null
+  limit: number
+  used: number
+  /** Bar fill 0-100, capped at the limit. */
+  pct: number
+  state: BudgetState
+  stopped: boolean
+  thresholds: number[]
+  action: BudgetAction
+  forecast: Forecast
+  /** Whole days until the period resets, from when the status was read. */
+  daysLeft: number
+}
+
+export interface BudgetCard {
+  /** No `/api/budgets` on this server (a bare 404): the card isn't shown. */
+  absent: boolean
+  isPending: boolean
+  error: unknown
+  /** The viewer's own monthly budget, if set. */
+  own: BudgetLine | null
+  agents: BudgetLine[]
+  retry(): void
+}
+
+/** The Budgets card: the same list and status reads as Needs you and Fleet health (one fetch each). */
+/** @public Hidden until /api/budgets lands (R-L10); OverviewPage has the call commented out. */
+export function useBudgetCard(fleet: FleetHealth, enabled: boolean): BudgetCard {
+  const budgets = useBudgets(enabled)
+  const status = useBudgetStatus(enabled && budgets.isSuccess)
+  const absent = isEndpointAbsent(budgets.error)
+  const lines = useMemo(() => {
+    // The forecast's clock is when the status was read, never the page's frozen `now` (plans/feat-llm-router.md §5.1).
+    const read = new Date(status.dataUpdatedAt)
+    const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
+    return (budgets.data ?? []).flatMap((b): BudgetLine[] => {
+      const st = byId.get(b.id)
+      if (!st) return []
+      const agent = b.agent_id ? fleet.byId.get(b.agent_id) : undefined
+      return [
+        {
+          id: b.id,
+          name:
+            b.scope === 'owner' ? null : agent?.display_name || agent?.name || copy.needs.anAgent,
+          limit: b.limit_usd,
+          used: st.used_usd,
+          pct: usedPercent(st.used_usd, b.limit_usd),
+          state: st.state,
+          stopped: st.stopped,
+          thresholds: b.thresholds,
+          action: b.action,
+          forecast: budgetForecast(st, b.limit_usd, read),
+          daysLeft: Math.max(0, Math.ceil((Date.parse(st.resets_at) - read.getTime()) / DAY)),
+        },
+      ]
+    })
+  }, [budgets.data, status.data, status.dataUpdatedAt, fleet.byId])
+  return {
+    absent,
+    isPending: !absent && (budgets.isPending || (budgets.isSuccess && status.isPending)),
+    error: absent ? null : (budgets.error ?? status.error),
+    own: lines.find((l) => l.name === null) ?? null,
+    // Most used first: the one nearest its limit leads.
+    agents: lines.filter((l) => l.name !== null).sort((a, b) => b.pct - a.pct),
+    retry: () => {
+      void budgets.refetch()
+      void status.refetch()
+    },
+  }
+}
+
+/**
+ * Token-optimisation savings for the header's range.
+ *
+ * Reuses TokenOps' own query and window so the two pages can never disagree about a figure, and so
+ * the 90-day range works — the endpoint's `range` shorthand only understands 24h/7d/30d, while a
+ * resolved window carries explicit timestamps.
+ */
+export function useOverviewSavings(now: Date, range: Range, enabled = true) {
+  const win = useMemo(() => rangeWindow(range, now), [range, now])
+  const q = useSavings(win, {}, 'total', enabled)
+  const view = useMemo(() => (q.data ? summarizeOptimisation(q.data) : undefined), [q.data])
+  return { view, isPending: q.isPending, isError: q.isError }
 }

@@ -174,16 +174,26 @@ pub async fn agent_proxy(
 
     // Every message send must belong to a persisted session (may inject a
     // generated contextId into the body — see `ensure_chat_session`).
-    let (body_bytes, persist_info) = ensure_chat_session(
-        &state,
-        &claims,
-        agent_id,
-        &agent_base,
-        body_bytes,
-        agent.is_internal,
-        !agent.keeps_session_memory,
-    )
-    .await?;
+    let prepared = ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
+    let (body_bytes, persist_info) = (prepared.body, prepared.persist);
+
+    // What this request's history selection chose from, and what it kept. Recorded here rather
+    // than where it was measured: `proxy_span` is the request span the trace page looks for, and
+    // only this scope holds it.
+    if let (Some(report), Ok(user_id)) = (prepared.context_report.as_ref(), claims.user_uuid()) {
+        crate::telemetry::record_context_report(
+            &state.db,
+            &proxy_span,
+            report,
+            crate::telemetry::ContextRecord {
+                user_id,
+                agent_id: Some(agent_id),
+                session_id: persist_info.as_ref().map(|p| p.session_id.clone()),
+                trace_id: Some(flow_ctx.flow_id.clone()),
+                span_id: Some(flow_ctx.parent_span_id.clone()),
+            },
+        );
+    }
 
     // Persist the user message to chat_messages (fire-and-forget, mirrors CLI
     // behaviour). No trace_id column: session_traces (below) is the
@@ -257,13 +267,24 @@ pub async fn agent_proxy(
         // and uses it as the sticky key, so turn 2+ reuse the model chosen at the
         // turn-1 cold start. Written on the same synchronous, pre-forward insert
         // so the value is guaranteed present before the agent calls back.
+        // `user_message` is the raw text (before history packing) that the LLM gateway's
+        // salience gate and classifier score. An agent→agent hop lands on the conflict
+        // branch below and leaves the flow's root user message in place.
         let metadata = match persist_info.as_ref() {
-            Some(i) => serde_json::json!({ "context_id": i.session_id }),
+            Some(i) => {
+                serde_json::json!({ "context_id": i.session_id, "user_message": i.user_text })
+            }
             None => serde_json::json!({}),
         };
+        // `session_id` is the same value as `metadata->>'context_id'`, promoted to
+        // a column so `session/list` can group and index by it (0058). The JSON
+        // stays as it is: `derive_boundary_signals` and the LLM gateway read it
+        // from there, and the column is written on this same insert so the two
+        // can never disagree.
+        let session_id = persist_info.as_ref().map(|i| i.session_id.clone());
         let _ = sqlx::query(
-            r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
-               VALUES ($1, $2, $3, $4, $5, 'running', $6)
+            r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata, session_id)
+               VALUES ($1, $2, $3, $4, $5, 'running', $6, $7)
                ON CONFLICT (flow_id) DO UPDATE
                   SET status = 'running', completed_at = NULL"#,
         )
@@ -273,6 +294,7 @@ pub async fn agent_proxy(
         .bind(&agent.name)
         .bind(title)
         .bind(&metadata)
+        .bind(session_id)
         .execute(&state.db)
         .await;
         // Membership record for the flow: the MCP gateway / LLM router only
@@ -337,7 +359,6 @@ pub async fn agent_proxy(
     // already guaranteed the chat_sessions row, so the FK holds.
     if !body_bytes.is_empty()
         && let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-        && !(agent.is_internal && is_ephemeral(&body_json))
     {
         let context_id = body_json
             .pointer("/params/message/contextId")
@@ -564,6 +585,13 @@ pub async fn agent_proxy(
 
 /// Mark a direct-chat flow completed (fire-and-forget). `a2a_dispatch` marks
 /// its own flows; the proxy path never did, so they accumulated as 'running'.
+///
+/// Guarded on `status = 'running'`, so a terminal outcome is never downgraded.
+/// An inner call ending can otherwise complete the whole flow (FL-8), and this
+/// write races the `status = 'failed'` one in `a2a_dispatch`: whichever landed
+/// second won, so a recorded failure could silently become a success. Session
+/// status is derived from these rows (`observability::sessions_sql`), which
+/// makes the race visible as a session that reads "ok" after a failed request.
 fn complete_flow(db: &sqlx::PgPool, flow_id: &str) {
     let db = db.clone();
     let flow_id = flow_id.to_string();
@@ -572,7 +600,7 @@ fn complete_flow(db: &sqlx::PgPool, flow_id: &str) {
             r#"UPDATE flows SET status = 'completed',
                duration_ms = EXTRACT(EPOCH FROM (now() - created_at))::bigint * 1000,
                completed_at = now()
-               WHERE flow_id = $1"#,
+               WHERE flow_id = $1 AND status = 'running'"#,
         )
         .bind(&flow_id)
         .execute(&db)
@@ -589,29 +617,6 @@ const MESSAGE_SEND_METHODS: &[&str] = &[
     "message/send",
     "message/stream",
 ];
-
-const EPHEMERAL_METADATA_KEY: &str = "nasiko_ephemeral";
-
-fn is_ephemeral(rpc: &serde_json::Value) -> bool {
-    rpc.pointer("/params/metadata")
-        .and_then(|m| m.get(EPHEMERAL_METADATA_KEY))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-async fn session_binding(
-    state: &AppState,
-    session_id: &str,
-) -> Result<Option<(Uuid, Uuid)>, StatusCode> {
-    sqlx::query_as("SELECT user_id, agent_id FROM chat_sessions WHERE session_id = $1")
-        .bind(session_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, %session_id, "agent proxy: session lookup failed");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })
-}
 
 /// Session and user-message info extracted during `ensure_chat_session` so the
 /// proxy can persist both user and agent messages to `chat_messages` without
@@ -633,45 +638,52 @@ struct PersistInfo {
 /// Non-message traffic (GetTask, card fetches, …) passes through untouched.
 /// Returns `(body_bytes, Some(PersistInfo))` for message-send requests so the
 /// caller can persist user + agent messages to `chat_messages`.
+/// What `ensure_chat_session` worked out about this request: the body to forward, whether to
+/// persist the turn, and what history selection carried.
+///
+/// A struct rather than a 3-tuple because the third element is only meaningful to the caller — it
+/// owns the request span the report has to be attached to, and this function does not.
+struct PreparedRequest {
+    body: axum::body::Bytes,
+    persist: Option<PersistInfo>,
+    context_report: Option<nasiko_orchestrator::ContextReport>,
+}
+
+impl PreparedRequest {
+    /// Not an A2A send, so nothing was selected and nothing is persisted.
+    fn passthrough(body: axum::body::Bytes) -> Self {
+        Self {
+            body,
+            persist: None,
+            context_report: None,
+        }
+    }
+}
+
 async fn ensure_chat_session(
     state: &AppState,
     claims: &Claims,
     agent_id: Uuid,
     _agent_base_url: &str,
     body_bytes: axum::body::Bytes,
-    internal_agent: bool,
-    stitch_history: bool,
-) -> Result<(axum::body::Bytes, Option<PersistInfo>), StatusCode> {
+) -> Result<PreparedRequest, StatusCode> {
     // Not JSON, or not a message send → pass through; the agent is the
     // authority on whether the payload is valid A2A.
     let Ok(mut rpc) = serde_json::from_slice::<serde_json::Value>(&body_bytes) else {
-        return Ok((body_bytes, None));
+        return Ok(PreparedRequest::passthrough(body_bytes));
     };
     let is_send = rpc
         .get("method")
         .and_then(|m| m.as_str())
         .is_some_and(|m| MESSAGE_SEND_METHODS.contains(&m));
     if !is_send {
-        return Ok((body_bytes, None));
-    }
-    let user_id: Uuid = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if internal_agent && is_ephemeral(&rpc) {
-        let context_id = rpc
-            .pointer("/params/message/contextId")
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty());
-        if let Some(context_id) = context_id
-            && let Some((owner, _)) = session_binding(state, context_id).await?
-            && !claims.is_superuser
-            && owner != user_id
-        {
-            return Err(StatusCode::FORBIDDEN);
-        }
-        return Ok((body_bytes, None));
+        return Ok(PreparedRequest::passthrough(body_bytes));
     }
     let Some(message) = rpc.pointer_mut("/params/message") else {
-        return Ok((body_bytes, None));
+        return Ok(PreparedRequest::passthrough(body_bytes));
     };
+
+    let user_id: Uuid = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     let existing_ctx = message
         .get("contextId")
@@ -746,7 +758,16 @@ async fn ensure_chat_session(
     // conversation into the second agent's prompt — checked regardless of
     // superuser status, since this is about context isolation, not access.
     let same_agent_session = if inserted.rows_affected() == 0 {
-        match session_binding(state, &session_id).await? {
+        let existing: Option<(Uuid, Uuid)> =
+            sqlx::query_as("SELECT user_id, agent_id FROM chat_sessions WHERE session_id = $1")
+                .bind(&session_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error = %e, %session_id, "agent proxy: session lookup failed");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        match existing {
             Some((owner, bound_agent)) => {
                 if !claims.is_superuser && owner != user_id {
                     return Err(StatusCode::FORBIDDEN);
@@ -773,17 +794,28 @@ async fn ensure_chat_session(
     // routing/orchestrator path, so direct `--agent`/`-u` chat gets the
     // continuity its own "resume with --session-id" hint implies.
     let mut rewrite_needed = injected;
-    if stitch_history && !user_text.is_empty() && same_agent_session {
+    let mut context_report = None;
+    if !user_text.is_empty() && same_agent_session {
+        // This agent receives the history, so its switch decides IP-4; unreadable reads as off.
+        // Via the shared helper rather than an inline query: that one also excludes soft-deleted
+        // agents, which an inline `WHERE id = $1` does not.
+        let compress_history =
+            nasiko_orchestrator::agent_compression_enabled(&state.db, agent_id).await;
         let history_store = state.history_vector_store();
+        // A direct chat: this agent's own switch decides history compression.
         let history = context_selection::fetch_for_user(
             &state.db,
             user_id,
             &session_id,
             &history_store,
             &user_text,
-            &ContextTiers::from_config(&state.config),
+            &ContextTiers::from_config(&state.config)
+                .with_overrides(&state.db)
+                .await,
+            compress_history,
         )
         .await;
+        context_report = Some(history.report.clone());
         if !history.is_empty()
             && let Some(part) = message
                 .get_mut("parts")
@@ -803,9 +835,17 @@ async fn ensure_chat_session(
             tracing::error!(error = %e, "agent proxy: failed to re-serialize body after contextId/history injection");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-        return Ok((rewritten.into(), persist_info));
+        return Ok(PreparedRequest {
+            body: rewritten.into(),
+            persist: persist_info,
+            context_report,
+        });
     }
-    Ok((body_bytes, persist_info))
+    Ok(PreparedRequest {
+        body: body_bytes,
+        persist: persist_info,
+        context_report,
+    })
 }
 
 /// Extract the agent's reply text from a JSON-RPC response for persistence.
