@@ -4,13 +4,10 @@
  * hidden unless asked for; they never run and the Harnesses page owns their usage.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import { Bot, RotateCw, SearchX, X } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Badge } from '@/components/ui/badge'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Toggle } from '@/components/ui/toggle'
+import { FilterChip } from '@/components/shared/filter-chip'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { SearchInput } from '@/components/shared/search-input'
@@ -22,12 +19,12 @@ import { useFleetHealth } from '@/features/overview/api'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { meQuery } from '@/lib/api/auth'
 import { useCatalogAgents, useCatalogTabs, useUsers } from './api'
-import { AgentMark, AgentsNav, FirstRunSteps, StatusBadge } from './components/bits'
+import { AgentCard } from './components/AgentCard'
+import { AgentsNav, FirstRunSteps } from './components/bits'
 import { copy } from './copy'
 import type { CatalogSearch } from './search'
-import { displayStatus, isHarness } from './status'
-import { CARD_SKILLS, TOP_TAGS } from './tuning'
-import type { Agent } from './types'
+import { isHarness } from './status'
+import { TOP_TAGS } from './tuning'
 
 export function CatalogPage({
   search,
@@ -172,20 +169,20 @@ export function CatalogPage({
             <X className="size-3" aria-hidden />
           </Button>
         ) : null}
-        <Chip
+        <FilterChip
           active={!!search.yours}
           onClick={() => setSearch({ yours: search.yours ? undefined : true })}
         >
           {copy.yours}
-        </Chip>
+        </FilterChip>
         {tags.map((t) => (
-          <Chip
+          <FilterChip
             key={t}
             active={search.tag === t}
             onClick={() => setSearch({ tag: search.tag === t ? undefined : t })}
           >
             {t}
-          </Chip>
+          </FilterChip>
         ))}
         {harnessCount ? (
           <Button
@@ -264,99 +261,3 @@ export function CatalogPage({
     </div>
   )
 }
-
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: string
-}) {
-  return (
-    <Toggle
-      variant="outline"
-      size="sm"
-      pressed={active}
-      onPressedChange={onClick}
-      className="min-h-8 rounded-full px-3 text-xs font-normal text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground data-[state=on]:border-primary-text data-[state=on]:bg-primary/10 data-[state=on]:text-primary-text"
-    >
-      {children}
-    </Toggle>
-  )
-}
-
-/** Memoized: every search keystroke re-renders the page, and the catalog can hold hundreds of cards. */
-const AgentCard = memo(function AgentCard({
-  agent,
-  meId,
-  ownerName,
-  reason,
-}: {
-  agent: Agent
-  meId?: string
-  ownerName?: string
-  reason?: string
-}) {
-  const harness = isHarness(agent)
-  const name = agent.display_name || agent.name
-  const mine = agent.owner_id === meId
-  const skills = agent.skills ?? []
-  const extra = skills.length - CARD_SKILLS
-  const owner = mine ? copy.you : ownerName
-  return (
-    // One link, no nested interactive elements (plan §7.1).
-    <Card
-      asChild
-      className="h-full gap-2 p-4 transition-[color,border-color,box-shadow] hover:border-primary/40 hover:shadow-lg focus-visible:outline-2 focus-visible:outline-ring"
-    >
-      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
-        <div className="flex items-start gap-3">
-          <AgentMark name={name} iconUrl={agent.icon_url} size={36} />
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-medium">{name}</div>
-            <div className="truncate font-mono text-xs text-muted-foreground">{agent.name}</div>
-          </div>
-          {harness ? null : (
-            <StatusBadge display={displayStatus(agent.status, false)} raw={agent.status} />
-          )}
-        </div>
-        <p
-          className="line-clamp-1 text-sm text-muted-foreground"
-          title={agent.description ?? undefined}
-        >
-          {agent.description || copy.noDescription}
-        </p>
-        {/* The Overview's health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
-        {reason ? (
-          <p className="line-clamp-1 text-xs font-medium" data-testid="health-reason">
-            {copy.healthReason(reason)}
-          </p>
-        ) : null}
-        {skills.length ? (
-          <div className="flex flex-wrap gap-1">
-            {skills.slice(0, CARD_SKILLS).map((s) => (
-              <Badge key={s.id} variant="secondary" className="font-normal">
-                {s.name}
-              </Badge>
-            ))}
-            {extra > 0 ? (
-              <Badge variant="outline" className="font-normal">
-                +{extra}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="mt-auto flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
-          {harness ? (
-            <Badge variant="outline">{copy.harnessChip}</Badge>
-          ) : (
-            <Badge variant="outline">{mine ? copy.yours : copy.availableToYou}</Badge>
-          )}
-          {owner && !mine ? <span>{owner}</span> : null}
-        </div>
-      </Link>
-    </Card>
-  )
-})

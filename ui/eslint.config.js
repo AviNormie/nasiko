@@ -18,6 +18,7 @@ const PUBLIC = {
     'format',
     'normalize',
     'status',
+    'components/AgentCard',
     'components/AgentLink',
     'components/bits',
     'components/dialogs',
@@ -181,10 +182,10 @@ export default tseslint.config(
       'coverage/',
       'public/',
       '.claude/',
-      'ee/web/src/weave/core/',
       // The design playground (plans/feat-design-playground.md §5): dev-only tooling, never shipped, and its
       // shell is raw elements by design.
       'design/',
+      'ee/web/src/genui/lang/',
       '**/routeTree.gen.ts',
       'common/src/lib/api/schema.gen.ts',
       '**/*.js',
@@ -255,6 +256,7 @@ export default tseslint.config(
       '@eslint-react/no-array-index-key': 'off',
       'jsx-a11y/click-events-have-key-events': 'off',
       'jsx-a11y/no-noninteractive-element-interactions': 'off',
+      'jsx-a11y/anchor-has-content': 'off',
     },
   },
   // The two ARIA widgets shadcn has no equivalent for (plan §8 Phase 1 exceptions).
@@ -266,14 +268,15 @@ export default tseslint.config(
     rules: { 'no-restricted-syntax': ['error', ...banned, noRawElements[0]] },
   },
   // The one fetch wrapper, and the streams it doesn't cover (SSE bodies need the raw Response): chat turns, the
-  // agent log tail (`useLogStream`) and a build's deploy stream (`useBuildStream`); API modules, so still no fetch in
-  // components.
+  // agent log tail (`useLogStream`), a build's deploy stream (`useBuildStream`) and EE's Weave generation; API
+  // modules, so still no fetch in components.
   {
     files: [
       'common/src/lib/api/client.ts',
       'common/src/features/chat/registry.ts',
       'common/src/features/sessions/api.ts',
       'common/src/features/deploy/api.ts',
+      'ee/web/src/genui/conversation/api.ts',
     ],
     rules: {
       'no-restricted-syntax': [

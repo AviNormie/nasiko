@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Toggle } from '@/components/ui/toggle'
+import { FilterChip } from '@/components/shared/filter-chip'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { SearchInput } from '@/components/shared/search-input'
@@ -145,13 +145,13 @@ export function CatalogPage({
           className="w-full max-w-none sm:w-80"
         />
         {VIEWS.map((v) => (
-          <Chip
+          <FilterChip
             key={v}
             active={search.view === v}
             onClick={() => setSearch({ view: search.view === v ? undefined : v, tab: undefined })}
           >
             {copy.views[v]}
-          </Chip>
+          </FilterChip>
         ))}
       </div>
       {toolkits.isError ? (
@@ -233,28 +233,6 @@ function ScopeEmpty({ view, actions }: { view: CatalogSearch['view']; actions: R
     <EmptyState icon={Plug} title={e.title} action={actions ?? undefined}>
       {e.desc}
     </EmptyState>
-  )
-}
-
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: string
-}) {
-  return (
-    <Toggle
-      variant="outline"
-      size="sm"
-      pressed={active}
-      onPressedChange={onClick}
-      className="min-h-8 rounded-full px-3 text-xs font-normal text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground data-[state=on]:border-primary-text data-[state=on]:bg-primary/10 data-[state=on]:text-primary-text"
-    >
-      {children}
-    </Toggle>
   )
 }
 
