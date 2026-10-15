@@ -13,7 +13,7 @@
  *
  * Import-free apart from the scenario (Node runs it with type stripping).
  */
-import { budgetScenario, SCENARIO_IDS } from '../../common/src/mocks/seed-budgets.ts'
+import { budgetScenario, SCENARIO_IDS } from '../../ee/web/src/mocks/seed-budgets.ts'
 
 const ADMIN = '00000000-0000-4000-8000-00000000ad00'
 const q = (v: string | null) => (v === null ? 'NULL' : `'${v.replace(/'/g, "''")}'`)

@@ -11,7 +11,6 @@ import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { agentNamed } from '@/test/agents'
 import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
-import { copy as budgetCopy } from '@/features/budgets/copy'
 import { copy } from './copy'
 
 setupPinnedSeed()
@@ -193,17 +192,16 @@ describe('flows errors', () => {
 })
 
 describe('layer cards', () => {
-  it('the owner sees Routing, Tools and Optimization; Budget is its own section (B5)', async () => {
+  // Budget is its own section, not a layer card (B5). That it renders at all is Enterprise only, so the EE suite
+  // asserts it (`ee/web/src/features/budgets/HubBudget.test.tsx`); here we only hold that it is never a card.
+  it('the owner sees Routing, Tools and Optimization', async () => {
     renderApp(url())
     const cards = await screen.findByRole('region', { name: copy.cards.title })
     for (const t of [copy.cards.routing, copy.cards.tools, copy.cards.optimization])
       expect(
         await within(cards).findByRole('heading', { name: new RegExp(`^${t}`) }),
       ).toBeInTheDocument()
-    expect(within(cards).queryByRole('heading', { name: budgetCopy.hubTitle })).toBeNull()
-    expect(
-      await screen.findByRole('region', { name: budgetCopy.hubTitle }, { timeout: 8000 }),
-    ).toBeInTheDocument()
+    expect(within(cards).queryByRole('heading', { name: /budget/i })).toBeNull()
   })
 
   it('a coding harness’s owner sees Tools and Optimization, never Routing or Budget', async () => {
@@ -218,7 +216,7 @@ describe('layer cards', () => {
       .map((h) => h.textContent)
     expect(titles).toContain(copy.cards.optimization)
     expect(titles).not.toContain(copy.cards.routing)
-    expect(titles).not.toContain(budgetCopy.hubTitle)
+    expect(titles.filter((t) => /budget/i.test(t ?? ''))).toEqual([])
     rec.stop()
     expect(rec.urls.filter((u) => u.pathname.endsWith('/llm-config'))).toEqual([])
   })

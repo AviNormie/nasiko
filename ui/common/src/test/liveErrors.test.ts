@@ -9,7 +9,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { signOut } from '@/app/shell/signOut'
 import { ApiError, apiFetch } from '@/lib/api/client'
 import {
-  isBudgetsAbsent,
   isDeadSession401,
   isEndpointAbsent,
   isTopTracesAbsent,
@@ -54,11 +53,8 @@ async function errorFor(fx: Fx): Promise<ApiError> {
 
 const unknownRoute = load('errors/errors.unknown-route.json')
 const topTraces = load('tokenops/tokenops.top-traces.json')
-const budgets = [
-  'router/router.budgets.json',
-  'router/router.budgets-status.json',
-  'router/router.budgets-alerts.json',
-].map(load)
+// Budgets are Enterprise only: their absent-route fixtures and the rule that reads them live in the EE suite
+// (`ee/web/src/features/budgets/absent.test.ts`).
 const noAuth = load('errors/errors.no-auth.json')
 const unknownAgent = load('errors/errors.unknown-agent.json')
 const requiresAdmin = load('errors/errors.requires-admin.json')
@@ -71,12 +67,6 @@ describe('missing endpoints (the "needs a newer server" states)', () => {
   it('TokenOps F4: /finops/top-traces as the pinned server answers it', async () => {
     expect(isTopTracesAbsent(await errorFor(topTraces))).toBe(true)
   })
-  it.each(budgets.map((f) => [f.id, f] as const))(
-    'Router R2: %s as the pinned server answers it',
-    async (_, fx) => {
-      expect(isBudgetsAbsent(await errorFor(fx))).toBe(true)
-    },
-  )
   it('Harnesses: an absent usage endpoint answers like any unknown route', async () => {
     expect(
       isEndpointAbsent(
