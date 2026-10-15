@@ -108,6 +108,33 @@ ${sc.calls
     return `(${q(c.call_id)}::uuid, ${ts(c.at)}, ${q(c.source)}, ${c.agent_id ? `${q(c.agent_id)}::uuid` : 'NULL'}, ${c.billed_user_id ? who(c.billed_user_id) : 'NULL'}, ${q(c.flow_id)}, ${q(c.chat_session_id)}, ${q(c.turn_id)}, ${q(provider!)}, ${q(model!)}, ${q(c.operation)}, ${c.input_tokens}, ${c.output_tokens}, ${c.cost_usd ?? 'NULL'}, ${c.routed})`
   })
   .join(',\n')};`,
+    // **Before the budgets**, not after: a unit budget has a foreign key to
+    // `org_units`, so inserting it first fails the whole scenario with
+    // "budgets_unit_id_fkey". This ordering could not be wrong until the
+    // budget tables existed, and it was.
+    // EE: units, then membership and ancestry history (P-4), when this server has them.
+    `IF to_regclass('public.org_unit_member_history') IS NOT NULL THEN
+  INSERT INTO org_units (id, name, source) VALUES
+${sc.units.map((u) => `    (${q(u.id)}::uuid, ${q(u.name)}, 'manual')`).join(',\n')};
+  INSERT INTO org_unit_members (user_id, unit_id, source)
+    VALUES ${sc.members
+      .filter((m) => m.to === null)
+      .map((m) => `(${who(m.user_id)}, ${q(m.unit_id)}::uuid, 'manual')`)
+      .join(', ')};
+  -- The membership insert above fires 1055's trigger, which opens an interval
+  -- at now(). The scenario's own history is the truth, so its open row replaces
+  -- the trigger's guess; its closed rows never collide (the unique index covers
+  -- open intervals only).
+  INSERT INTO org_unit_member_history (unit_id, user_id, valid_from, valid_to)
+    VALUES ${sc.members.map((m) => `(${q(m.unit_id)}::uuid, ${who(m.user_id)}, ${ts(m.from)}, ${ts(m.to)})`).join(', ')}
+    ON CONFLICT (unit_id, user_id) WHERE valid_to IS NULL
+    DO UPDATE SET valid_from = EXCLUDED.valid_from;
+  -- Same for ancestry: the unit insert opened one, the scenario replaces it.
+  INSERT INTO org_unit_parent_history (unit_id, parent_id, valid_from, valid_to)
+    VALUES ${sc.parents.map((p) => `(${q(p.unit_id)}::uuid, ${p.parent_id ? `${q(p.parent_id)}::uuid` : 'NULL'}, ${ts(p.from)}, ${ts(p.to)})`).join(', ')}
+    ON CONFLICT (unit_id) WHERE valid_to IS NULL
+    DO UPDATE SET parent_id = EXCLUDED.parent_id, valid_from = EXCLUDED.valid_from;
+END IF;`,
     `INSERT INTO budgets (id, scope, agent_id, unit_id, session_id, owner_id, created_at, updated_at, next_period, next_period_from, next_period_set_by, deleted_at) VALUES
 ${sc.budgets
   .map(
@@ -128,20 +155,6 @@ ${sc.budgets
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;`,
     `INSERT INTO budget_watermarks (source, complete_to) VALUES ('routed', ${ts(anchor)}), ('traced', ${ts(anchor)}), ('harness_estimate', ${ts(anchor)})
 ON CONFLICT (source) DO UPDATE SET complete_to = EXCLUDED.complete_to;`,
-    // EE: units, then membership and ancestry history (P-4), when this server has them.
-    `IF to_regclass('public.org_unit_member_history') IS NOT NULL THEN
-  INSERT INTO org_units (id, name, source) VALUES
-${sc.units.map((u) => `    (${q(u.id)}::uuid, ${q(u.name)}, 'manual')`).join(',\n')};
-  INSERT INTO org_unit_members (user_id, unit_id, source)
-    VALUES ${sc.members
-      .filter((m) => m.to === null)
-      .map((m) => `(${who(m.user_id)}, ${q(m.unit_id)}::uuid, 'manual')`)
-      .join(', ')};
-  INSERT INTO org_unit_member_history (unit_id, user_id, valid_from, valid_to)
-    VALUES ${sc.members.map((m) => `(${q(m.unit_id)}::uuid, ${who(m.user_id)}, ${ts(m.from)}, ${ts(m.to)})`).join(', ')};
-  INSERT INTO org_unit_parent_history (unit_id, parent_id, valid_from, valid_to)
-    VALUES ${sc.parents.map((p) => `(${q(p.unit_id)}::uuid, ${p.parent_id ? `${q(p.parent_id)}::uuid` : 'NULL'}, ${ts(p.from)}, ${ts(p.to)})`).join(', ')};
-END IF;`,
   )
   return [
     ...BUDGET_RESET,
