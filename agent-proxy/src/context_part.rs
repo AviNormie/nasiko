@@ -1,5 +1,5 @@
 //! Appending admin-injected context (L1A knowledge and org policy/L0 today, at their independent
-//! call sites — `ee/server/src/injection_proxy.rs` and `oss/server/src/router/a2a_dispatch.rs` /
+//! call sites — the edition's forwarding hop and `oss/server/src/router/a2a_dispatch.rs` /
 //! `oss/server/src/agent_proxy.rs` respectively; a future L2 belief is the next caller) to an
 //! outbound A2A message as its **own part**, rather than splicing it into the text part an agent
 //! may parse for the platform's own history-glue marker.

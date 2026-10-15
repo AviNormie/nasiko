@@ -313,7 +313,7 @@ pub async fn agent_proxy(
     // — reqwest's `.header()` below is `HeaderMap::append`, not replace, so a copied attacker
     // value would sit ahead of the trusted one most header readers return the first occurrence
     // of). See `nasiko_agent_proxy::headers`'s module doc for why this is shared with
-    // `injection_proxy.rs` rather than a second, independent list.
+    // the forwarding hop rather than a second, independent list.
     //
     // Agent turns outrun the shared client's short default (long tool calls,
     // multi-step orchestration), so this hop carries the agent-call budget.
@@ -334,7 +334,7 @@ pub async fn agent_proxy(
 
     // Whatever `forwarding_endpoint()` asked to have attached (the injection proxy's own
     // `Authorization` credential when memory is enabled; empty otherwise). This is consumed by
-    // that hop, not the real agent — `injection_proxy.rs`'s own relay explicitly drops
+    // that hop, not the real agent — that hop's own relay explicitly drops
     // `authorization` before continuing on, so it never reaches the agent container.
     for (name, value) in &forward_headers {
         forwarded = forwarded.header(name, value);
