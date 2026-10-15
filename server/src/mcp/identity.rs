@@ -45,12 +45,18 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 /// denial — denying a forward takes the chat down on a transient flow-lookup blip. Fail closed on
 /// the decision, open on the forward. The two postures are deliberately opposite, so a new caller
 /// has to pick one on purpose rather than inherit this one.
+///
+/// Returns the flow id alongside the user: it's the one thing this function actually verified
+/// against `flows`/`flow_participants`, so callers that need to key anything on the flow (e.g.
+/// publishing a `FlowEvent`, or minting a memory session id) must use this, never a fresh,
+/// unverified re-parse of the raw `traceparent` — that would let a caller launder an unverified
+/// trace id through a path that was supposed to require proof of participation.
 #[allow(clippy::result_large_err)]
 pub async fn flow_user(
     state: &AppState,
     traceparent: Option<&str>,
     agent_id: Uuid,
-) -> Result<Uuid, Response> {
+) -> Result<(Uuid, String), Response> {
     let flow_id = traceparent
         .and_then(nasiko_flow::FlowContext::from_traceparent)
         .map(|ctx| ctx.flow_id)
@@ -82,7 +88,7 @@ pub async fn flow_user(
     })?;
 
     match row {
-        Some((user_id, true)) => Ok(user_id),
+        Some((user_id, true)) => Ok((user_id, flow_id)),
         Some((_, false)) => Err(deny(format!(
             "agent {agent_id} is not a participant of flow {flow_id}"
         ))),

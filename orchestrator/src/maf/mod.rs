@@ -39,7 +39,6 @@ pub fn start_worker(
     flow_guard: Arc<FlowGuard>,
     llm_config: LlmConfig,
     hitl_store: Arc<dyn nasiko_hitl::HitlStore>,
-    outbound: Arc<dyn crate::outbound::OutboundPrefix>,
 ) {
     let llm = LlmClient::new(
         http_client.clone(),
@@ -54,6 +53,5 @@ pub fn start_worker(
         flow_guard,
         llm,
         hitl_store,
-        outbound,
     ));
 }
