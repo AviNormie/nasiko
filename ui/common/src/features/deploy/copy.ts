@@ -43,11 +43,12 @@ export const copy = {
     fixFirst: 'Fix the items marked ✕ first: the server would reject this zip.',
     failed: "Couldn't deploy",
     needs: 'What your zip needs',
-    needsCompact: 'Your zip needs: Dockerfile · entrypoint · version · ≤ 100 MB',
+    needsCompact: 'Your zip needs: Dockerfile · start command · version · ≤ 100 MB',
     advisory: "This zip couldn't be read here; OpenRuntime checks it when you deploy.",
     items: {
       dockerfile: 'Dockerfile in the root, with a FROM line',
-      entrypoint: 'A Python entrypoint: main.py or __main__.py, at the root or in src/',
+      entrypoint:
+        'A startup command: a CMD or ENTRYPOINT in your Dockerfile (or a main.py / __main__.py entrypoint)',
       version: 'A version (x.y.z) in AgentCard.json or pyproject.toml, or set below',
       size: 'Under 100 MB, 1,000 files and 200 MB unzipped',
     },
@@ -245,8 +246,8 @@ export const copy = {
       fix: 'Start the Dockerfile with a FROM instruction.',
     },
     noEntrypoint: {
-      problem: 'No Python entrypoint.',
-      fix: 'Add main.py, src/main.py, __main__.py or src/__main__.py.',
+      problem: 'No startup command.',
+      fix: 'Add a CMD or ENTRYPOINT to your Dockerfile, or a main.py / __main__.py entrypoint.',
     },
     tooLarge: {
       problem: 'The zip is over 100 MB.',
