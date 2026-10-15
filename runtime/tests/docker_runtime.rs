@@ -37,6 +37,7 @@ fn docker_runtime_config_custom_construction() {
         registry_host: Some("localhost:5000".to_owned()),
         registry_username: Some("registry-user".to_owned()),
         registry_password: Some("registry-pass".to_owned()),
+        registry_credentials_host: Some("ghcr.io".to_owned()),
         agent_memory_volume: "custom-memory-volume".to_owned(),
         agent_memory_init_image: "busybox:1.36".to_owned(),
     };
