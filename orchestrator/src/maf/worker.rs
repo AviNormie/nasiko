@@ -12,7 +12,6 @@ use super::{
     llm::LlmClient,
     types::{MafDefinition, PausedStep, StepOutcome, StepResult},
 };
-use crate::outbound::OutboundPrefix;
 
 /// Redis stream this worker consumes from. `pub` (not just crate-visible) so every producer —
 /// `oss/server/src/maf.rs` (the initial run) and `oss/server/src/hitl/mod.rs` (a resume re-enqueue)
@@ -39,7 +38,6 @@ pub async fn run(
     flow_guard: Arc<FlowGuard>,
     llm: LlmClient,
     hitl_store: Arc<dyn HitlStore>,
-    outbound: Arc<dyn OutboundPrefix>,
 ) {
     let consumer = consumer_name();
 
@@ -69,7 +67,6 @@ pub async fn run(
         &flow_guard,
         &llm,
         &hitl_store,
-        &outbound,
         &consumer,
     )
     .await;
@@ -107,7 +104,6 @@ pub async fn run(
                             &flow_guard,
                             &llm,
                             &hitl_store,
-                            &outbound,
                         )
                         .await;
                     } else {
@@ -262,7 +258,6 @@ async fn process_job(
     flow_guard: &Arc<FlowGuard>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
-    outbound: &Arc<dyn OutboundPrefix>,
 ) {
     let execution_id = job.execution_id;
     let user_id = job.user_id;
@@ -342,7 +337,6 @@ async fn process_job(
                     &maf_def,
                     llm,
                     content.as_deref(),
-                    outbound.as_ref(),
                 )
                 .await
             }
@@ -364,7 +358,6 @@ async fn process_job(
                         resume.task_id,
                         execution_id.to_string(),
                         resume.answer,
-                        outbound.as_ref(),
                     )
                     .await
                 }
@@ -651,7 +644,6 @@ async fn re_enqueue(
     let _: redis::RedisResult<String> = xadd.query_async(conn).await;
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn reclaim_pending(
     conn: &mut redis::aio::MultiplexedConnection,
     db: &PgPool,
@@ -659,7 +651,6 @@ async fn reclaim_pending(
     flow_guard: &Arc<FlowGuard>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
-    outbound: &Arc<dyn OutboundPrefix>,
     consumer: &str,
 ) {
     let result: redis::RedisResult<redis::Value> = redis::cmd("XAUTOCLAIM")
@@ -711,7 +702,6 @@ async fn reclaim_pending(
                 flow_guard,
                 llm,
                 hitl_store,
-                outbound,
             )
             .await;
         }
