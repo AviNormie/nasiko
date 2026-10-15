@@ -189,6 +189,11 @@ export const ROUTER_PAGE_VARIANTS = [
  * - `budgets-rl10-only`: a server with R-L10 only (bare 404 on the 1.0 routes, F11's per-route fallback);
  * - `budgets-golden`: the golden scenario (docs/requirements/budgets.md §14) anchored at the mock clock's hour, the
  *   world the contract's fixtures use, in place of the app seed's.
+ *
+ * Alert delivery (docs/requirements/alert-delivery.md), answered by the EE layer like the rest of budgets:
+ * - `alerts-absent`: budgets without delivery (bare 404 on every alert-* route);
+ * - `alerts-nowhere`: no channel reaches anyone — the empty state and F5's "Nowhere";
+ * - `alerts-failing`: a channel at three consecutive failures, for the warning F7 puts where alerts are read.
  */
 export const BUDGETS_PAGE_VARIANTS = [
   'budgets-empty',
@@ -196,6 +201,9 @@ export const BUDGETS_PAGE_VARIANTS = [
   'budgets-absent',
   'budgets-rl10-only',
   'budgets-golden',
+  'alerts-absent',
+  'alerts-nowhere',
+  'alerts-failing',
 ] as const
 /** Page variants combine (read through hasVariant) instead of taking the single degraded-state slot. */
 const PAGE_VARIANTS: readonly string[] = [
