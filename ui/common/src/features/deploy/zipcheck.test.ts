@@ -101,6 +101,31 @@ describe('checkZip (eng review R5: tail read, capped entries)', () => {
     ).toBe('fail')
   })
 
+  it('accepts a non-Python agent whose Dockerfile declares CMD/ENTRYPOINT (language-agnostic)', async () => {
+    const { 'main.py': _m, ...rest } = GOOD
+    // Node agent: no Python entrypoint file, but the Dockerfile declares CMD.
+    expect(
+      (
+        await checkZip(
+          zip({ ...rest, Dockerfile: 'FROM node:20\nCMD ["node", "server.js"]\n', 'server.js': '' }),
+        )
+      ).items.entrypoint.state,
+    ).toBe('pass')
+    // ENTRYPOINT (exec form) also counts.
+    expect(
+      (
+        await checkZip(
+          zip({ ...rest, Dockerfile: 'FROM rust:1\nENTRYPOINT ["/app/agent"]\n', 'Cargo.toml': '' }),
+        )
+      ).items.entrypoint.state,
+    ).toBe('pass')
+    // No startup command and no entrypoint file → fail.
+    expect(
+      (await checkZip(zip({ ...rest, Dockerfile: 'FROM alpine:3.20\nRUN echo build\n' }))).items
+        .entrypoint.state,
+    ).toBe('fail')
+  })
+
   it('accepts any server entrypoint and rejects a non-x.y.z version', async () => {
     const { 'main.py': _m, ...rest } = GOOD
     expect((await checkZip(zip({ ...rest, 'src/__main__.py': '' }))).items.entrypoint.state).toBe(

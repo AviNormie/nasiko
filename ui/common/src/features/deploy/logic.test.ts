@@ -162,7 +162,7 @@ describe('explainError (server strings at nasiko-cloud-rs 2d6178e4)', () => {
     ['no Dockerfile found in root of zip', 'noDockerfile', 'dockerfile'],
     ['Dockerfile has no FROM instruction', 'noFrom', 'dockerfile'],
     [
-      'no Python entrypoint found (main.py, src/main.py, __main__.py, or src/__main__.py)',
+      'no startup command found — add a CMD or ENTRYPOINT to your Dockerfile, or include a Python entrypoint (main.py, src/main.py, __main__.py, or src/__main__.py)',
       'noEntrypoint',
       'entrypoint',
     ],

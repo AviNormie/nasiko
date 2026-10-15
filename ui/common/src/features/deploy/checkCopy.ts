@@ -6,7 +6,7 @@ export const checkCopy = {
   overUnzipped: (mb: number) => `Over ${mb} MB unzipped.`,
   noDockerfile: 'No Dockerfile at the root.',
   noFrom: 'The Dockerfile has no FROM line.',
-  noEntrypoint: 'No main.py, src/main.py, __main__.py or src/__main__.py.',
+  noEntrypoint: 'No CMD or ENTRYPOINT in the Dockerfile, and no main.py / __main__.py.',
   noVersion: 'No version in the zip: set one below.',
   badVersion: (v: string) => `Version ${v} isn't x.y.z: set one below.`,
   nameLength: (max: number) => `Use 1–${max} characters.`,

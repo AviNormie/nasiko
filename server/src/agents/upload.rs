@@ -755,13 +755,29 @@ fn validate_agent_zip(
         return Err("Dockerfile has no FROM instruction".into());
     }
 
-    // At least one Python entrypoint must exist
+    // The agent must declare how it starts — in a language-agnostic way. Either
+    // the Dockerfile carries its own CMD/ENTRYPOINT (any runtime: Node, Rust, Go,
+    // a prebuilt binary), or a conventional Python entrypoint file is present
+    // (kept for Python agents whose Dockerfile relies on the base image's CMD).
+    //
+    // This replaced a Python-only `main.py` requirement that was coupled to a
+    // long-removed Dockerfile OTel-patching step (`patch_dockerfile_for_otel`,
+    // deleted 2026-08-01) and wrongly rejected every non-Python agent even though
+    // the rest of the pipeline builds from the Dockerfile alone.
+    let dockerfile_declares_start = contents.lines().any(|l| {
+        let u = l.trim_start().to_ascii_uppercase();
+        u.starts_with("CMD ")
+            || u.starts_with("CMD[")
+            || u.starts_with("ENTRYPOINT ")
+            || u.starts_with("ENTRYPOINT[")
+    });
     let entrypoints = ["main.py", "src/main.py", "src/__main__.py", "__main__.py"];
-    let has_entrypoint = entrypoints.iter().any(|p| dest.join(p).exists());
-    if !has_entrypoint {
-        tracing::warn!(zip_path = %zip_path.display(), reason = "missing entrypoint", "upload rejected: invalid agent structure");
+    let has_entrypoint_file = entrypoints.iter().any(|p| dest.join(p).exists());
+    if !dockerfile_declares_start && !has_entrypoint_file {
+        tracing::warn!(zip_path = %zip_path.display(), reason = "no startup command", "upload rejected: invalid agent structure");
         return Err(
-            "no Python entrypoint found (main.py, src/main.py, __main__.py, or src/__main__.py)"
+            "no startup command found — add a CMD or ENTRYPOINT to your Dockerfile, or include \
+             a Python entrypoint (main.py, src/main.py, __main__.py, or src/__main__.py)"
                 .into(),
         );
     }

@@ -31,7 +31,9 @@ const RULES: readonly { test: RegExp; error: Omit<BuildError, 'suggested' | 'ver
     error: { ...copy.errors.noFrom, item: 'dockerfile' },
   },
   {
-    test: /no Python entrypoint found/i,
+    // The current server says "no startup command found …"; the older "no Python
+    // entrypoint found …" is kept so a newer UI still maps an older server's error.
+    test: /no startup command found|no Python entrypoint found/i,
     error: { ...copy.errors.noEntrypoint, item: 'entrypoint' },
   },
   {
