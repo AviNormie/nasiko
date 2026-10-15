@@ -14,6 +14,7 @@ import { BarChart3, Info, Table2 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Swatch } from '@/components/shared/chart-marks'
 import { Delta } from '@/components/shared/delta'
+import { useSlots } from '@/app/edition-context'
 import { Announcer } from '@/components/shared/announcer'
 import { useAnnounce } from '@/components/shared/announce'
 import { PanelError } from '@/components/shared/panel'
@@ -65,7 +66,6 @@ import {
 } from '../timeline'
 import { BUILDS_READ, LANE_HEIGHT } from '../tuning'
 import { BucketPanel } from './BucketPanel'
-import { HubBudget } from './HubBudget'
 import { LayerCards } from './LayerCards'
 import { NeedsPanel } from './NeedsPanel'
 import { RecentRuns } from './RecentRuns'
@@ -169,6 +169,8 @@ function Timeline({
   const truncated = dayRows.length > 0 && (dayRows.at(-1)?.end ?? 0) < win.end.getTime()
   // Phones draw weeks (design "Responsive"); the Table view keeps the days.
   const rows = phone && !asTable ? weeklyRows(dayRows) : dayRows
+  // Budgets are Enterprise only: an OSS build has no section here.
+  const HubBudget = useSlots().budgets.HubSection
   const set =
     markers.kind === 'ready' ? markers.set : markers.kind === 'failed' ? markers.set : null
   const flags = set ? flagsFor(set.markers, rows) : []
@@ -395,7 +397,16 @@ function Timeline({
         flows={flows}
       />
       <LayerCards agent={agent} saved={savedTotal} optimizationExtra={optimizationExtra} />
-      <HubBudget agent={agent} />
+      {HubBudget ? (
+        <HubBudget
+          agent={{
+            id: agent.id,
+            name: agent.displayName || agent.name,
+            ownerId: agent.ownerId || null,
+            isHarness: agent.isHarness,
+          }}
+        />
+      ) : null}
     </section>
   )
 }

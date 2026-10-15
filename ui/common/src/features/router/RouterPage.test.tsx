@@ -55,11 +55,14 @@ describe('layout', () => {
   it('shows the tabs in order, with summary tiles that count the rows', async () => {
     renderApp('/router')
     await ready()
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      copy.anchors.agents,
-      copy.anchors.configs,
-      copy.anchors.providers,
-    ])
+    // Budgets are Enterprise only: the EE suite covers the tab appearing once its probe answers (F11).
+    await waitFor(() =>
+      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+        copy.anchors.agents,
+        copy.anchors.configs,
+        copy.anchors.providers,
+      ]),
+    )
     // One tab at a time: Your agents first.
     expect(screen.queryByRole('heading', { name: copy.configsTitle })).toBeNull()
     expect(stripText()).toContain('19 agents')

@@ -45,18 +45,15 @@ describe('the owner’s ledger', () => {
     expect(within(p).getByText('telemetry', { exact: false })).toBeInTheDocument()
   })
 
-  it('previews (context, memory, controls, budgets) are labelled, and controls come only from records', async () => {
+  // The budgets preview is Enterprise only, so the EE suite asserts it
+  // (`ee/web/src/features/budgets/LedgerBudgets.test.tsx`).
+  it('previews (context, memory, controls) are labelled, and controls come only from records', async () => {
     renderApp(ledgerUrl(C4))
     const t = await table()
     expect(screen.getAllByText(copy.rail.preview).length).toBeGreaterThan(0)
     expect(
       within(t).getByText(c.controlLine('Block destructive shell commands', 'blocked', 'bash')),
     ).toBeInTheDocument()
-    const budgets = (await screen.findByRole('heading', { name: c.budgets.title })).closest(
-      'section',
-    ) as HTMLElement
-    expect(within(budgets).getByText(/this session's budget \(\$1\.00\)/)).toBeInTheDocument()
-    expect(within(budgets).getByText(/your \w+ budget/)).toBeInTheDocument()
   })
 
   it('the ledger never edits a control: current settings are links to where they are set', async () => {
@@ -234,29 +231,8 @@ describe('states the review asked for', () => {
     expect(screen.getByText(c.totals.turns(50))).toBeInTheDocument()
   })
 
-  it('budgets: a failure says so, a server without the read hides it, none says none', async () => {
-    configureMocks({ variant: 'router-budgets-fail' })
-    renderApp(ledgerUrl(C4))
-    expect(await screen.findByText(c.budgets.error)).toBeInTheDocument()
-    cleanup()
-    configureMocks({ variant: null })
-    server.use(
-      http.get('/api/budgets/session/:id', () =>
-        HttpResponse.json(
-          { data: null, status_code: 404, message: 'no API route matches' },
-          { status: 404 },
-        ),
-      ),
-    )
-    renderApp(ledgerUrl(C4))
-    await table()
-    await new Promise((r) => setTimeout(r, 200))
-    expect(screen.queryByRole('heading', { name: c.budgets.title })).toBeNull()
-    cleanup()
-    server.use(http.get('/api/budgets/session/:id', () => HttpResponse.json({ data: [] })))
-    renderApp(ledgerUrl(C4))
-    expect(await screen.findByText(c.budgets.none)).toBeInTheDocument()
-  })
+  // The budgets panel's own states (failure, absent route, none) are Enterprise only:
+  // `ee/web/src/features/budgets/LedgerBudgets.test.tsx`.
 
   it('the trace page offers the ledger only on the viewer’s own chat (review: red team)', async () => {
     server.use(

@@ -12,6 +12,7 @@
  * (`GateResult.authorizes`): a refetch racing a revoked grant never draws (review: Codex P1).
  * The server-side gap is a written ask (AH-P0 in docs/designs/openruntime-agent-hub-recommendations.md).
  */
+import { useSlots } from '@/app/edition-context'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   isUnavailable,
@@ -20,10 +21,6 @@ import {
   useVersions,
 } from '@/features/agents/api'
 import { displayStatus } from '@/features/agents/status'
-import { budgetKeys, useBurn } from '@/features/budgets/api'
-import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
-import { burnNeed, burnSentence } from '@/features/budgets/sentence'
-import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
 import {
   historyPages,
   useChatHistory,
@@ -50,19 +47,13 @@ import type {
 } from '@/features/tokenops/types'
 import { resolveWindow, type ResolvedWindow } from '@/features/tokenops/window'
 import { ApiError, apiData, apiFetch, withQuery } from '@/lib/api/client'
-import { isEndpointAbsent } from '@/lib/api/detect'
 import { isPreview } from '@/lib/env'
 import { markersFor, type MarkerSet } from './events'
 import { hubNeeds, sessionSource, type HubNeeds, type HubNeedsInput, type HubSource } from './needs'
 import { agentRows, sampleStart } from './sessions'
 import { EVENTS_READ, SESSION_CHECKS, SESSION_SAMPLE } from './tuning'
 import { buildLedger } from './ledger'
-import {
-  agentEventsSchema,
-  sessionBudgetsSchema,
-  type AgentEvents,
-  type SessionBudget,
-} from './types'
+import { agentEventsSchema, type AgentEvents } from './types'
 
 const FINOPS = '/api/observability/finops'
 
@@ -514,7 +505,8 @@ export function useHubNeeds(
   const sessions = useHubSessions(agent, now)
   const checkedRows = (sessions.data?.rows ?? []).slice(0, SESSION_CHECKS)
   const statuses = useSessionStatuses(checkedRows, now.getTime(), false)
-  const budget = useBudgetNeed(agent, me)
+  // Budgets are Enterprise only: an OSS build reads nothing and the source is absent.
+  const budget = useSlots().budgets.useAgentBudgetNeed(agent, me)
 
   // This agent's pending requests; a superuser's count only once a chat proves them theirs (chat's Waiting rule), and
   // only this agent's unprovable ones hold the verdict back: another agent's say nothing about this one (ISSUE-007).
@@ -577,48 +569,6 @@ export function useHubNeeds(
   }
 }
 
-/**
- * This agent's budget for Needs you (plans/feat-budget-burn.md F8, B5): the Budget section's own burn read (one key, so
- * one request), for its owner or a superuser on a server the probe says has budgets. A harness counts only once it made
- * routed calls this period (F9). Absent for anyone else, without budgets, or without a budget on this agent.
- */
-function useBudgetNeed(
-  agent: { id: string; ownerId: string; isHarness: boolean },
-  me: { sub: string; is_superuser: boolean } | undefined,
-): { state: HubNeedsInput['budget']; retry: () => void } {
-  // The Budget section's own reader rule (B6): its owner, a superuser or EE org admin, or finance.
-  const viewer = useBudgetsViewer().viewer
-  const reader =
-    !!me && !!viewer && (viewer.id === agent.ownerId || viewer.superuser || !!viewer.finance)
-  const caps = useQuery({ ...capabilitiesQuery, enabled: reader })
-  const on = reader && mayHave(caps.data, 'burn')
-  const burn = useBurn({ scope: 'agent', id: agent.id }, { period: 'month' }, on)
-  const retry = () => void (caps.isError ? caps.refetch() : burn.refetch())
-  if (!me) return { state: { state: 'loading' }, retry }
-  if (!reader) return { state: { state: 'absent' }, retry }
-  if (caps.isPending) return { state: { state: 'loading' }, retry }
-  if (caps.isError) return { state: { state: 'failed' }, retry }
-  if (!on) return { state: { state: 'absent' }, retry }
-  if (burn.isError)
-    return {
-      state: isEndpointAbsent(burn.error) ? { state: 'absent' } : { state: 'failed' },
-      retry,
-    }
-  if (!burn.data) return { state: { state: 'loading' }, retry }
-  const b = burn.data
-  if (!b.budget || (agent.isHarness && b.calls === 0)) return { state: { state: 'absent' }, retry }
-  return {
-    state: {
-      state: 'ok',
-      value: {
-        level: burnNeed(b),
-        sentence: burnSentence(b, b.period === 'quarter' ? 'quarter' : 'month'),
-      },
-    },
-    retry,
-  }
-}
-
 // ─── the harness session ledger (PR1b) ─────────────────────────────────────
 
 /**
@@ -644,22 +594,6 @@ export function useLedgerHistory(sessionId: string) {
     notOwner: denied,
     refreshFailed: !denied && q.isRefetchError,
   }
-}
-
-/**
- * The budgets that apply to a session (proposed AH-8, preview only: every budget is the proposed R-L10 contract,
- * decision 35). Read only while the `router` group is a preview; a bare 404 hides the section.
- */
-export function useSessionBudgets(sessionId: string, enabled: boolean) {
-  const path = `/api/budgets/session/${encodeURIComponent(sessionId)}`
-  return useQuery({
-    queryKey: budgetKeys.session(sessionId),
-    queryFn: ({ signal }) =>
-      apiData<SessionBudget[]>(path, { signal, schema: sessionBudgetsSchema }),
-    // Both previews: the budgets are mock seed data, so they never sit beside live messages.
-    enabled: enabled && isPreview('budgets') && isPreview('chat'),
-    meta: { path: '/api/budgets/session/:id' },
-  })
 }
 
 /**

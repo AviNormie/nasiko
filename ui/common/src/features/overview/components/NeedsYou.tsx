@@ -3,6 +3,7 @@
  * the text (design review 9A); five rows show and the rest scroll inside the card (2A); the header always says when
  * it last checked (8A); a failed source adds a line and never turns into "Nothing needs you" (5A).
  */
+import { useSlots } from '@/app/edition-context'
 import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import { Link } from '@tanstack/react-router'
 import { CircleAlert, Hand, TriangleAlert } from 'lucide-react'
@@ -16,7 +17,7 @@ import { rememberRailView } from '@/features/chat/rememberTarget'
 import { cn } from '@/lib/utils'
 import type { NeedsYou as NeedsYouData } from '../api'
 import { copy } from '../copy'
-import type { NeedRow, Severity } from '../needs'
+import { budgetView, type NeedRow, type Severity } from '../needs'
 import { CHECKED_TICK_MS, LAST_WEEK, NEEDS_VISIBLE_ROWS } from '../tuning'
 import { Card, CardError, CardSkeleton, SourceFailed, TOUCH } from './Card'
 
@@ -135,17 +136,9 @@ export function NeedsYou({
             // Five rows show; the list scrolls inside the card after that (design review 2A).
             // Taller on touch, where row actions are 44 px (/ship review): five rows still fit without clipping.
             <ScrollArea className="[&>[data-slot=scroll-area-viewport]]:max-h-70 pointer-coarse:[&>[data-slot=scroll-area-viewport]]:max-h-84 [&>[data-slot=scroll-area-viewport]>div]:block!">
-              {/* Full width on the Overview: from 900 px of card the rows are tiles three across, so a short list never
-                  leaves the card's lower half empty. Narrower they are hairline rows. */}
-              <ul
-                className="grid grid-cols-1 gap-x-3 pr-2.5 @[900px]/card:grid-cols-3 @[900px]/card:gap-y-3"
-                aria-label={copy.needs.title}
-              >
+              <ul className="divide-y divide-border pr-2.5" aria-label={copy.needs.title}>
                 {needs.rows.map((r) => (
-                  <li
-                    key={r.key}
-                    className="border-t border-border first:border-t-0 @[900px]/card:rounded-lg @[900px]/card:border @[900px]/card:bg-muted/20 @[900px]/card:px-3 @[900px]/card:first:border-t"
-                  >
+                  <li key={r.key}>
                     <Row
                       row={r}
                       now={now}
@@ -188,6 +181,8 @@ function Row({
   flowId?: string
 }) {
   const { Icon, tone, detail: detailTone, label } = ICON[row.severity]
+  // Budgets are Enterprise only: an OSS build has no `/budgets` route to link a budget row to.
+  const BudgetsLink = useSlots().budgets.NeedsLink
   let title: string
   let detail: string
   let action: ReactNode
@@ -229,8 +224,14 @@ function Row({
       detail = row.reason
       action = row.budget ? (
         <Action>
-          <Link to="/router" hash="router-budgets" aria-label={copy.needs.budgetsLabel(row.name)}>
-            {copy.needs.budgets}
+          <Link
+            to="/agents/$agentId"
+            params={{ agentId: row.id }}
+            search={{}}
+            hash="hub-budget"
+            aria-label={copy.needs.agentBudgetLabel(row.name)}
+          >
+            {copy.needs.agentBudget}
           </Link>
         </Action>
       ) : (
@@ -246,17 +247,31 @@ function Row({
         </Action>
       )
       break
-    case 'budget':
-      title = copy.needs.budget(row.label, row.state, row.crossed)
-      detail = copy.needs.budgetDetail
-      action = (
+    case 'budget': {
+      const v = budgetView(row)
+      title = v.title
+      detail = v.detail
+      action = row.agentId ? (
         <Action>
-          <Link to="/router" hash="router-budgets" aria-label={copy.needs.budgetsLabel(row.label)}>
-            {copy.needs.budgets}
+          <Link
+            to="/agents/$agentId"
+            params={{ agentId: row.agentId }}
+            search={{}}
+            hash="hub-budget"
+            aria-label={copy.needs.agentBudgetLabel(row.label)}
+          >
+            {copy.needs.agentBudget}
           </Link>
         </Action>
-      )
+      ) : BudgetsLink ? (
+        // Budgets are Enterprise only, and so is `/budgets`: the core cannot type a link to a route it has no
+        // routes for, and a budget row only ever reaches an OSS build if a layer put it there.
+        <Action>
+          <BudgetsLink label={copy.needs.budgets} ariaLabel={copy.needs.budgetsLabel(row.label)} />
+        </Action>
+      ) : null
       break
+    }
     case 'sessions':
       title = copy.needs.sessions(row.failed, row.checked)
       detail = row.agents.join(', ')

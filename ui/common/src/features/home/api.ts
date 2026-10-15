@@ -17,19 +17,13 @@
 import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useSlots } from '@/app/edition-context'
-import type { HomeLevel } from '@/app/edition'
+import type { BudgetsState, HomeLevel } from '@/app/edition'
 import { useAgentsDirectory, useUsers } from '@/features/agents/api'
 import { agentBuildsKey, fetchAgentBuilds } from '@/features/deploy/api'
 import { createLimiter } from '@/features/observability/limiter'
-import { budgetPollEnds, useBudgets, useBudgetStatus } from '@/features/budgets/api'
-import { capabilitiesQuery } from '@/features/budgets/availability'
-import type { Budget, BudgetStatus } from '@/features/budgets/types'
-import { crossingDate } from '@/features/tokenops/forecast'
 import type { FinopsSpendTimeseries } from '@/features/tokenops/types'
 import type { ResolvedWindow } from '@/features/tokenops/window'
 import { ApiError, apiData, withQuery } from '@/lib/api/client'
-import { isEndpointAbsent } from '@/lib/api/detect'
-import { isPreview } from '@/lib/env'
 import { isHarness } from '@/features/agents/status'
 import { usePendingRequests } from '@/features/chat/api'
 import { pendingRequestRows } from '@/features/chat/waiting'
@@ -39,9 +33,9 @@ import type { Range } from '@/features/overview/search'
 import { useDashboard, useSavings } from '@/features/tokenops/api'
 import type { Me } from '@/lib/api/auth'
 import type { AgentPerf } from './charts'
-import { buildRows, needsByAgent, type HomeAgent, type RowBudget } from './rows'
+import { buildRows, needsByAgent, type HomeAgent } from './rows'
 import { isUnitScope, unitOf, type Scope } from './search'
-import { BUDGET_POLL_MS, ROW_READ_STALE_MS, ROW_READS, SAVINGS_ROWS } from './tuning'
+import { ROW_READ_STALE_MS, ROW_READS, SAVINGS_ROWS } from './tuning'
 
 /** Where a source stands for the current window: its numbers are shown only when `ok` (or `stale`, kept and labelled). */
 export type SourceStatus = 'loading' | 'ok' | 'failed' | 'stale'
@@ -76,7 +70,7 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
   const ready = !!fleet.error || (!!fleet.summary && any)
   const needsYou = useNeedsYou(now, me, fleet, ready)
   const pending = usePendingRequests(me.sub, true)
-  const budgets = useHomeBudgets(any, me.sub)
+  const budgets = useSlots().budgets.useHomeBudgets(any, me.sub)
   const org = useOrgLevel(scope, me.sub)
 
   const agents: HomeAgent[] = (dir.data ?? []).map((a) => ({
@@ -197,90 +191,14 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
 // ─── PR2b: budgets, and the reads per row on screen ─────────────────────────────────────────────
 
 /**
- * Where budgets stand: `off` when this server has none (a bare 404) or they aren't a preview here (every budget is
- * the proposed R-L10 contract, so live mode never draws one); `failed` when a read failed without data to keep, or
- * any 401 or 403 (it ends the poll but isn't "not set up"); `stale` when a refresh failed and the last figures stay.
+ * Budgets are an Enterprise feature (docs/requirements/budgets.md): the column's data comes from the `budgets` slot,
+ * and an OSS build's answer is `off` without a request. The shapes stay the core's contract (`app/edition.ts`), so
+ * the table, the phone rows and the header read them exactly as before.
  */
-export type BudgetsState = 'off' | 'loading' | 'failed' | 'stale' | 'ok'
+export type { BudgetsState, HomeBudgets } from '@/app/edition'
 
 /** Budget figures are drawn while they are current or kept from the last successful read. */
 export const budgetsShown = (s: BudgetsState) => s === 'ok' || s === 'stale'
-
-export interface HomeBudgets {
-  state: BudgetsState
-  /** Agent budgets by agent id; null until both reads answered. */
-  byAgent: ReadonlyMap<string, RowBudget> | null
-  /** The viewer's own monthly budget (calls billed to them), when they set one. */
-  own: RowBudget | null
-  /** When the status was last read (the X5 clock and the "updated" stamp). */
-  updatedAt: number
-  /** Mock data (a preview of the contract): the page labels it so. A live server's budgets are not a preview. */
-  preview: boolean
-}
-
-/** Whole cents: a recomputed sum like 0.1 + 0.7 must still meet a $0.80 limit. */
-const cents = (v: number) => Math.round(v * 100)
-
-function rowBudget(b: Budget, st: BudgetStatus, now: Date): RowBudget {
-  const days = st.daily.map((d) => ({ date: d.date, spend_usd: d.cost_usd }))
-  return {
-    used: st.used_usd,
-    limit: b.limit_usd,
-    resetsAt: st.resets_at,
-    unpriced: st.unpriced_calls > 0,
-    // "Limit reached" follows the same figure the cell prints (`used_usd`), never a recomputed sum of the days.
-    crossing:
-      b.limit_usd > 0 && cents(st.used_usd) >= cents(b.limit_usd)
-        ? { kind: 'reached' }
-        : crossingDate(b.limit_usd, days, now),
-  }
-}
-
-function useHomeBudgets(any: boolean, meSub: string): HomeBudgets {
-  const preview = isPreview('budgets')
-  // On a server the availability probe says has budgets (plans/feat-budget-burn.md F11), mock or live.
-  const caps = useQuery({ ...capabilitiesQuery, enabled: any })
-  const on = caps.data?.kind === 'available'
-  // Both reads poll together: a limit changed elsewhere, or a new budget, shows with the next status.
-  const list = useBudgets(on && any, BUDGET_POLL_MS)
-  const status = useBudgetStatus(on && !!list.data?.length, BUDGET_POLL_MS)
-  // A failed probe can't say budgets are off: it reads as failed ("Budgets couldn't load").
-  // Only a bare 404 means the route is absent; a coded one is an answer.
-  const off =
-    !any ||
-    caps.data?.kind === 'absent' ||
-    isEndpointAbsent(list.error) ||
-    isEndpointAbsent(status.error)
-  // A 401 or 403 ends the poll: the figures will never refresh, so they read as failed even when some are kept.
-  const denied = [list.error, status.error].some((e) => budgetPollEnds(e) && !isEndpointAbsent(e))
-  const failed =
-    caps.isError || denied || (list.isError && !list.data) || (status.isError && !status.data)
-  const stale = list.isError || status.isError
-  const state: BudgetsState = off
-    ? 'off'
-    : failed
-      ? 'failed'
-      : caps.isPending || list.isPending || (!!list.data?.length && status.isPending)
-        ? 'loading'
-        : stale
-          ? 'stale'
-          : 'ok'
-  if (!budgetsShown(state) || !list.data)
-    return { state, byAgent: null, own: null, updatedAt: 0, preview }
-  // The status' own read time: the elapsed days and its daily series must agree (router budgets' rule).
-  const now = new Date(status.dataUpdatedAt)
-  const byId = new Map((status.data?.data ?? []).map((s) => [s.budget_id, s]))
-  const byAgent = new Map<string, RowBudget>()
-  let own: RowBudget | null = null
-  for (const b of list.data) {
-    const st = byId.get(b.id)
-    if (!st) continue
-    if (b.scope === 'agent' && b.agent_id) byAgent.set(b.agent_id, rowBudget(b, st, now))
-    // Only the viewer's own: a list that also carries other people's owner budgets never labels theirs "Your budget".
-    else if (b.scope === 'owner' && b.owner_id === meSub) own = rowBudget(b, st, now)
-  }
-  return { state, byAgent, own, updatedAt: status.dataUpdatedAt, preview }
-}
 
 /** Row reads in flight across the page (eng "Home execution table": `ROW_READS`). */
 const rowLimiter = createLimiter(ROW_READS)

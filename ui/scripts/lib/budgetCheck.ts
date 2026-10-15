@@ -24,8 +24,8 @@ import {
   traceListSchema,
   unbudgetedListSchema,
   versionListSchema,
-} from '../../common/src/features/budgets/types.ts'
-import { SCENARIO_IDS as I } from '../../common/src/mocks/seed-budgets.ts'
+} from '../../ee/web/src/features/budgets/types.ts'
+import { SCENARIO_IDS as I } from '../../ee/web/src/mocks/seed-budgets.ts'
 
 const DAY = 86_400_000
 const day = (t: number) => new Date(t).toISOString().slice(0, 10)

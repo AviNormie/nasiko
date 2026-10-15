@@ -12,8 +12,7 @@
  * 640 px; PR2c the EE levels; PR2d the chart band between the strip and the table (`components/ChartBand`), whose health
  * bar filters the table (`?health=`).
  */
-import { readsFleet } from '@/features/budgets/scope'
-import { useBudgetsViewer } from '@/features/budgets/useBudgetsViewer'
+import { useSlots } from '@/app/edition-context'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
@@ -55,8 +54,6 @@ import { copy } from './copy'
 import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import { isUnitScope, type HomeSearch, type Scope } from './search'
-import { useBurn, type ScopeRef } from '@/features/budgets/api'
-import { capabilitiesQuery, mayHave } from '@/features/budgets/availability'
 import {
   BAND_SKELETON_PX,
   PHONE_QUERY,
@@ -69,8 +66,6 @@ import { useBudgetStamp } from './useBudgetStamp'
 
 /** The chart band is its own chunk (PR2d, #63): the chart kit loads only when it draws. */
 const ChartBand = lazy(() => import('./components/ChartBand'))
-// Its own chunk too: the burn chart loads only once the burn read answered (plans/feat-budget-burn.md F10, D13).
-const BudgetBurnPanel = lazy(() => import('@/features/budgets/components/BudgetBurnPanel'))
 
 type SetSearch = (patch: Partial<HomeSearch>, opts?: { replace?: boolean }) => void
 
@@ -184,48 +179,15 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       })
     : null
 
-  // Budget burn (plans/feat-budget-burn.md F10, D13): the scope's burn read; the panel replaces Spend · Over time only
-  // once it answers. Fleet is the org's for a fleet reader (a superuser, or EE's org admin or finance, B6); a member's
-  // Fleet is only what's shared with them. Yours is the account the budgets viewer speaks for.
-  const caps = useQuery(capabilitiesQuery)
-  const budgetsViewer = useBudgetsViewer(caps.data?.kind === 'available').viewer
-  const burnRef: ScopeRef | null =
-    scope === 'fleet'
-      ? (budgetsViewer ? readsFleet(budgetsViewer) : me.is_superuser)
-        ? { scope: 'org', id: null }
-        : null
-      : scope === 'yours'
-        ? { scope: 'owner', id: budgetsViewer?.id ?? me.sub }
-        : unit
-          ? { scope: 'unit', id: scope.slice('unit:'.length) }
-          : null
-  const burn = useBurn(
-    burnRef ?? { scope: 'org', id: null },
-    { period: 'month' },
-    !!burnRef && mayHave(caps.data, 'burn'),
-  )
-  // Until the probe and the burn answer, the panel's row is held and Over time waits (D13: no swap mid-look).
-  const burnPending =
-    !!burnRef && (caps.isPending || (mayHave(caps.data, 'burn') && burn.isPending))
-  const burnPanel =
-    burnRef && burn.data ? (
-      <BudgetBurnPanel
-        burn={burn.data}
-        scopeRef={burnRef}
-        scopeName={
-          scope === 'fleet'
-            ? copy.budgetBurn.fleet
-            : scope === 'yours'
-              ? copy.budgetBurn.yours
-              : (home.org.level?.label ?? copy.budgetBurn.unit)
-        }
-        // A unit opens its own scope on /budgets (B6); every scope Home shows is one /budgets reads.
-        scopeParam={scope ?? undefined}
-        yours={scope === 'yours'}
-        viewerId={budgetsViewer?.id ?? me.sub}
-        atRisk={mayHave(caps.data, 'at_risk')}
-      />
-    ) : null
+  // Budget burn (plans/feat-budget-burn.md F10, D13): budgets are Enterprise only, so the panel is the layer's. It
+  // still reports `pending`, because the band holds its row and withholds Over time until it answers (no swap
+  // mid-look), and an OSS build answers "no panel, not pending" without a request.
+  const { node: burnPanel, pending: burnPending } = useSlots().budgets.useHomePanel({
+    scope,
+    meSub: me.sub,
+    isSuperuser: me.is_superuser,
+    unitLabel: home.org.level?.label ?? null,
+  })
 
   // The health bar narrows the table only (#62): the strip and the charts keep the whole scope.
   const health = search.health

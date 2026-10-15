@@ -9,6 +9,8 @@
  *   live mode. Live, Context and Memory read "not reported".
  * - The ledger never edits a control: "Controls set now" links to where each is set.
  */
+import type { Slots } from '@/app/edition'
+import { useSlots } from '@/app/edition-context'
 import { Link } from '@tanstack/react-router'
 import { Download, ListTree } from 'lucide-react'
 import { useEffect, useRef } from 'react'
@@ -30,22 +32,11 @@ import { useSessionDetail } from '@/features/sessions/api'
 import type { TraceSearch } from '@/features/sessions/search'
 import { downloadCsv } from '@/features/tokenops/csv'
 import { Crumbs } from '@/features/trace/Crumbs'
-import { isEndpointAbsent } from '@/lib/api/detect'
 import { isPreview } from '@/lib/env'
 import { fmtMoney, fmtMoneyFloor, fmtTokens, fmtUtcDayTime, fmtUtcTime } from '@/lib/format'
-import { useLedgerHistory, useSessionBudgets } from '../api'
-import { LedgerBudget } from './LedgerBudget'
+import { useLedgerHistory } from '../api'
 import { copy } from '../copy'
-import {
-  budgetLines,
-  ledgerCsv,
-  runningShare,
-  tightest,
-  type BudgetLine,
-  type Ledger,
-  type LedgerTurn,
-  type Total,
-} from '../ledger'
+import { ledgerCsv, type Ledger, type LedgerTurn, type Total } from '../ledger'
 import { RetryLine } from './RetryLine'
 
 const c = copy.ledger
@@ -53,10 +44,10 @@ const LINK =
   'inline-flex items-center text-sm text-primary-text underline-offset-4 hover:underline pointer-coarse:min-h-11'
 const pct = (v: number) =>
   v > 0 && v < 0.1 ? '<0.1%' : `${v < 1 && v > 0 ? v.toFixed(1) : Math.round(v)}%`
-const monthOf = (period: string) =>
-  new Date(`${period}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
 
 export function LedgerPage({ sessionId, search }: { sessionId: string; search: TraceSearch }) {
+  // Budgets are Enterprise only: an OSS build has no session budget here, and no per-turn budget column.
+  const { LedgerSection: LedgerBudget, useLedgerBudgets } = useSlots().budgets
   const { query, ledger, complete, notOwner, refreshFailed } = useLedgerHistory(sessionId)
   const session = useSessionDetail(sessionId)
   const chats = useChatSessions()
@@ -82,7 +73,7 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
     (agent ? isHarness(agent) : false) ||
     !!ledger?.turns.some((t) => t.tools.length)
   const costHeader = harness ? c.estCost : c.cost
-  const budgets = useSessionBudgets(sessionId, !!ledger && !notOwner)
+  const budgets = useLedgerBudgets(sessionId, !!ledger && !notOwner)
 
   const back = {
     ...pickShared(search),
@@ -166,7 +157,9 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
         />
       ) : null}
       {/* The session's own budget (plans/feat-budget-burn.md F9, B5): its burn on its turns and its limit. */}
-      <LedgerBudget sessionId={sessionId} title={title} ownSession={!!row} />
+      {LedgerBudget ? (
+        <LedgerBudget sessionId={sessionId} title={title} ownSession={!!row} />
+      ) : null}
     </div>
   )
 }
@@ -186,7 +179,7 @@ function LedgerBody({
   ledger: Ledger
   costHeader: string
   complete: boolean
-  budgets: ReturnType<typeof useSessionBudgets>
+  budgets: ReturnType<Slots['budgets']['useLedgerBudgets']>
   olderPending: boolean
   olderError: boolean
   onOlder: () => void
@@ -204,10 +197,9 @@ function LedgerBody({
   }, [complete])
   // Times carry the date when the turns span more than one UTC day.
   const days = new Set(ledger.turns.map((x) => x.at.slice(0, 10)))
-  const lines = budgets.data ? budgetLines(budgets.data) : []
-  const top = tightest(lines)
-  // A budget's running share needs its use before the session; otherwise the column would understate it.
-  const shares = top && top.beforePct !== null ? runningShare(top) : null
+  // Budgets are Enterprise only: an OSS build reads nothing here and the column, the headline and the panel are
+  // all absent. A budget's running share needs its use before the session, which the layer applies.
+  const { shares, headline: budgetHeadline, panel: budgetPanel } = budgets
   const t = ledger.totals
   return (
     <>
@@ -227,15 +219,7 @@ function LedgerBody({
         <span className="tabular-nums">
           {costHeader}: {totalText(t.cost, t.turns, fmtMoney)}
         </span>
-        {top ? (
-          <span className="tabular-nums">
-            {c.budgetUse}:{' '}
-            {top.beforePct === null
-              ? c.budgetSessionOnly(pct(top.sessionPct))
-              : pct(top.beforePct + top.sessionPct)}{' '}
-            <Badge variant="outline">{copy.rail.preview}</Badge>
-          </span>
-        ) : null}
+        {budgetHeadline}
         <span className="text-xs text-muted-foreground">
           {complete ? c.totals.complete : c.totals.subtotal}
         </span>
@@ -293,9 +277,7 @@ function LedgerBody({
 
       {ledger.unplaced.length ? <Unplaced steps={ledger.unplaced} /> : null}
 
-      {isPreview('budgets') && !budgets.isPending ? (
-        <Budgets budgets={budgets} lines={lines} />
-      ) : null}
+      {budgetPanel}
 
       <ControlsNow agentId={agentId} />
     </>
@@ -471,60 +453,6 @@ function Unplaced({ steps }: { steps: RecordedStep[] }) {
       <Tools steps={steps} />
     </Panel>
   )
-}
-
-function Budgets({
-  budgets,
-  lines,
-}: {
-  budgets: ReturnType<typeof useSessionBudgets>
-  lines: BudgetLine[]
-}) {
-  // A server without the read (bare 404) shows nothing; any other failure says so.
-  if (budgets.isError)
-    return isEndpointAbsent(budgets.error) ? null : (
-      <Panel title={c.budgets.title} actions={<Badge variant="outline">{copy.rail.preview}</Badge>}>
-        <p className="m-0 text-sm text-destructive">{c.budgets.error}</p>
-      </Panel>
-    )
-  const top = tightest(lines)
-  return (
-    <Panel title={c.budgets.title} actions={<Badge variant="outline">{copy.rail.preview}</Badge>}>
-      {lines.length ? (
-        <ul className="m-0 flex list-none flex-col gap-1 p-0 text-sm">
-          {lines.map((l) => (
-            <li key={l.budget.budget_id} className="flex flex-wrap items-center gap-2">
-              <span>
-                {c.budgets.used(pct(l.sessionPct), budgetName(l))}
-                {l.budget.scope === 'session'
-                  ? c.budgets.period
-                  : l.beforePct === null
-                    ? c.budgets.beforeNotRecorded
-                    : c.budgets.before(pct(l.beforePct))}
-              </span>
-              {l === top && lines.length > 1 ? (
-                <Badge variant="secondary">{c.budgets.tightest}</Badge>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="m-0 text-sm text-muted-foreground">{c.budgets.none}</p>
-      )}
-    </Panel>
-  )
-}
-
-const budgetName = (l: BudgetLine): string => {
-  const month = l.budget.period ? monthOf(l.budget.period) : ''
-  const limit = fmtMoney(l.budget.limit_usd)
-  const name =
-    l.budget.scope === 'session'
-      ? c.budgets.session
-      : l.budget.scope === 'agent'
-        ? c.budgets.agent(month)
-        : c.budgets.owner(month)
-  return `${name} (${limit})`
 }
 
 function ControlsNow({ agentId }: { agentId: string | null }) {

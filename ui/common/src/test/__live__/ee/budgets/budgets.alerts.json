@@ -1,13 +1,13 @@
 {
   "fixture_version": 1,
-  "id": "budgets.status",
+  "id": "budgets.alerts",
   "recorded_at": "2026-09-29T05:55:37.019Z",
   "window": {
     "start": "2026-09-29T05:55:37.019Z",
-    "end": "2026-09-29T05:55:37.019Z"
+    "end": "2026-09-29T05:55:37.020Z"
   },
   "anchor": "2026-09-29T05:55:34.182Z",
-  "edition": "oss",
+  "edition": "ee",
   "identity": "admin",
   "server": {
     "sha": "ea233d201502a205e78339a7cb2688856b9ec2fa",
@@ -17,14 +17,14 @@
   },
   "request": {
     "method": "GET",
-    "path": "/api/budgets/status",
+    "path": "/api/budgets/alerts",
     "query": {}
   },
   "status": 404,
   "content_type": "application/json",
   "body": {
     "data": null,
-    "message": "no API route matches /api/budgets/status",
+    "message": "no API route matches /api/budgets/alerts",
     "status_code": 404
   }
 }
