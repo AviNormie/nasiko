@@ -112,7 +112,6 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         agent_registry_username: None,
         agent_registry_password: None,
         build_push_token: String::new(),
-        injection_proxy_token: String::new(),
         seed_agents: None,
         // Dummy but non-empty — ee build_ee_app requires Some(), and a
         // non-empty api_key is also what lets Stage 1 (VectorStore) attempt
