@@ -549,7 +549,7 @@ pub(crate) async fn orchestrator_stream(
     // `A2aTool::call()`, a lower-level OSS crate with no path to this EE-installed context)
     // carries its own L1A separately, injected by the EE injection proxy that
     // `forwarding_endpoint()` routes every outbound forward through — see
-    // `ee/server/src/injection_proxy.rs`. The planner preamble can't move to that proxy because
+    // the edition's forwarding hop. The planner preamble can't move to that proxy because
     // it isn't an outbound forward at all; it's text folded into the LLM's own prompt before any
     // agent is chosen.
     // From `agents` (the post-endpoint-resolution roster actually rendered below), not
@@ -2606,7 +2606,7 @@ mod build_preamble_tests {
 }
 
 /// `append_org_policy_part` is `agent_stream`'s half of the marker-splicing fix — the other half
-/// (L1A, at the EE injection proxy) is pinned by `ee/server/tests/injection_proxy.rs`. These
+/// (L1A, at the EE injection proxy) is pinned by that hop's own tests. These
 /// don't need a live agent or the EE proxy: `append_org_policy_part` operates purely on an
 /// in-memory `JsonRpcRequest`, so they run hermetically.
 #[cfg(test)]
