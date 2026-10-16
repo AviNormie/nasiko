@@ -75,8 +75,11 @@ const names = () =>
 const pager = () => screen.queryByRole('navigation', { name: /pagination/i })
 
 describe('AttributionTable paging', () => {
-  it('shows every row and no pager without a page size, as on the TokenOps page', () => {
+  it('shows the top rows and Show all, never a pager, without a page size (the TokenOps page)', async () => {
     show()
+    expect(names()).toHaveLength(10)
+    expect(pager()).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Show all 23' }))
     expect(names()).toHaveLength(23)
     expect(pager()).not.toBeInTheDocument()
   })

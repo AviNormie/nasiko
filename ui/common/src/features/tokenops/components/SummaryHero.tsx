@@ -13,6 +13,7 @@
 import { area, curveMonotoneX, line } from 'd3-shape'
 import { m } from 'motion/react'
 import type { ReactNode } from 'react'
+import { useSlots } from '@/app/edition-context'
 import { SpotlightCard } from '@/components/aceternity/spotlight-card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -71,6 +72,8 @@ export function SummaryHero({
   /** The savings strip, the bento's last row. */
   children?: ReactNode
 }) {
+  // Budgets are Enterprise only: the link is the layer's, and an OSS build has neither it nor the route.
+  const OpenBudgets = useSlots().budgets.OpenLink
   if (error) return <PanelError error={error} onRetry={onRetry} what="the summary" />
   const kpis = data?.kpis
   const delta = (k: KpiValue | undefined, polarity: Polarity) =>
@@ -107,6 +110,11 @@ export function SummaryHero({
           />
           <Tile
             label="Month-end at pace"
+            aside={
+              // Budgets count their own populations, not this page's trace_usage, so only a link — and only where
+              // the edition has budgets and the server serves them (the layer's own probe).
+              OpenBudgets ? <OpenBudgets /> : null
+            }
             value={
               month?.show && month.low !== null && month.high !== null ? (
                 <>

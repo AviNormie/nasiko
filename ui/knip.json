@@ -53,7 +53,7 @@
         "src/**/*.test.{ts,tsx}",
         "src/test/**/*.ts",
         "src/**/*.stories.tsx",
-        "src/features/router/components/Budget*.tsx"
+        "src/features/budgets/components/Budget*.tsx"
       ],
       "project": [
         "src/**/*.{ts,tsx}"

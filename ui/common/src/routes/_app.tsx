@@ -48,10 +48,13 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const { navHidden, shellEnd: ShellEnd, shellSplit } = useSlots()
+  const slots = useSlots()
+  const { navHidden, shellEnd: ShellEnd, shellSplit } = slots
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
   const path = useRouterState({ select: (s) => s.location.pathname })
+  // Budgets are Enterprise only: an OSS build has no item to hide, and EE hides its own while the probe is out.
+  const budgetsHidden = slots.budgets.useNavHidden()
   return (
     <AppShell
       split={shellSplit}
@@ -63,7 +66,7 @@ function AppLayout() {
           {ShellEnd ? <ShellEnd path={path} /> : null}
         </>
       }
-      hidden={[...guideHidden, ...layerHidden]}
+      hidden={[...guideHidden, ...layerHidden, ...budgetsHidden]}
       badges={
         building
           ? { '/agents': { count: building, label: deployCopy.toast.agentsBadge(building) } }

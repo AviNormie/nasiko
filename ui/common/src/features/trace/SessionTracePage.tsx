@@ -9,7 +9,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
-import { Link2, ListTree, Table2, Workflow } from 'lucide-react'
+import { Link2, ListTree, Rows3, Table2, Workflow } from 'lucide-react'
 import { useDeferredValue, useMemo, useState } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/shared/state-card'
 import { SearchInput } from '@/components/shared/search-input'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/toggle'
+import { useChatProbe } from '@/features/chat/api'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
 import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import {
@@ -54,6 +55,7 @@ import { IN_PROGRESS_MS } from '@/features/observability/tuning'
 import type { TraceDetail, TraceEntry } from '@/features/observability/types'
 import { AgentLink } from '@/features/agents/components/AgentLink'
 import { useAgentsDirectory } from '@/features/agents/api'
+import { isHarness } from '@/features/agents/status'
 import { requestSpanOf } from '@/features/optimization/logic'
 import { sessionKeys, useSessionDetail } from '@/features/sessions/api'
 import type { SessionsSearch, TraceSearch } from '@/features/sessions/search'
@@ -306,6 +308,10 @@ export function SessionTracePage({
   const agentLabel = agentRaw
     ? (agents.byName.get(agentRaw)?.display_name ?? agentRaw)
     : copy.unknownAgent
+  const agentRow = agentRaw ? agents.byName.get(agentRaw) : undefined
+  const agentIsHarness = !!agentRow && isHarness(agentRow)
+  // The ledger reads the chat's messages, which only its owner can: chat's own probe (shared with Open chat) says so.
+  const ownChat = useChatProbe(sessionId, agentIsHarness).state === 'yours'
   const sessionCost = session.data?.cost_summary.total.cost
   const numTraces = session.data?.num_traces ?? traces.length
   const firstStart = traces[0]?.root_span.start_time
@@ -374,6 +380,17 @@ export function SessionTracePage({
         }
         actions={
           <>
+            {agentIsHarness && ownChat ? (
+              <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
+                <Link
+                  to="/sessions/$sessionId"
+                  params={{ sessionId }}
+                  search={{ ...search, view: 'ledger' }}
+                >
+                  <Rows3 className="size-3.5" aria-hidden /> {copy.openLedger}
+                </Link>
+              </Button>
+            ) : null}
             <OpenChatLink sessionId={sessionId} />
             {/* The selected trace's flow: a flow's id is its trace id (plans/feat-flows.md F19). */}
             {traceId ? <OpenFlowLink flowId={traceId} /> : null}

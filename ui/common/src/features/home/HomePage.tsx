@@ -226,6 +226,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         value={scope === 'yours' || scope === 'fleet' ? scope : ''}
         onValueChange={(v) => v && change({ scope: v as Scope })}
         aria-label={copy.scope.label}
+        data-tour="home-scope"
       >
         <ToggleGroupItem
           value="yours"
@@ -285,6 +286,7 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           v && change({ range: v === DEFAULT_RANGE ? undefined : (v as HomeSearch['range']) })
         }
         aria-label={overviewCopy.range.label}
+        data-tour="overview-range"
       >
         {RANGES.map((r) => (
           <ToggleGroupItem
@@ -464,10 +466,14 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
               </Button>
             </div>
           ) : null}
-          {!shown?.length ? null : phone ? (
-            <PhoneRows {...rowsProps} />
-          ) : (
-            <RowsTable {...rowsProps} sort={sort} onSort={setSort} />
+          {!shown?.length ? null : (
+            <div data-tour="home-rows">
+              {phone ? (
+                <PhoneRows {...rowsProps} />
+              ) : (
+                <RowsTable {...rowsProps} sort={sort} onSort={setSort} />
+              )}
+            </div>
           )}
         </>
       )}
@@ -500,7 +506,11 @@ function Strip({
   const own = scope === 'yours' && budgetsShown(budgets.state) ? budgets.own : null
   const stamp = useBudgetStamp(budgets.updatedAt)
   return (
-    <section aria-label={copy.strip.label} className="flex flex-col gap-1">
+    <section
+      aria-label={copy.strip.label}
+      data-tour="overview-summary"
+      className="flex flex-col gap-1"
+    >
       <div
         className={`grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border *:rounded-none *:border-0 ${own ? '@[560px]/overview:grid-cols-2 @[880px]/overview:grid-cols-4' : '@[560px]/overview:grid-cols-3'}`}
       >

@@ -385,7 +385,9 @@ export function sessionDetail(seed: Seed, s: MockSession): SessionDetail {
  *
  * Served entirely from SQL on the real server (`observability/sessions_sql.rs`),
  * so `status`, `end_time`, `cursor` and `matching_count` are all applied here
- * rather than implied by trace lookups.
+ * rather than implied by trace lookups. `extra` rows are other chat_sessions
+ * (recorded harness chats, DB-only summaries) merged in before paging, as the
+ * server lists them all.
  */
 export function sessionList(
   seed: Seed,
@@ -399,6 +401,7 @@ export function sessionList(
   },
   now: number,
   tempoDown = false,
+  extra: readonly SessionSummary[] = [],
 ) {
   const parsed = p.start_time ? Date.parse(p.start_time) : Number.NaN
   const start = Number.isNaN(parsed) ? now - 7 * 86_400_000 : parsed
@@ -407,13 +410,16 @@ export function sessionList(
   const limit = Math.min(100, Math.max(1, Number.parseInt(p.limit ?? '', 10) || 25))
   const data = observabilityData(seed)
 
-  const inWindow = data.sessions.filter((s) => s.created >= start && s.created <= end)
   // The filter is applied before paging, as it is in SQL — so `matching_count`
   // counts every match in the window, not the rows that fit on this page.
-  const summaries = inWindow.map((s) => ({
-    s,
-    row: sessionSummary(seed, s, start, now, tempoDown),
-  }))
+  const summaries = [
+    ...data.sessions
+      .filter((s) => s.created >= start && s.created <= end)
+      .map((s) => ({ created: s.created, row: sessionSummary(seed, s, start, now, tempoDown) })),
+    ...extra
+      .map((x) => ({ created: Date.parse(x.start_time ?? ''), row: x }))
+      .filter((x) => x.created >= start && x.created <= end),
+  ].sort((a, b) => b.created - a.created)
   const matching = p.status ? summaries.filter((x) => x.row.status === p.status) : summaries
 
   // `cursor` is the keyset anchor; `offset` is still accepted (the Sessions page

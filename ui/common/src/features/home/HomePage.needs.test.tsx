@@ -5,7 +5,7 @@
  */
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { delay, http, HttpResponse } from 'msw'
+import { bypass, delay, http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { clearChatRegistry } from '@/features/chat/registry'
 import { copy as deployCopy } from '@/features/deploy/copy'
@@ -153,16 +153,20 @@ describe('Needs you', () => {
     expect(within(needs()).getByText(/^Checked /)).toBeInTheDocument()
   })
 
-  it('status-checks at most the newest 25 sessions (eng R7)', async () => {
+  it('reads session status from the list, with no per-session or per-trace fan-out', async () => {
     const rec = recordRequests()
     renderApp('/?scope=yours')
     await settled()
     rec.stop()
-    const details = new Set(
-      rec.urls.map((u) => u.pathname).filter((p) => /\/session\/(?!list)[^/]+$/.test(p)),
-    )
-    expect(details.size).toBeGreaterThan(0)
-    expect(details.size).toBeLessThanOrEqual(25)
+    const paths = rec.urls.map((u) => u.pathname)
+    // `session/list` carries `status`, so Needs you no longer downloads a session detail (and its traces) per row.
+    expect(paths.filter((p) => /\/session\/(?!list)[^/]+$/.test(p))).toEqual([])
+    expect(paths.filter((p) => p.includes('/trace/'))).toEqual([])
+    expect(
+      rec.urls.some(
+        (u) => u.pathname.endsWith('/session/list') && u.searchParams.get('status') === 'failed',
+      ),
+    ).toBe(true)
   })
 })
 
@@ -184,27 +188,27 @@ describe('ratings', () => {
     expect(within(t).queryByText(c.rating.healthy)).toBeNull()
   })
 
-  it('previous week down: no agent is called Healthy on missing comparisons', async () => {
-    let calls = 0
+  it('no comparison data: no agent is called Healthy', async () => {
+    // The previous week rides on the current dashboard (`compare=previous`); a server that answers without
+    // `previous` must rate Unknown, never Healthy.
+    let served = 0
     server.use(
-      http.get('*/api/observability/finops/dashboard', ({ request }) => {
-        // The previous-week window is the only rating read with explicit bounds: fail every call with start_time.
-        if (new URL(request.url).searchParams.get('start_time')) {
-          calls++
-          return new HttpResponse('boom', { status: 500 })
-        }
-        return undefined
+      http.get('*/api/observability/finops/dashboard', async ({ request }) => {
+        if (new URL(request.url).searchParams.get('compare') !== 'previous') return undefined
+        served++
+        const res = await fetch(bypass(request))
+        const body = (await res.json()) as { data: { agents: Record<string, unknown>[] } }
+        body.data.agents = body.data.agents.map(({ previous: _previous, ...rest }) => rest)
+        return HttpResponse.json(body)
       }),
     )
     renderApp('/?scope=yours')
     const t = await table()
     await waitFor(
       () => expect(within(t).getAllByText(c.rating.unknown).length).toBeGreaterThan(0),
-      {
-        timeout: 8000,
-      },
+      { timeout: 8000 },
     )
-    expect(calls).toBeGreaterThan(0)
+    expect(served).toBeGreaterThan(0)
     expect(within(t).queryByText(c.rating.healthy)).toBeNull()
   })
 
