@@ -538,6 +538,7 @@ pub(crate) async fn resolve_routed_request(
             tier3_model: resolved.tier3_model.as_deref(),
             signals: &boundary,
             query: signals.query.as_deref(),
+            tier_seed: ctx.cfg.router_tier_seed,
         },
     )
     .await;
