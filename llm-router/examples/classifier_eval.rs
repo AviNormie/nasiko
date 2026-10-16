@@ -9,27 +9,29 @@
 //! per case to `OUT`: `{"id","request_type","complexity","confidence","latency_us"}`.
 //!
 //! Backend selection uses the router's own configuration and builder
-//! ([`GatewayConfig::from_env`] + [`build_classifier`]), so this exercises the exact code path
-//! the router runs, including timeout, regex fallback and the low-confidence safe default:
+//! ([`GatewayConfig::from_env`] + `build_guarded_classifier`, which `build_classifier` wraps), so
+//! this exercises the exact code path the router runs, including timeout, regex fallback and the
+//! low-confidence safe default:
 //!
 //! | env | meaning |
 //! |---|---|
 //! | `CLASSIFIER_BACKEND` | `regex` (default) \| `local` \| `hosted` |
-//! | `CLASSIFIER_MODEL_PATH` | `local`: JSONL training set instead of the embedded one |
+//! | `CLASSIFIER_MODEL_PATH` | `local`: weights JSON file instead of the embedded weights |
 //! | `CLASSIFIER_ENDPOINT` / `CLASSIFIER_MODEL` / `CLASSIFIER_API_KEY` | `hosted` |
 //! | `CLASSIFIER_TIMEOUT_MS` | per-decision budget (default 250) |
 //! | `CLASSIFIER_MIN_CONFIDENCE` | below this, answer `general` (default 0 = off) |
 //!
 //! The model is built once before the loop; `latency_us` times only `classify`. A summary
-//! (p50/p95, fallback counts and, when the set carries labels, accuracy and ECE) goes to stderr.
+//! (p50/p95, the guard's fallback counts and, when the set carries labels, accuracy and ECE) goes to stderr.
 //! Exit code 0 means the eval ran.
 
 use std::io::Write;
 use std::time::Instant;
 
-use nasiko_llm_router::GatewayConfig;
-use nasiko_llm_router::build_classifier;
-use nasiko_llm_router::routing::{ClassifyInput, RequestClassifier};
+use std::sync::Arc;
+
+use nasiko_llm_router::routing::{ClassifyInput, RegexClassifier, RequestClassifier};
+use nasiko_llm_router::{GatewayConfig, build_guarded_classifier};
 use serde_json::{Value, json};
 
 #[tokio::main]
@@ -44,7 +46,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = GatewayConfig::from_env();
     // Load once, before timing anything.
     let load_start = Instant::now();
-    let classifier = build_classifier(&cfg, reqwest::Client::new());
+    // The guard is kept (not just the trait object) so its fallback counters can be reported;
+    // `None` is the bare regex classifier, exactly as `build_classifier` resolves it.
+    let guard = build_guarded_classifier(&cfg, reqwest::Client::new());
+    let classifier: Arc<dyn RequestClassifier> = match &guard {
+        Some(g) => g.clone(),
+        None => Arc::new(RegexClassifier),
+    };
     let load_ms = load_start.elapsed().as_secs_f64() * 1e3;
 
     let mut out = std::io::BufWriter::new(std::fs::File::create(&out_path)?);
@@ -68,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(c) => c,
             Err(_) => {
                 fallbacks += 1;
-                nasiko_llm_router::routing::RegexClassifier
+                RegexClassifier
                     .classify(&ClassifyInput { query, context })
                     .await
                     .expect("regex is infallible")
@@ -111,9 +119,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pct(0.95),
         lat.last().copied().unwrap_or(0)
     );
-    eprintln!(
-        "harness_fallbacks={fallbacks} (guard fallbacks are counted inside the router build)"
-    );
+    match &guard {
+        Some(g) => {
+            let s = g.stats();
+            eprintln!(
+                "guard calls={} errors={} timeouts={} low_confidence={} fallback_rate={:.4} harness_fallbacks={fallbacks}",
+                s.calls,
+                s.errors,
+                s.timeouts,
+                s.low_confidence,
+                s.fallback_rate()
+            );
+        }
+        None => eprintln!(
+            "guard=none (bare regex classifier: nothing to fall back from) harness_fallbacks={fallbacks}"
+        ),
+    }
     if labelled > 0 {
         let ece: f64 = bins
             .iter()

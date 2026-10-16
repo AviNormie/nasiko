@@ -153,33 +153,52 @@ impl LlmRouterCtx {
 /// the router and the `classifier_eval` example so both exercise the same path.
 ///
 /// `regex` (default / unknown value) is returned bare so default behaviour is untouched; `local`
-/// and `hosted` are wrapped in a [`routing::GuardedClassifier`] (timeout, regex fallback,
-/// low-confidence safe default). A `local` training-set load failure or a `hosted` config with
-/// no endpoint degrades to regex with a warning, never an outage.
+/// and `hosted` are wrapped in a [`routing::GuardedClassifier`] (see [`build_guarded_classifier`]).
 pub fn build_classifier(
     cfg: &GatewayConfig,
     http: reqwest::Client,
 ) -> Arc<dyn routing::RequestClassifier> {
+    match build_guarded_classifier(cfg, http) {
+        Some(guard) => guard,
+        None => Arc::new(routing::RegexClassifier),
+    }
+}
+
+/// The configured model backend behind its [`routing::GuardedClassifier`] (timeout, regex
+/// fallback, low-confidence safe default), or `None` when routing uses the bare regex
+/// classifier: `CLASSIFIER_BACKEND=regex` / unknown, a `local` model that fails to load, or a
+/// `hosted` config with no endpoint (the last two log a warning — a degrade, never an outage).
+///
+/// Returned concretely so a caller that needs the guard's fallback counters (the
+/// `classifier_eval` example) can read [`routing::GuardedClassifier::stats`].
+pub fn build_guarded_classifier(
+    cfg: &GatewayConfig,
+    http: reqwest::Client,
+) -> Option<Arc<routing::GuardedClassifier>> {
     use routing::{
-        GuardedClassifier, RegexClassifier, classifier_hosted::HostedClassifier,
-        classifier_local::LocalClassifier,
+        GuardedClassifier, classifier::linear::LinearClassifier,
+        classifier_hosted::HostedClassifier,
     };
     let timeout = Duration::from_millis(cfg.classifier_timeout_ms.max(1));
     let min_conf = cfg.classifier_min_confidence;
     let inner: Arc<dyn routing::RequestClassifier> = match cfg.classifier_backend.as_str() {
         "local" => {
-            let model = if cfg.classifier_model_path.is_empty() {
-                Ok(LocalClassifier::embedded())
+            let (source, model) = if cfg.classifier_model_path.is_empty() {
+                ("embedded", LinearClassifier::embedded())
             } else {
-                std::fs::read_to_string(&cfg.classifier_model_path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| LocalClassifier::from_jsonl(&s))
+                (
+                    cfg.classifier_model_path.as_str(),
+                    LinearClassifier::from_path(&cfg.classifier_model_path),
+                )
             };
             match model {
-                Ok(m) => Arc::new(m),
+                Ok(m) => {
+                    tracing::info!(target: "nasiko::llm_router::startup", weights_source = source, provenance = %m.provenance(), "classifier: local model loaded");
+                    Arc::new(m)
+                }
                 Err(e) => {
-                    tracing::warn!(target: "nasiko::llm_router::startup", error = %e, "classifier: local model load failed; using regex");
-                    return Arc::new(RegexClassifier);
+                    tracing::warn!(target: "nasiko::llm_router::startup", weights_source = source, error = %e, "classifier: local model load failed; using regex");
+                    return None;
                 }
             }
         }
@@ -191,12 +210,12 @@ pub fn build_classifier(
         )),
         "hosted" => {
             tracing::warn!(target: "nasiko::llm_router::startup", "classifier: hosted backend needs CLASSIFIER_ENDPOINT; using regex");
-            return Arc::new(RegexClassifier);
+            return None;
         }
-        _ => return Arc::new(RegexClassifier),
+        _ => return None,
     };
     tracing::info!(target: "nasiko::llm_router::startup", backend = inner.name(), timeout_ms = cfg.classifier_timeout_ms, min_confidence = min_conf, "llm-router: request classifier enabled");
-    Arc::new(GuardedClassifier::new(inner, timeout, min_conf))
+    Some(Arc::new(GuardedClassifier::new(inner, timeout, min_conf)))
 }
 
 /// Build the Level 2.5 salience gate from config.

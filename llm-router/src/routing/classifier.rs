@@ -27,6 +27,8 @@
 //! stochasticity is the exploration that makes that learning possible, so production feeds
 //! it an entropy RNG; tests inject a seeded one.
 
+pub mod linear;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -339,11 +341,12 @@ pub fn classify<R: Rng + ?Sized>(
 // ## Contract
 //
 // * **`request_type`** — the router's [`RequestType`]. Same label set as the regex.
-// * **`complexity`** — 1..=5 on a documented rubric ([`estimate_complexity`]). Reported with the
+// * **`complexity`** — [`MIN_COMPLEXITY`]..=[`MAX_COMPLEXITY`] (regex: fixed [`REGEX_COMPLEXITY`];
+//   local: the model's complexity head; hosted: the model's self-report). Reported with the
 //   decision; the tier bandit is still keyed on `(provider, tier, request_type)`, so complexity
 //   does not change tier selection today (no feedback simulation is needed).
 // * **`confidence`** — in `[0, 1]`: the backend's probability for the chosen `request_type`
-//   (local: temperature-scaled posterior; hosted: the model's self-report, clamped). Regex
+//   (local: temperature-calibrated softmax; hosted: the model's self-report, clamped). Regex
 //   returns fixed values (see [`RegexClassifier`]) because a vote count is not a probability.
 //
 // ## Failure and low-confidence behaviour ([`GuardedClassifier`])
@@ -361,6 +364,11 @@ pub struct ClassifyInput<'a> {
     pub query: &'a str,
     pub context: Option<&'a str>,
 }
+
+/// Lowest valid complexity score (trivial single operation).
+pub const MIN_COMPLEXITY: u8 = 1;
+/// Highest valid complexity score (multi-constraint / multi-step engineering or analysis).
+pub const MAX_COMPLEXITY: u8 = 5;
 
 /// A classifier verdict. See the module notes for the meaning of each field.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -380,6 +388,10 @@ pub enum ClassifyError {
     Timeout,
     #[error("classifier returned invalid output: {0}")]
     InvalidOutput(String),
+    /// The model could not be loaded (missing or corrupt weights). Raised at startup, where
+    /// [`crate::build_classifier`] degrades to the regex classifier.
+    #[error("classifier model unavailable: {0}")]
+    ModelLoad(String),
 }
 
 /// A request-type decision model. Implementations must be cheap to call concurrently.
