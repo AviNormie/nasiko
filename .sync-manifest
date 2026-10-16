@@ -412,11 +412,17 @@ hitl/tests/repo.rs
 hitl/tests/store.rs
 init-databases.sql
 justfile
+llm-router/CLASSIFIER.md
 llm-router/Cargo.toml
 llm-router/Dockerfile
 llm-router/README.md
 llm-router/THIRD_PARTY_LICENSES.md
 llm-router/assets/salience_weights.json
+llm-router/data/classifier/LABELLING.md
+llm-router/data/classifier/labelled.txt
+llm-router/data/classifier/train.jsonl
+llm-router/data/classifier/val.jsonl
+llm-router/data/classifier/val_eval.json
 llm-router/examples/classifier_eval.rs
 llm-router/examples/compact_tools_eval.rs
 llm-router/examples/mint_token.rs
@@ -460,6 +466,8 @@ llm-router/src/routing/cache.rs
 llm-router/src/routing/catalog.rs
 llm-router/src/routing/cells.rs
 llm-router/src/routing/classifier.rs
+llm-router/src/routing/classifier_hosted.rs
+llm-router/src/routing/classifier_local.rs
 llm-router/src/routing/mod.rs
 llm-router/src/routing/patterns.rs
 llm-router/src/routing/pricing_sync.rs
