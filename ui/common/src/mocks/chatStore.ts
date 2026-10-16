@@ -223,6 +223,36 @@ function flowSteps(frames: readonly MockFrame[]): FlowStep[] {
 /** Read-only view for other mock groups and tests. */
 export const chatMockRows = (): ChatSessionRow[] => [...chats.values()].map((c) => c.row)
 
+/**
+ * What the agent proxy saves for a chat turn sent to an agent with a `contextId` (EE Weave, d6b216fc1: "the proxy
+ * saves both sides of every turn"): the session it names, created and titled from the first prompt when it doesn't
+ * exist yet, gets the user's message now; the returned callback saves the reply, exactly as streamed, when the stream
+ * ends. Another user's session is left alone.
+ */
+export function chatMockProxyTurn(
+  ctx: ChatMockContext,
+  sessionId: string,
+  agent: { id: string; name: string },
+  prompt: string,
+): (reply: string) => void {
+  seed(ctx)
+  let c = chats.get(sessionId)
+  if (c && c.row.user_id !== ctx.userId()) return () => undefined
+  if (!c) {
+    const now = ctx.now()
+    const title = prompt.trim() ? prompt.trim().replace(/\s+/g, ' ').slice(0, 60) : 'New chat'
+    c = { row: row(ctx, sessionId, agent.id, agent.name, title, now, now), messages: [], hitl: [] }
+    chats.set(sessionId, c)
+  }
+  const chat = c
+  chat.messages.push(msg(sessionId, 'user', prompt, ctx.now()))
+  return (reply) => {
+    if (!reply.trim()) return
+    chat.messages.push(msg(sessionId, 'assistant', reply, ctx.now()))
+    chat.row = { ...chat.row, updated_at: iso(ctx.now()) }
+  }
+}
+
 const iso = (ms: number) => new Date(ms).toISOString()
 const id = (prefix: string) =>
   `5eedc${prefix}-0000-4000-8000-${String(++counter).padStart(12, '0')}`
