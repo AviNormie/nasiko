@@ -25,8 +25,9 @@ pub struct A2aTool {
     /// Operator policy, which may require extra arguments on this tool. `None`
     /// leaves the schema as the loop itself defines it.
     policy: Option<Arc<dyn DelegationPolicy>>,
-    /// Prepended to the message on every call. `None` sends the LLM's own
-    /// wording unchanged. See `OrchestratorConfig::outbound_prefix`.
+    /// Sent with every call as its own message part, after the LLM's own
+    /// message. `None` sends the LLM's own wording unchanged. See
+    /// `OrchestratorConfig::outbound_prefix`.
     outbound_prefix: Option<String>,
 }
 
@@ -90,7 +91,7 @@ impl A2aTool {
         self
     }
 
-    /// Text to prepend to the message of every call this tool makes.
+    /// Text to send with every call this tool makes, as its own message part.
     ///
     /// Takes the `Option` the config already holds, for the same reason
     /// [`Self::with_policy`] does: every caller passes it unconditionally, so
