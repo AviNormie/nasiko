@@ -7,19 +7,18 @@ data, the labelling criteria, and the scripts that train and score the model emb
 
 ## Backends
 
-Selected with `CLASSIFIER_BACKEND` (read in `src/config.rs`); `local` and `hosted` run behind
-`GuardedClassifier`, so an error or timeout falls back to the regex result and is counted.
-Configuration and routing semantics: [`../CLASSIFIER.md`](../CLASSIFIER.md).
+Selected with `CLASSIFIER_BACKEND` (read in `src/config.rs`); every backend runs behind
+`FallbackClassifier`, so an error or timeout falls back to the regex result and is counted.
 
 | Backend | What it is | Network | Notes |
 |---|---|---|---|
-| `regex` (default) | The original keyword vote count | No | Fixed complexity 3; confidence 0.5 if a pattern matched, else 0.25 |
+| `regex` (default) | The original keyword vote count | No | Fixed complexity 3, confidence 0.5 |
 | `local` | Hashed word/char n-grams (plus the query's words crossed with the context kind: none, code, prose) → two-head multinomial logistic regression (type + complexity), temperature-calibrated | No | Weights embedded in the binary; override with `CLASSIFIER_MODEL_PATH` |
 | `hosted` | Any OpenAI-compatible chat-completions endpoint returning JSON | Yes | `CLASSIFIER_ENDPOINT`, `CLASSIFIER_API_KEY`, `CLASSIFIER_MODEL`; self-reported confidence |
 
-Other settings: `CLASSIFIER_TIMEOUT_MS` (default 250), `CLASSIFIER_MIN_CONFIDENCE` (default 0 = off;
-below it the request type becomes `general`, the safe default, and is counted; never applied to
-regex), `ROUTER_TIER_SEED` (deterministic Thompson tier sampling).
+Other settings: `CLASSIFIER_TIMEOUT_MS` (default 1000), `CLASSIFIER_MIN_CONFIDENCE` (default 0.5; below
+it the agent's configured model is served and nothing is pinned; never applied to regex),
+`ROUTER_TIER_SEED` (deterministic Thompson tier sampling).
 
 ## Data
 
@@ -82,9 +81,6 @@ python llm-router/classifier/scripts/score.py --gold llm-router/classifier/data/
   --pred /tmp/local.jsonl --min-confidence 0.5
 ```
 
-`classifier_eval` itself prints latency, the guard's fallback counts and, for a labelled set, accuracy
-and ECE to stderr; `score.py` adds per-label and per-slice breakdowns.
-
 ## Results
 
 CPU latency is per decision, batch 1, single thread, excluding the one-time load.
@@ -100,9 +96,6 @@ CPU latency is per decision, batch 1, single thread, excluding the one-time load
 | p50 / p95 latency | 3 µs / 19 µs | 0.25 ms / 1.2 ms |
 | Model size / load time | — / 21 ms | 2.9 MB on disk (~13 MB in memory) / ~55 ms |
 | Cost per decision | 0 | 0 (in-process CPU) |
-
-The regex column was measured with a fixed 0.5 confidence. This router's regex reports 0.25 when no
-pattern matched, so its ECE and confident-error figures differ; its accuracy does not.
 
 By validation subset (local, with the previous model for reference):
 
