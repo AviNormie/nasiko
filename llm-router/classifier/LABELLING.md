@@ -1,8 +1,8 @@
 # Request classifier — labelling criteria
 
 These rules define the labels for the classifier's training and validation data
-(`data/train.json`, `data/val.json`) and are the same definitions the hosted backend's prompt
-uses (`src/routing/classifier/hosted.rs`). They follow the published eval set
+(`data/train.json`, `data/val.json`); the hosted backend's prompt (`src/routing/classifier_hosted.rs`)
+carries its own shorter definitions of the same labels. They follow the published eval set
 (`classifier-eval@v1-sample`) and extend it where it is silent.
 
 Each example has the eval-set schema:

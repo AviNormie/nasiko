@@ -110,10 +110,11 @@ pub struct GatewayConfig {
     pub salience_high_threshold: f64,
 
     /// Request classifier backend: `regex` (default; no network, behaviour unchanged),
-    /// `local` (Naive Bayes trained at load, no network) or `hosted` (OpenAI-compatible
-    /// endpoint, opt-in). Unknown values are treated as `regex`.
+    /// `local` (in-process linear model, embedded weights, no network) or `hosted`
+    /// (OpenAI-compatible endpoint, opt-in). Unknown values are treated as `regex`.
     pub classifier_backend: String,
-    /// `local` only: JSONL training set to use instead of the embedded one. Empty = embedded.
+    /// `local` only: weights JSON file to load instead of the embedded weights. Empty = embedded.
+    /// A file that cannot be loaded degrades to the regex classifier (logged), never an outage.
     pub classifier_model_path: String,
     /// `hosted` only: full chat-completions URL. Only this host receives the key.
     pub classifier_endpoint: String,
@@ -125,6 +126,10 @@ pub struct GatewayConfig {
     pub classifier_timeout_ms: u64,
     /// Below this confidence the router uses the safe default (`general`). 0 disables.
     pub classifier_min_confidence: f32,
+    /// Seed for Thompson tier sampling (`ROUTER_TIER_SEED`). Unset (default) = entropy, as
+    /// before. Set = the tier is a deterministic function of (seed, provider, query, request
+    /// type, learned cells), so identical inputs and state route identically.
+    pub router_tier_seed: Option<u64>,
 
     /// Fleet-wide kill switch for payload compression. Compression is opted into **per agent**
     /// (`agents.compress_enabled`); this only lets an operator stop all of it at once without
@@ -227,6 +232,7 @@ impl Default for GatewayConfig {
             classifier_api_key: String::new(),
             classifier_timeout_ms: 250,
             classifier_min_confidence: 0.0,
+            router_tier_seed: None,
             compress_kill_switch: true,
             compress_min_bytes: 2048,
             compress_types: nasiko_compress::TypeMask::DEFAULT,
@@ -322,6 +328,9 @@ impl GatewayConfig {
                 &["CLASSIFIER_MIN_CONFIDENCE"],
                 d.classifier_min_confidence,
             ),
+            router_tier_seed: std::env::var("ROUTER_TIER_SEED")
+                .ok()
+                .and_then(|v| v.parse().ok()),
             salience_weights_path: env_or("SALIENCE_WEIGHTS_PATH", &d.salience_weights_path),
             salience_low_threshold: std::env::var("SALIENCE_LOW_THRESHOLD")
                 .ok()
