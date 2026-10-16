@@ -22,7 +22,6 @@ pub mod catalog;
 pub mod cells;
 pub mod classifier;
 pub mod classifier_hosted;
-pub mod classifier_local;
 // The salience classifier itself — feature engine, weight loading, scoring, banding.
 // Private to `routing`: only `salience.rs` (a sibling module) uses it directly, via
 // `ClassifierSalienceGate`.
@@ -88,6 +87,9 @@ pub struct RouteInputs<'a> {
     pub signals: &'a BoundarySignals,
     /// The query to classify (latest user message text). `None` disables classification.
     pub query: Option<&'a str>,
+    /// Seed for Thompson tier sampling; `None` samples from entropy (see
+    /// `GatewayConfig::router_tier_seed`).
+    pub tier_seed: Option<u64>,
 }
 
 /// The outcome of routing: the model to call and how it was chosen.
@@ -283,9 +285,15 @@ pub async fn route_model_with(
                 Ok(c) => c.request_type,
                 Err(_) => classifier::classify_request_type(query),
             };
-            let tier = {
-                let mut rng = rand::rng();
-                classifier::classify_typed(request_type, &learned, &mut rng)
+            let tier = match inputs.tier_seed {
+                Some(seed) => {
+                    let mut rng = seeded_tier_rng(seed, inputs.provider, query, request_type);
+                    classifier::classify_typed(request_type, &learned, &mut rng)
+                }
+                None => {
+                    let mut rng = rand::rng();
+                    classifier::classify_typed(request_type, &learned, &mut rng)
+                }
             };
             // Per-config tier override takes priority over the global registry.
             let config_override = match tier {
@@ -382,6 +390,26 @@ pub async fn route_model_with(
         tier: None,
         source,
     }
+}
+
+/// The RNG behind a seeded (`ROUTER_TIER_SEED`) Thompson tier draw, derived from `(seed,
+/// provider, query, request_type)` so identical inputs and learned state always pick the same
+/// tier. `DefaultHasher::new()` uses fixed keys, so the derivation is stable across processes
+/// running the same binary (the same reasoning as `boundary::coding_agent_conv_id`).
+fn seeded_tier_rng(
+    seed: u64,
+    provider: &str,
+    query: &str,
+    request_type: RequestType,
+) -> rand::rngs::StdRng {
+    use rand::SeedableRng;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    seed.hash(&mut hasher);
+    provider.hash(&mut hasher);
+    query.hash(&mut hasher);
+    request_type.as_str().hash(&mut hasher);
+    rand::rngs::StdRng::seed_from_u64(hasher.finish())
 }
 
 /// Credit the current turn's feedback to a prior decision, if there is any to credit.
@@ -565,6 +593,7 @@ mod tests {
             tier3_model: None,
             signals,
             query: Some("hello"),
+            tier_seed: None,
         }
     }
 
@@ -993,6 +1022,31 @@ mod tests {
         .await;
         assert_eq!(d.source, RouteSource::Default);
         assert_eq!(d.model, "cfg-model");
+    }
+
+    #[tokio::test]
+    async fn seeded_tier_selection_is_deterministic() {
+        let s = signals(Some("c1"), Phase::Switch, Mode::FreeFlowing);
+        let mut picks = std::collections::HashSet::new();
+        for _ in 0..20 {
+            let mut i = inputs("anthropic", &s, None);
+            i.tier_seed = Some(42);
+            let d = route_model(
+                &FakeCache::empty(),
+                &test_support::StubRegistry,
+                &InMemoryCellStore::new(),
+                &AllowAllGate,
+                &i,
+            )
+            .await;
+            assert_eq!(d.source, RouteSource::Classified);
+            picks.insert(d.model);
+        }
+        assert_eq!(
+            picks.len(),
+            1,
+            "same seed + inputs must pick one model: {picks:?}"
+        );
     }
 
     #[test]
