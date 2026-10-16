@@ -52,7 +52,7 @@ export const AgentCard = memo(function AgentCard({
         >
           {agent.description || copy.noDescription}
         </p>
-        {/* The Overview's health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
+        {/* The health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
         {reason ? (
           <p className="line-clamp-1 text-xs font-medium" data-testid="health-reason">
             {copy.healthReason(reason)}

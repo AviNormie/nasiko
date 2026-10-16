@@ -120,9 +120,8 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
 
   // Needs counts: fleet-level reads only (eng). Unknown while any source loads or failed, never 0.
   const { needs, sessions, waiting } = needsYou
-  const failedRaw = sessions.newest
-    .filter((r) => sessions.status.get(r.session_id) === 'failed' && r.agent_id)
-    .map((r) => r.agent_id as string)
+  // The failed sessions' own read (status=failed in SQL), so every row here is a failure.
+  const failedRaw = sessions.failed.rows.filter((r) => r.agent_id).map((r) => r.agent_id as string)
   const requests = pendingRequestRows(superuser, waiting.match, pending.data?.items)
   const needsUnknown =
     !ready ||
@@ -132,8 +131,8 @@ export function useHome(now: Date, range: Range, me: Me, scope: Scope | null) {
     waiting.failedCold ||
     pending.isPending ||
     (pending.isError && !pending.data) ||
-    sessions.list.isPending ||
-    sessions.list.isError
+    sessions.failed.isPending ||
+    sessions.failed.isError
   const needsMap = needsUnknown
     ? null
     : needsByAgent({

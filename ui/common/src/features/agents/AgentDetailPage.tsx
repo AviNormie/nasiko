@@ -46,6 +46,7 @@ import { relTime } from './format'
 import { ACTION_LABEL, useLifecycleFlow } from './lifecycleFlow'
 import { ActivityTab } from './detail/ActivityTab'
 import { AccessTab } from './detail/AccessTab'
+import { DetailsTab } from './detail/DetailsTab'
 import { OverviewTab } from './detail/OverviewTab'
 import { SettingsTab } from './detail/SettingsTab'
 import { VersionsTab } from './detail/VersionsTab'
@@ -164,8 +165,9 @@ function ResolveByName({ name, tab }: { name: string; tab?: string }) {
 
 function tabsFor(agent: AgentView): DetailTab[] {
   // A harness is an ordinary agent id to the MCP gateway, so its manager gets the MCP tab too.
-  if (agent.isHarness) return agent.canManage ? ['overview', 'mcp'] : ['overview']
-  return agent.canManage ? [...DETAIL_TABS] : ['overview', 'activity', 'versions']
+  if (agent.isHarness)
+    return agent.canManage ? ['overview', 'mcp', 'details'] : ['overview', 'details']
+  return agent.canManage ? [...DETAIL_TABS] : ['overview', 'activity', 'versions', 'details']
 }
 
 function AgentDetail({ id, tab }: { id: string; tab?: string }) {
@@ -198,7 +200,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
     if (badTab)
       void navigate({
         to: '.',
-        search: {},
+        search: (prev) => ({ ...prev, tab: undefined }),
         state: (s) => ({ siblings: s.siblings }),
         replace: true,
       })
@@ -220,10 +222,11 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   const display = w.watch?.kind === 'rollback' && !w.watch.outcome ? 'deploying' : status.display
   const mine = agent.ownerId === me?.sub
   const ownerLabel = mine ? copy.you : (users.data?.get(agent.ownerId) ?? agent.ownerId.slice(0, 8))
+  // The hub's window keys follow the tab switch, so coming back to Overview keeps the window.
   const setTab = (t: string) =>
     void navigate({
       to: '.',
-      search: t === 'overview' ? {} : { tab: t },
+      search: (prev) => ({ ...prev, tab: t === 'overview' ? undefined : t }),
       // Keep the list Previous/Next walks.
       state: (s) => ({ siblings: s.siblings }),
       replace: false,
@@ -237,6 +240,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
     mcp: copy.tabMcp,
     access: copy.tabAccess,
     settings: copy.tabSettings,
+    details: copy.tabDetails,
   }
 
   return (
@@ -316,6 +320,11 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
         {allowed.includes('access') ? (
           <TabsContent value="access" className="pt-3">
             <AccessTab agent={agent} />
+          </TabsContent>
+        ) : null}
+        {allowed.includes('details') ? (
+          <TabsContent value="details" className="pt-3">
+            <DetailsTab agent={agent} display={display} ownerLabel={ownerLabel} />
           </TabsContent>
         ) : null}
         {allowed.includes('settings') ? (

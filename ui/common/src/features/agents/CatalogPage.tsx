@@ -49,9 +49,10 @@ export function CatalogPage({
   const pinnedTabs = useCatalogTabs().data
   const names = useUsers(!!me?.is_superuser).data
   const inputRef = useRef<HTMLInputElement>(null)
-  // Ratings are fetched only while the Overview's ?health= filter is on (eng review R1).
+  // Ratings are fetched only while the ?health= filter (the home's rating badges link here) is on (eng review R1).
   const [now] = useState(() => new Date())
-  const fleet = useFleetHealth(now, !!search.health)
+  // Members never read the fleet-wide spend series (the home and the hub rate them the same way).
+  const fleet = useFleetHealth(now, !!search.health, !!me?.is_superuser)
 
   // "/" focuses search unless the user is already typing somewhere.
   useEffect(() => {

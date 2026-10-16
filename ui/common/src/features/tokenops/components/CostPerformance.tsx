@@ -19,18 +19,27 @@ import { CostScatter, type ScatterPoint } from './CostScatter'
 
 type Point = ScatterPoint
 
+/** The fields the panel reads, so another page (the home's chart band) passes its own rows. */
+export type CostPerfRow = Pick<
+  AttributionRow,
+  'id' | 'name' | 'kind' | 'operations' | 'costPerOp' | 'p95' | 'containerHours'
+>
+
 export function CostPerformance({
   rows,
   loading,
   error,
   onRetry,
   onSelect,
+  selectHint = 'Highlight in the attribution table',
 }: {
-  rows: AttributionRow[] | undefined
+  rows: CostPerfRow[] | undefined
   loading: boolean
   error: unknown
   onRetry: () => void
   onSelect: (id: string) => void
+  /** What a row's name does in the Table view. */
+  selectHint?: string
 }) {
   const [asTable, setAsTable] = useState(false)
   const points: Point[] = (rows ?? [])
@@ -101,7 +110,7 @@ export function CostPerformance({
                       size="sm"
                       className="h-auto p-0 text-xs"
                       onClick={() => onSelect(p.id)}
-                      title="Highlight in the attribution table"
+                      title={selectHint}
                     >
                       {p.name}
                     </Button>

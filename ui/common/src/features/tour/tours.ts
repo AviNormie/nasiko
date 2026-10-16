@@ -71,18 +71,23 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
 
   overview: [
     {
-      title: 'Overview',
-      body: 'Your fleet at a glance: what needs you, what it costs, and how healthy each agent is.',
+      title: 'Home',
+      body: 'Your agents at a glance: what needs you, what they cost, and how healthy each one is.',
+    },
+    {
+      target: 'home-scope',
+      title: 'Whose agents',
+      body: 'Switch between your own agents and the whole fleet. Your choice is remembered.',
     },
     {
       target: 'overview-range',
       title: 'Pick the window',
-      body: 'Switch between 7, 30 and 90 days. The headline, Spend and Harnesses follow it.',
+      body: 'Switch between 7, 30 and 90 days. Spend, savings and the charts follow it.',
     },
     {
       target: 'overview-summary',
-      title: 'The headline',
-      body: 'Fleet spend, runs and agents in one sentence, compared with the period before.',
+      title: 'The summary',
+      body: 'Spend, saved tokens, health and what needs you, summed over the agents shown.',
     },
     {
       target: 'overview-needs',
@@ -90,19 +95,14 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       body: 'Agents that need action, requests waiting for your answer and failed sessions, worst first.',
     },
     {
-      target: 'overview-health',
-      title: 'Fleet health',
-      body: 'Each agent rated Healthy, Watch or Needs action. Click a count to see those agents.',
-    },
-    {
       target: 'overview-setup-guide',
       title: 'Finish setting up',
       body: 'Pick your role, connect a model and deploy a first agent. Each step opens the setup guide where you left off.',
     },
     {
-      target: 'overview-actions',
-      title: 'Quick actions',
-      body: 'Start a chat, ask the Orchestrator or deploy an agent from here.',
+      target: 'home-rows',
+      title: 'Every agent',
+      body: 'One row per agent or harness: spend, savings, health and needs. Open a row for its hub.',
     },
   ],
 

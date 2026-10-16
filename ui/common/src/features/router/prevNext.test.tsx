@@ -92,7 +92,8 @@ describe('routing sheet Previous/Next', () => {
 
   it('shows no arrows when opened from the agent page', async () => {
     const agent = seed.agents.find((a) => a.display_name === 'Research Agent')!
-    renderApp(`/agents/${agent.id}`)
+    // The routing card is on the Details tab since the agent hub took the Overview.
+    renderApp(`/agents/${agent.id}?tab=details`)
     const card = (await screen.findByRole('heading', { name: copy.cardTitle })).closest('section')!
     await userEvent.click(await within(card).findByRole('button', { name: copy.changeRouting }))
     await screen.findByRole('dialog', { name: copy.routingTitle('Research Agent') })

@@ -349,6 +349,7 @@ export function LiveFallbackLevel({
             title={copy.lastSessions(LIVE_SESSION_LIMIT)}
             note={copy.sessionsOwnOnly}
             linkable={!preview}
+            ledger
             items={d.sessions}
             initial={RECENT_SESSIONS_SHOWN}
             emptyText={copy.noRecentSessions}
@@ -422,6 +423,7 @@ export function UserLevel({
           title="Recent sessions"
           note={self || viewerIsSuperuser ? undefined : copy.sessionsOwnOnly}
           linkable={!preview && (self || viewerIsSuperuser)}
+          ledger={self}
           items={res.recent_sessions ?? []}
           initial={RECENT_SESSIONS_SHOWN}
         />

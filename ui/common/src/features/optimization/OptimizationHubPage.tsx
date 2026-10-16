@@ -40,15 +40,8 @@ import { Workspace } from './components/Workspace'
 import { Lead } from './components/Lead'
 import { NeedsAttention } from './components/NeedsAttention'
 import { copy } from './copy'
-import {
-  leadState,
-  parseSlice,
-  sliceLabel,
-  sliceOf,
-  trendRows,
-  weeklyPoints,
-  type BucketSize,
-} from './lead'
+import { leadState, sliceLabel, trendRows, weeklyPoints } from './lead'
+import { parseSlice, sliceOf, type BucketSize } from '@/lib/slice'
 import { OptimizationPage } from './OptimizationPage'
 import type { OptimizationSearch } from './search'
 

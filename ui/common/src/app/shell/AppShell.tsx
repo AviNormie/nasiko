@@ -34,7 +34,7 @@ export function AppShell({
   end?: ReactNode
   split?: ComponentType<{ path: string; children: ReactNode }> | null
   badges?: NavBadges
-  /** Nav paths to leave out (onboarding hides Overview while its guide stands in for it). */
+  /** Nav paths to leave out (onboarding hides Home while its guide stands in for it). */
   hidden?: readonly string[]
 } = {}) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })

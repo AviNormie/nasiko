@@ -40,8 +40,6 @@ export const FAILED_SESSION_ROWS = 25
 export const NEEDS_VISIBLE_ROWS = 5
 /** Fleet health lists at most this many rated agents, Watch first. */
 export const HEALTH_LIST_ROWS = 5
-/** The Budgets card lists at most this many agent budgets, most used first. */
-export const BUDGET_AGENT_ROWS = 3
 /** Recent sessions shows this many rows — and asks the server for exactly that. */
 export const RECENT_SESSION_ROWS = 5
 /** How often Needs you's "Checked …" label re-ages on an open tab. */

@@ -8,6 +8,9 @@
  * sortable headers buttons. Rows are sorted here only with `clientSort`; otherwise `data` arrives in
  * order (URL-driven sorts keep their tested pure sort functions).
  *
+ * Groups: pass `groups` to put a full-width header row before each run of rows sharing a key (the caller orders the
+ * rows); its button collapses the run. Header rows count as rows for virtualisation and `aria-rowcount`.
+ *
  * `header` and `cell` functions are called, never mounted: TanStack's FlexRender mounts a function as a
  * component, so columns built during render remounted every cell and lost focus. The flip side is that
  * a cell function can't call hooks; render a component from it instead.
@@ -21,11 +24,12 @@ import {
   tableFeatures,
   useTable,
   type ColumnDef,
+  type Row,
   type RowData,
   type SortingState,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight } from 'lucide-react'
 import { useRef, type ComponentProps, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -63,6 +67,7 @@ export type DataTableColumn<T extends RowData> = ColumnDef<Features, T, unknown>
 
 /** Rows past this render through the virtualizer. */
 const VIRTUAL_AFTER = 100
+/** The first estimate per row; each rendered row is then measured (`measureElement`). */
 const ROW_HEIGHT = 37
 
 export interface DataTableProps<T extends RowData> {
@@ -79,8 +84,40 @@ export interface DataTableProps<T extends RowData> {
   clientSort?: boolean
   /** Per-row props: a ref, a highlight class, data attributes. */
   rowProps?: (row: T) => ComponentProps<'tr'>
+  groups?: DataTableGroups<T>
   className?: string
 }
+
+export interface DataTableGroups<T> {
+  /** The group a row belongs to; consecutive rows with the same key form one group. */
+  of: (row: T) => string
+  /** The header row's content (a name, a count, a subtotal): it is also the collapse button's name. */
+  header: (key: string) => ReactNode
+  collapsed: ReadonlySet<string>
+  onToggle: (key: string) => void
+}
+
+type Item<T extends RowData> =
+  { kind: 'group'; key: string } | { kind: 'row'; row: Row<Features, T> }
+
+function itemsOf<T extends RowData>(
+  rows: Row<Features, T>[],
+  groups: DataTableGroups<T> | undefined,
+): Item<T>[] {
+  if (!groups) return rows.map((row) => ({ kind: 'row', row }))
+  const out: Item<T>[] = []
+  let last: string | undefined
+  for (const row of rows) {
+    const key = groups.of(row.original)
+    if (key !== last) out.push({ kind: 'group', key })
+    last = key
+    if (!groups.collapsed.has(key)) out.push({ kind: 'row', row })
+  }
+  return out
+}
+
+const itemKey = <T extends RowData>(item: Item<T> | undefined) =>
+  item ? (item.kind === 'group' ? `group:${item.key}` : item.row.id) : undefined
 
 /** A column's `header` or `cell`: a function is called with its context; anything else renders as is. */
 function renderSlot<C>(slot: unknown, ctx: C): ReactNode {
@@ -97,6 +134,7 @@ export function DataTable<T extends RowData>({
   onSortingChange,
   clientSort,
   rowProps,
+  groups,
   className,
 }: DataTableProps<T>) {
   'use no memo'
@@ -112,27 +150,27 @@ export function DataTable<T extends RowData>({
     manualSorting: !clientSort,
     enableSorting: !!onSortingChange,
   })
-  const rows = table.getRowModel().rows
+  const items = itemsOf(table.getRowModel().rows, groups)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const virtual = rows.length > VIRTUAL_AFTER
+  const virtual = items.length > VIRTUAL_AFTER
   // eslint-disable-next-line react-hooks/incompatible-library -- useVirtualizer returns mutable instances the Compiler can't memoise; DataTable is 'use no memo'
   const virtualizer = useVirtualizer({
-    count: virtual ? rows.length : 0,
+    count: virtual ? items.length : 0,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
-    getItemKey: (i) => rows[i]?.id ?? i,
+    getItemKey: (i) => itemKey(items[i]) ?? i,
     overscan: 10,
   })
-  const items = virtualizer.getVirtualItems()
-  const padTop = virtual ? (items[0]?.start ?? 0) : 0
-  const padBottom = virtual ? virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0) : 0
-  // [row, position] pairs: positions feed aria-rowindex, which only a virtualised table needs.
+  const windowed = virtualizer.getVirtualItems()
+  const padTop = virtual ? (windowed[0]?.start ?? 0) : 0
+  const padBottom = virtual ? virtualizer.getTotalSize() - (windowed.at(-1)?.end ?? 0) : 0
+  // [item, position] pairs: positions feed aria-rowindex, which only a virtualised table needs.
   const visible = virtual
-    ? items.flatMap((i) => {
-        const row = rows[i.index]
-        return row ? [[row, i.index] as const] : []
+    ? windowed.flatMap((i) => {
+        const item = items[i.index]
+        return item ? [[item, i.index] as const] : []
       })
-    : rows.map((r, i) => [r, i] as const)
+    : items.map((r, i) => [r, i] as const)
   const leaves = table.getAllLeafColumns()
   const sortedBy = new Map(
     (sorting ?? []).map((s) => [s.id, s.desc ? 'descending' : 'ascending'] as const),
@@ -151,7 +189,7 @@ export function DataTable<T extends RowData>({
     >
       <Table
         aria-label={caption ? undefined : label}
-        aria-rowcount={virtual ? rows.length + 1 : undefined}
+        aria-rowcount={virtual ? items.length + 1 : undefined}
       >
         {caption ? <TableCaption>{caption}</TableCaption> : null}
         <TableHeader className={cn(virtual && 'sticky top-0 z-10 bg-card')}>
@@ -204,10 +242,47 @@ export function DataTable<T extends RowData>({
               <td style={{ height: padTop }} colSpan={leaves.length} />
             </tr>
           ) : null}
-          {visible.map(([row, pos]) => {
+          {visible.map(([item, pos]) => {
+            if (item.kind === 'group')
+              return groups ? (
+                <TableRow
+                  key={`group:${item.key}`}
+                  aria-rowindex={virtual ? pos + 2 : undefined}
+                  data-index={virtual ? pos : undefined}
+                  ref={virtual ? virtualizer.measureElement : undefined}
+                  data-group={item.key}
+                  className="bg-muted/40 hover:bg-muted/40"
+                >
+                  <TableCell colSpan={leaves.length} className="py-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="-mx-2 h-auto min-h-7 gap-2 text-xs font-medium pointer-coarse:min-h-11"
+                      aria-expanded={!groups.collapsed.has(item.key)}
+                      onClick={() => groups.onToggle(item.key)}
+                    >
+                      {groups.collapsed.has(item.key) ? (
+                        <ChevronRight aria-hidden />
+                      ) : (
+                        <ChevronDown aria-hidden />
+                      )}
+                      {groups.header(item.key)}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ) : null
+            const row = item.row
             const extra = rowProps?.(row.original)
             return (
-              <TableRow key={row.id} aria-rowindex={virtual ? pos + 2 : undefined} {...extra}>
+              <TableRow
+                key={row.id}
+                aria-rowindex={virtual ? pos + 2 : undefined}
+                // Measured, not assumed: rows taller than ROW_HEIGHT (two-line cells) would drift the window. A caller's
+                // own row ref keeps the estimate.
+                data-index={virtual ? pos : undefined}
+                ref={virtual && !extra?.ref ? virtualizer.measureElement : undefined}
+                {...extra}
+              >
                 {row.getAllCells().map((cell) => {
                   const meta = cell.column.columnDef.meta
                   const className = cn(
