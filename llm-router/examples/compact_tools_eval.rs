@@ -89,14 +89,11 @@ fn main() {
             .flatten()
             .filter_map(Value::as_str)
             .collect();
-        let line = match StreamDecoder::new(&tools) {
-            Err(CompactError::Unsupported { .. }) => json!({
-                "id": case["id"],
-                "decoded": stream_decode(&chunks, &name_only(&tools)),
-                "schema_validated": false,
-            }),
-            _ => json!({"id": case["id"], "decoded": stream_decode(&chunks, &tools)}),
-        };
+        // Unsupported tools are sent natively, so no compact call can be validated against
+        // them: report the error rather than a call decoded without its schema, which could
+        // turn an invalid call into an accepted one.
+        let decoded = stream_decode(&chunks, &tools);
+        let line = json!({"id": case["id"], "decoded": decoded});
         writeln!(out, "{line}").expect("write OUT");
     }
     out.flush().expect("flush OUT");
