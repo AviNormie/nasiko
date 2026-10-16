@@ -11,7 +11,9 @@ export interface TimelinePoint {
   label: string
   spend: number
   operations: number
+  p50: number | null
   p95: number | null
+  p99: number | null
   topAgent: string | null
   topAgentSpend: number | null
 }
@@ -41,7 +43,9 @@ function toPoint(d: Date, bucket: 'hour' | 'day', p: TimelineSource | undefined)
     label: bucketLabel(d, bucket),
     spend: p?.spend_usd ?? 0,
     operations: p?.operations ?? 0,
+    p50: p?.p50_latency_ms ?? null,
     p95: p?.p95_latency_ms ?? null,
+    p99: p?.p99_latency_ms ?? null,
     topAgent: p?.top_agent_name ?? null,
     topAgentSpend: p?.top_agent_spend_usd ?? null,
   }

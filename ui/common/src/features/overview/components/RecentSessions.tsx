@@ -118,7 +118,7 @@ export function RecentSessions({
               const cost = sessionCost(s)
               return (
                 <TableRow key={s.session_id} data-testid="recent-session">
-                  <TableCell className="h-8 px-0 pointer-coarse:h-11">
+                  <TableCell className="h-11 px-0">
                     <mark.Icon
                       className={`size-4 ${mark.tone}`}
                       role="img"

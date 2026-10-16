@@ -273,6 +273,13 @@ const workflowRow = z.looseObject({
 export const finopsDashboardSchema = z.looseObject({
   summary: z.looseObject({ total_cost: num, total_agents: num, unpriced_calls: num }),
   agents: z.array(agentRow),
+  token_usage: z.looseObject({
+    prompt_tokens: num,
+    completion_tokens: num,
+    cache_read_tokens: num,
+    cache_creation_tokens: num,
+    avg_tokens_per_operation: num,
+  }),
   kpis: z.looseObject({
     total_spend: kpi,
     total_tokens: kpi,

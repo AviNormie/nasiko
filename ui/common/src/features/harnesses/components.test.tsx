@@ -192,7 +192,7 @@ describe('Crumbs', () => {
   it('collapses the middle on narrow screens and expands on demand', async () => {
     narrow()
     render(<Crumbs items={items} onClearHarness={() => {}} />)
-    const nav = within(screen.getByRole('navigation', { name: 'Breadcrumb' }))
+    const nav = within(screen.getByRole('navigation', { name: 'Levels' }))
     expect(nav.queryByText('Eng')).toBeNull()
     await userEvent.click(nav.getByRole('button', { name: 'Show full path' }))
     expect(nav.getByRole('button', { name: 'Eng' })).toBeInTheDocument()

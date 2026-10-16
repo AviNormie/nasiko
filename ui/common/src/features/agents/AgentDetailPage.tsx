@@ -7,7 +7,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { TopBar } from '@/app/shell/TopBar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,9 +22,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
 import { ErrorState, StateCard } from '@/features/observability/StateCard'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
+import { useSiblings } from '@/lib/siblings'
 import {
   useAgentDetail,
   useAgentsDirectory,
@@ -66,14 +69,16 @@ function Redirect({ id, tab }: { id: string; tab?: string }) {
       to: '/agents/$agentId',
       params: { agentId: id },
       search: tab ? { tab } : {},
+      state: (s) => ({ siblings: s.siblings }),
       replace: true,
     })
   }, [id, tab, navigate])
   return <PageLoader label={copy.loadingAgent} />
 }
 
-function NotFound() {
-  return (
+/** `id`: the page's own agent (a name lookup has none), for the arrows. */
+function NotFound({ id }: { id?: string }) {
+  const card = (
     <StateCard
       title={copy.notFound}
       fix={copy.notFoundFix}
@@ -87,6 +92,17 @@ function NotFound() {
         </Link>
       }
     />
+  )
+  return id ? <WithSiblings id={id}>{card}</WithSiblings> : card
+}
+
+/** A state shown in place of an agent stepped to from a list keeps the arrows, so the user can step on. */
+function WithSiblings({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <>
+      <TopBar stepper={<AgentSiblings id={id} />} />
+      {children}
+    </>
   )
 }
 
@@ -112,6 +128,7 @@ function ResolveByName({ name, tab }: { name: string; tab?: string }) {
         to: '/agents/$agentId',
         params: { agentId: only },
         search: tab ? { tab } : {},
+        state: (s) => ({ siblings: s.siblings }),
         replace: true,
       })
   }, [only, tab, navigate])
@@ -178,16 +195,24 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   const badTab = !!agent && !!tab && current !== tab
   // An unknown or hidden tab falls back to Overview without a history entry.
   useEffect(() => {
-    if (badTab) void navigate({ to: '.', search: {}, replace: true })
+    if (badTab)
+      void navigate({
+        to: '.',
+        search: {},
+        state: (s) => ({ siblings: s.siblings }),
+        replace: true,
+      })
   }, [badTab, navigate])
 
   if (detail.isPending) return <PageLoader label={copy.loadingAgent} />
   if (detail.isError) {
     return detail.error instanceof ApiError &&
       (detail.error.status === 404 || detail.error.status === 403) ? (
-      <NotFound />
+      <NotFound id={id} />
     ) : (
-      <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
+      <WithSiblings id={id}>
+        <ErrorState error={detail.error} onRetry={() => void detail.refetch()} />
+      </WithSiblings>
     )
   }
   if (!agent || !status.display) return null
@@ -196,7 +221,13 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   const mine = agent.ownerId === me?.sub
   const ownerLabel = mine ? copy.you : (users.data?.get(agent.ownerId) ?? agent.ownerId.slice(0, 8))
   const setTab = (t: string) =>
-    void navigate({ to: '.', search: t === 'overview' ? {} : { tab: t }, replace: false })
+    void navigate({
+      to: '.',
+      search: t === 'overview' ? {} : { tab: t },
+      // Keep the list Previous/Next walks.
+      state: (s) => ({ siblings: s.siblings }),
+      replace: false,
+    })
   const hasErrors = !!errors.data?.length
   const labels: Record<DetailTab, string> = {
     overview: copy.tabOverview,
@@ -211,6 +242,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
   return (
     <div className="space-y-4">
       <Header
+        stepper={<AgentSiblings id={id} />}
         agent={agent}
         display={display}
         raw={status.raw}
@@ -222,7 +254,7 @@ function AgentDetail({ id, tab }: { id: string; tab?: string }) {
         <p className="text-xs text-muted-foreground">{copy.couldntRefresh}</p>
       ) : null}
       <Tabs value={current} onValueChange={setTab}>
-        <TabsList className="max-w-full justify-start overflow-x-auto">
+        <TabsList data-tour="agent-tabs" className="max-w-full justify-start overflow-x-auto">
           {allowed.map((t) => (
             <TabsTrigger key={t} value={t}>
               {labels[t]}
@@ -303,7 +335,10 @@ function Header({
   ownerLabel,
   mine,
   isPublic,
+  stepper,
 }: {
+  /** Rightmost in the top bar: the arrows keep one place for every agent (and one that fails to load). */
+  stepper: ReactNode
   agent: AgentView
   display: ReturnType<typeof displayStatus>
   raw?: string
@@ -318,40 +353,47 @@ function Header({
   const secondary = agent.canManage ? actionsFor(display).slice(1) : []
   const busy = flow.m.isPending || flow.w.watching
   return (
-    <div className="flex items-start gap-3">
-      <AgentMark name={agent.displayName} iconUrl={agent.iconUrl} size={40} />
-      <PageHeader
-        className="min-w-0 flex-1"
-        title={
-          <span className="flex flex-wrap items-center gap-2">
-            <span className="truncate">{agent.displayName}</span>
-            <StatusBadge display={display} raw={raw} />
-          </span>
-        }
-        description={
-          <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="font-mono">{agent.name}</span>
-            <span className="inline-flex items-center font-mono" title={agent.id}>
-              {agent.id.slice(0, 8)}…<CopyButton text={agent.id} label={copy.copyUuid} />
+    <>
+      <div data-tour="agent-header" className="flex items-start gap-3">
+        <AgentMark name={agent.displayName} iconUrl={agent.iconUrl} size={40} />
+        <PageHeader
+          className="min-w-0 flex-1"
+          title={
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="truncate">{agent.displayName}</span>
+              <StatusBadge display={display} raw={raw} />
             </span>
-            {agent.version ? <span className="font-mono">v{agent.version}</span> : null}
-            <span>{copy.ownerLine(ownerLabel)}</span>
-            <span>{copy.updatedLine(relTime(agent.updatedAt))}</span>
-            {agent.isHarness ? (
-              <Badge variant="outline">{copy.harnessChip}</Badge>
-            ) : (
-              <Badge variant="outline">{mine ? copy.yours : copy.availableToYou}</Badge>
-            )}
-            {isPublic ? <Badge variant="outline">{copy.publicChip}</Badge> : null}
-          </span>
-        }
+          }
+          description={
+            <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className="font-mono">{agent.name}</span>
+              <span className="inline-flex items-center font-mono" title={agent.id}>
+                {agent.id.slice(0, 8)}…<CopyButton text={agent.id} label={copy.copyUuid} />
+              </span>
+              {agent.version ? <span className="font-mono">v{agent.version}</span> : null}
+              <span>{copy.ownerLine(ownerLabel)}</span>
+              <span>{copy.updatedLine(relTime(agent.updatedAt))}</span>
+              {agent.isHarness ? (
+                <Badge variant="outline">{copy.harnessChip}</Badge>
+              ) : (
+                <Badge variant="outline">{mine ? copy.yours : copy.availableToYou}</Badge>
+              )}
+              {isPublic ? <Badge variant="outline">{copy.publicChip}</Badge> : null}
+            </span>
+          }
+        />
+      </div>
+      <TopBar
+        trail={[agent.displayName]}
+        stepper={stepper}
         actions={
-          <div className="flex items-start gap-2">
+          <>
             <TryItLink
               id={agent.id}
               name={agent.displayName}
               display={display}
               harness={agent.isHarness}
+              variant="default"
             />
             {agent.canManage ? (
               <LifecycleButtons flow={flow} display={display} name={agent.displayName} collapse />
@@ -402,10 +444,38 @@ function Header({
                 ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </>
         }
       />
       <DeleteAgentDialog agent={agent} open={delOpen} onOpenChange={setDelOpen} />
-    </div>
+    </>
+  )
+}
+
+/** Previous/Next through the list this agent was opened from (lib/siblings.ts); nothing on a deep link. */
+function AgentSiblings({ id, className }: { id: string; className?: string }) {
+  const navigate = useNavigate()
+  const around = useSiblings(id)
+  if (!around) return null
+  // Replace: Back still returns to the list. The tab carries over; one the next agent lacks falls back to Overview.
+  const go = (agentId: string | undefined) => {
+    if (agentId)
+      void navigate({
+        to: '/agents/$agentId',
+        params: { agentId },
+        search: true,
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="agent"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+      className={className}
+    />
   )
 }

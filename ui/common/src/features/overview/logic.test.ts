@@ -348,7 +348,9 @@ describe('stackSpend', () => {
     label: date,
     spend,
     operations: 0,
+    p50: null,
     p95: null,
+    p99: null,
     topAgent: null,
     topAgentSpend: null,
   })

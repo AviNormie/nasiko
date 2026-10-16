@@ -115,7 +115,12 @@ describe('Fleet health', () => {
           name: `Remove the Health: ${copy.rating.watch} filter`,
         })
         await waitFor(() =>
-          expect(within(screen.getByRole('main')).queryAllByRole('listitem')).toHaveLength(n),
+          expect(
+            within(screen.getByRole('main'))
+              .queryAllByRole('listitem')
+              // The top bar's breadcrumb is a list too.
+              .filter((li) => !li.closest('[data-slot="breadcrumb"]')),
+          ).toHaveLength(n),
         )
       }
     }
@@ -428,14 +433,14 @@ describe('Budgets', () => {
     ).toHaveAttribute('href', '/router#router-budgets')
   })
 
-  it('hides both on a server without budgets (a bare 404), and Recent sessions takes the row', async () => {
+  it('hides both on a server without budgets (a bare 404); Recent sessions sits beside Fleet health', async () => {
     server.use(http.get('*/api/budgets', () => new HttpResponse(null, { status: 404 })))
     renderApp('/')
     await loaded()
     await waitFor(() => expect(card('overview-budget')).toBeNull())
     const actions = card('overview-actions')
     expect(within(actions).queryByRole('link', { name: copy.actions.adjustBudget })).toBeNull()
-    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-4')
+    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-7')
   })
 })
 
@@ -508,8 +513,11 @@ describe('Savings', () => {
     const row = await screen.findByTestId('overview-savings')
     await user.click(within(row).getByRole('link', { name: /See the breakdown/ }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
-    const section = await screen.findByRole('button', { name: /^Token optimisation/ })
-    expect(section).toHaveAttribute('aria-expanded', 'true')
+    // TokenOps has no expanders: `open=optimise` scrolls to the section, which is always on the page.
+    expect(router.state.location.search).toMatchObject({ open: 'optimise' })
+    expect(
+      await screen.findByRole('heading', { name: 'Token optimisation savings' }),
+    ).toBeInTheDocument()
   })
 
   it('keeps the tile grid to the four like-for-like counters', async () => {

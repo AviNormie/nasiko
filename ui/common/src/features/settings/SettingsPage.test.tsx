@@ -128,7 +128,7 @@ describe('Settings: workspace sections (plans/feat-settings.md §1.1)', () => {
     ).toEqual(['Secrets'])
   })
 
-  it('the account menu’s Settings opens Account settings: Appearance and Password only', async () => {
+  it('the account menu’s Settings opens Account settings: Appearance, Password and Keyboard shortcuts', async () => {
     const { router } = renderApp('/')
     await userEvent.click(await screen.findByRole('button', { name: /^Account: / }, T))
     await userEvent.click(
@@ -141,7 +141,17 @@ describe('Settings: workspace sections (plans/feat-settings.md §1.1)', () => {
       within(nav)
         .getAllByRole('link')
         .map((l) => l.textContent),
-    ).toEqual(['Appearance', 'Password'])
+    ).toEqual(['Appearance', 'Password', 'Keyboard shortcuts'])
+  })
+
+  it('Keyboard shortcuts lists the keys, ⌘/Ctrl spelled for this platform', async () => {
+    renderApp('/account/shortcuts')
+    expect(
+      await screen.findByRole('heading', { name: 'Keyboard shortcuts', level: 1 }, T),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Collapse or expand the sidebar')).toBeInTheDocument()
+    expect(screen.getByText('Ctrl')).toBeInTheDocument()
+    expect(screen.queryByText('Mod')).not.toBeInTheDocument()
   })
 
   it('an old Settings → Password link lands on Account settings', async () => {
