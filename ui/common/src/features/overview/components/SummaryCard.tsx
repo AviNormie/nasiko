@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
+import { SpotlightCard } from '@/components/aceternity/spotlight-card'
+import { Reveal, RevealItem } from '@/components/shared/reveal'
 import type { OverviewNarrative } from '@/features/narrative/overview'
 import type { OptimisationView } from '@/features/tokenops/optimisation'
 import type { FleetHealth, HarnessSummary, Spend } from '../api'
@@ -28,31 +29,47 @@ export function SummaryCard({
   harnesses: HarnessSummary
 }) {
   return (
-    <div className="@container/overview">
-      <Card
-        asChild
-        className="gap-0 overflow-hidden p-0 @[1100px]/overview:grid @[1100px]/overview:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]"
-      >
-        <section aria-labelledby="overview-summary-title">
-          <h2 id="overview-summary-title" className="sr-only">
-            {copy.summary}
-          </h2>
-          <div className="flex flex-col justify-center gap-4 p-5">
-            <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary-text">
-              {copy.range.item(days)}
-            </Badge>
-            <Headline narrative={narrative} nothing={nothing} />
-            <MonthBar spend={spend} />
-            <Savings view={savings.view} isPending={savings.isPending} />
-          </div>
-          <div className="grid grid-cols-1 gap-px border-t border-border bg-border *:rounded-none *:border-0 @[560px]/overview:grid-cols-2 @[1100px]/overview:border-t-0 @[1100px]/overview:border-l">
+    // The summary as a bento, as on TokenOps and Optimization: the headline in the lead card (the page's one effect
+    // area), the four KPI tiles beside it, 2×2.
+    <section
+      data-tour="overview-summary"
+      aria-labelledby="overview-summary-title"
+      className="@container/overview"
+    >
+      <h2 id="overview-summary-title" className="sr-only">
+        {copy.summary}
+      </h2>
+      <Reveal className="grid gap-3 @[1100px]/overview:grid-cols-12">
+        <RevealItem className="@[1100px]/overview:col-span-6">
+          <SpotlightCard className="h-full">
+            <div className="relative flex flex-1 flex-col justify-center gap-4 p-5">
+              <Badge
+                variant="outline"
+                className="border-primary/30 bg-primary/10 text-primary-text"
+              >
+                {copy.range.item(days)}
+              </Badge>
+              <Headline narrative={narrative} nothing={nothing} />
+              <MonthBar spend={spend} />
+              <Savings view={savings.view} isPending={savings.isPending} />
+            </div>
+          </SpotlightCard>
+        </RevealItem>
+        <div className="grid grid-cols-1 gap-3 @[560px]/overview:grid-cols-2 @[1100px]/overview:col-span-6">
+          <RevealItem className="flex *:flex-1">
             <SpendTile spend={spend} />
+          </RevealItem>
+          <RevealItem className="flex *:flex-1">
             <RunsTile spend={spend} />
+          </RevealItem>
+          <RevealItem className="flex *:flex-1">
             <AgentsTile fleet={fleet} />
+          </RevealItem>
+          <RevealItem className="flex *:flex-1">
             <Harnesses data={harnesses} days={days} />
-          </div>
-        </section>
-      </Card>
-    </div>
+          </RevealItem>
+        </div>
+      </Reveal>
+    </section>
   )
 }

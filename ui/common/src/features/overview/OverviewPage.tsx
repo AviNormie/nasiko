@@ -20,10 +20,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
-import { Reveal, RevealItem } from '@/components/shared/reveal'
-import { SpotlightCard } from '@/components/aceternity/spotlight-card'
 import { StateCard } from '@/components/shared/state-card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useChatSessions } from '@/features/chat/api'
 import { overviewNarrative } from '@/features/narrative/overview'
@@ -36,17 +33,14 @@ import { useFleetHealth, useHarnessSummary, useNeedsYou, useOverviewSavings, use
 // import { Budget } from './components/Budget'
 import { FirstRun, FirstRunLead, FirstRunPreview } from './components/FirstRun'
 import { FleetHealth } from './components/FleetHealth'
-import { Harnesses, HarnessesLine } from './components/Harnesses'
-import { Headline } from './components/Headline'
-import { AgentsTile, RunsTile, SpendTile } from './components/Kpis'
-import { Savings } from './components/Savings'
-import { MonthBar } from './components/MonthBar'
+import { HarnessesLine } from './components/Harnesses'
 import { NeedsYou } from './components/NeedsYou'
 import { usePausedFlows } from '@/features/flows/paused'
 import { QuickActions } from './components/QuickActions'
 import { RecentChats } from './components/RecentChats'
 import { RecentSessions } from './components/RecentSessions'
 import { SetupGuide } from './components/SetupGuide'
+import { SummaryCard } from './components/SummaryCard'
 import { Spend } from './components/Spend'
 import { copy } from './copy'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES, type OverviewSearch } from './search'
@@ -290,44 +284,15 @@ function Overview({
   const place = budgets ? PLACE.budgets : PLACE.none
   return (
     <Frame description={description} actions={actions}>
-      {/* The summary as a bento, as on TokenOps and Optimization: the headline in the lead card (the page's one effect
-          area), the four KPI tiles beside it, 2×2. */}
-      <section data-tour="overview-summary" aria-labelledby="overview-summary-title">
-        <h2 id="overview-summary-title" className="sr-only">
-          {copy.summary}
-        </h2>
-        <Reveal className="grid gap-3 @[1100px]/overview:grid-cols-12">
-          <RevealItem className="@[1100px]/overview:col-span-6">
-            <SpotlightCard className="h-full">
-              <div className="relative flex flex-1 flex-col justify-center gap-4 p-5">
-                <Badge
-                  variant="outline"
-                  className="border-primary/30 bg-primary/10 text-primary-text"
-                >
-                  {copy.range.item(days)}
-                </Badge>
-                <Headline narrative={narrative} nothing={needs.empty} />
-                <MonthBar spend={spend} />
-                <Savings view={savings.view} isPending={savings.isPending} />
-              </div>
-            </SpotlightCard>
-          </RevealItem>
-          <div className="grid grid-cols-1 gap-3 @[560px]/overview:grid-cols-2 @[1100px]/overview:col-span-6">
-            <RevealItem className="flex *:flex-1">
-              <SpendTile spend={spend} />
-            </RevealItem>
-            <RevealItem className="flex *:flex-1">
-              <RunsTile spend={spend} />
-            </RevealItem>
-            <RevealItem className="flex *:flex-1">
-              <AgentsTile fleet={fleet} />
-            </RevealItem>
-            <RevealItem className="flex *:flex-1">
-              <Harnesses data={harnesses} days={days} />
-            </RevealItem>
-          </div>
-        </Reveal>
-      </section>
+      <SummaryCard
+        days={days}
+        narrative={narrative}
+        nothing={needs.empty}
+        spend={spend}
+        savings={savings}
+        fleet={fleet}
+        harnesses={harnesses}
+      />
       <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-12">
         <NeedsYou
           data={needsYou}

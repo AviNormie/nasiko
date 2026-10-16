@@ -1,4 +1,4 @@
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { memo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -8,16 +8,20 @@ import { CARD_SKILLS } from '../tuning'
 import type { Agent } from '../types'
 import { AgentMark, StatusBadge } from './bits'
 
+/** Memoized: every search keystroke re-renders the page, and the catalog can hold hundreds of cards. */
 export const AgentCard = memo(function AgentCard({
   agent,
   meId,
   ownerName,
   reason,
+  linkState,
 }: {
   agent: Agent
   meId?: string
   ownerName?: string
   reason?: string
+  /** The list this card was opened from, for the detail's Previous/Next (lib/siblings.ts). */
+  linkState?: () => HistoryState
 }) {
   const harness = isHarness(agent)
   const name = agent.display_name || agent.name
@@ -26,11 +30,12 @@ export const AgentCard = memo(function AgentCard({
   const extra = skills.length - CARD_SKILLS
   const owner = mine ? copy.you : ownerName
   return (
+    // One link, no nested interactive elements (plan §7.1).
     <Card
       asChild
       className="h-full gap-2 p-4 transition-[color,border-color,box-shadow] hover:border-primary/40 hover:shadow-lg focus-visible:outline-2 focus-visible:outline-ring"
     >
-      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
+      <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}} state={linkState}>
         <div className="flex items-start gap-3">
           <AgentMark name={name} iconUrl={agent.icon_url} size={36} />
           <div className="min-w-0 flex-1">
@@ -47,6 +52,7 @@ export const AgentCard = memo(function AgentCard({
         >
           {agent.description || copy.noDescription}
         </p>
+        {/* The Overview's health filter says why each agent is listed (overview design 15A; QA ISSUE-001). */}
         {reason ? (
           <p className="line-clamp-1 text-xs font-medium" data-testid="health-reason">
             {copy.healthReason(reason)}
