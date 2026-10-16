@@ -11,18 +11,21 @@
  * PR2b adds the spend sparklines, last change, budget use (a preview) and owner grouping, and two-line rows below
  * 640 px; PR2c the EE levels; PR2d the chart band between the strip and the table (`components/ChartBand`), whose health
  * bar filters the table (`?health=`).
+ *
+ * Layout (redesign 2026-10-16, mixing the Overview's bento from feat/ui-prev-next into this page): the header greets,
+ * the summary bento leads (the sentence in the page's one effect card beside the roll-up tiles, `components/Summary`),
+ * then Needs you, the chart band and the table. The header keeps the Overview's tour button: `/` has no top bar.
  */
 import { useSlots } from '@/app/edition-context'
+import { TourButton } from '@/app/shell/TopBar'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useRouter } from '@tanstack/react-router'
 import { RotateCw } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
-import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { PanelSkeleton } from '@/components/shared/panel'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -43,15 +46,15 @@ import { SetupGuide } from '@/features/overview/components/SetupGuide'
 import { copy as overviewCopy } from '@/features/overview/copy'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES } from '@/features/overview/search'
 import { meQuery, type Me } from '@/lib/api/auth'
-import { fmtLocalTime, fmtMoney, fmtMoneyFloor, fmtTokens } from '@/lib/format'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useFrozenNow, useReturnTick } from '@/lib/useReturnTick'
-import { budgetsShown, useHome, type HomeBudgets, type SourceStatus } from './api'
+import { useHome } from './api'
 import { filterByHealth } from './charts'
 import { PhoneRows } from './components/PhoneRows'
 import { RowsTable } from './components/RowsTable'
+import { Summary } from './components/Summary'
 import { copy } from './copy'
-import { budgetMonth, DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
+import { DEFAULT_SORT, sortRows, totals, type Sort } from './rows'
 import { rememberScope, resolveScope, storedScope } from './scope'
 import { isUnitScope, type HomeSearch, type Scope } from './search'
 import {
@@ -60,9 +63,9 @@ import {
   RETURN_REFRESH_MS,
   SKELETON_ROW_PX,
   SKELETON_ROWS,
+  SUMMARY_SKELETON_PX,
   TOUCH,
 } from './tuning'
-import { useBudgetStamp } from './useBudgetStamp'
 
 /** The chart band is its own chunk (PR2d, #63): the chart kit loads only when it draws. */
 const ChartBand = lazy(() => import('./components/ChartBand'))
@@ -302,6 +305,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       {/* On first run the page's own card holds the one next action (design 7A). */}
       {firstRun ? null : <DeployAgentButton variant="outline" />}
       {firstRun ? null : <SetupGuide />}
+      {/* No top bar here on desktop (phones keep it, with its own button). */}
+      <TourButton className="max-md:hidden" />
     </>
   )
 
@@ -317,14 +322,19 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
       </Frame>
     )
 
+  // The rows are on their way exactly when the table below draws its skeleton; the summary holds its place meanwhile,
+  // so Needs you under it doesn't jump when they land.
+  const rowsLoading =
+    !rows &&
+    !home.dirFailed &&
+    !(unit && (home.org.state === 'unknown' || home.org.state === 'failed'))
+
   return (
-    <Frame description={sentence ?? undefined} actions={actions}>
-      {/* An empty fleet (only reachable here through a unit link) reads no sessions, so Needs you would never settle. */}
-      {home.dir.data?.length === 0 ? null : (
-        <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} pausedFlows={pausedFlows} />
-      )}
+    <Frame description={overviewCopy.greeting(now.getHours(), me.username, days)} actions={actions}>
       {rows && t ? (
-        <Strip
+        <Summary
+          sentence={sentence}
+          days={days}
           totals={t}
           member={!me.is_superuser}
           scope={scope}
@@ -334,6 +344,8 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           savedCapped={home.savedCapped}
           budgets={home.budgets}
         />
+      ) : rowsLoading ? (
+        <PanelSkeleton height={SUMMARY_SKELETON_PX} />
       ) : null}
       {scope === 'fleet' && !me.is_superuser ? (
         <p className="m-0 text-xs text-muted-foreground">{copy.scope.sharedWithYou}</p>
@@ -351,6 +363,10 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
           </Button>
         </p>
       ) : null}
+      {/* An empty fleet (only reachable here through a unit link) reads no sessions, so Needs you would never settle. */}
+      {home.dir.data?.length === 0 ? null : (
+        <NeedsYou data={needsYou} now={now.getTime()} userId={me.sub} pausedFlows={pausedFlows} />
+      )}
       {home.spendStatus === 'failed' ||
       home.spendStatus === 'stale' ||
       home.savedStatus === 'failed' ||
@@ -478,127 +494,5 @@ function Home({ me, search, setSearch }: { me: Me; search: HomeSearch; setSearch
         </>
       )}
     </Frame>
-  )
-}
-
-function Strip({
-  totals: t,
-  member,
-  scope,
-  asOf,
-  unpriced,
-  savedStatus,
-  savedCapped,
-  budgets,
-}: {
-  totals: ReturnType<typeof totals>
-  member: boolean
-  scope: Scope | null
-  asOf: number
-  unpriced: boolean
-  savedStatus: SourceStatus
-  savedCapped: boolean
-  budgets: HomeBudgets
-}) {
-  const savedKnown = savedStatus === 'ok' || savedStatus === 'stale'
-  // Yours shows the viewer's own monthly budget; Fleet has no authoritative fleet budget to show, and owner and agent
-  // budgets overlap, so they are never summed into one (design "Home scope semantics").
-  const own = scope === 'yours' && budgetsShown(budgets.state) ? budgets.own : null
-  const stamp = useBudgetStamp(budgets.updatedAt)
-  return (
-    <section
-      aria-label={copy.strip.label}
-      data-tour="overview-summary"
-      className="flex flex-col gap-1"
-    >
-      <div
-        className={`grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border *:rounded-none *:border-0 ${own ? '@[560px]/overview:grid-cols-2 @[880px]/overview:grid-cols-4' : '@[560px]/overview:grid-cols-3'}`}
-      >
-        <KpiTile
-          label={copy.strip.spend}
-          aside={
-            member && scope !== 'yours' ? (
-              <span className="text-xs text-muted-foreground">{copy.strip.spendVisible}</span>
-            ) : null
-          }
-          value={t.spend === null ? '—' : fmtMoneyFloor(t.spend, unpriced)}
-        >
-          {unpriced ? (
-            <span className="text-xs text-muted-foreground">{copy.strip.unpriced}</span>
-          ) : null}
-          {t.spendHasEstimates ? (
-            <span className="text-xs text-muted-foreground">{copy.strip.estimates}</span>
-          ) : null}
-        </KpiTile>
-        <KpiTile
-          label={copy.strip.saved}
-          title={copy.strip.savedTooltip}
-          value={
-            !savedKnown || t.saved === null ? (
-              '—'
-            ) : (
-              <>
-                {savedCapped ? '≥ ' : ''}
-                {fmtTokens(t.saved)}{' '}
-                <span className="text-sm font-normal text-muted-foreground">
-                  {copy.strip.tokens}
-                </span>
-              </>
-            )
-          }
-        >
-          {savedKnown && t.saved === null ? (
-            <span className="text-xs text-muted-foreground">{copy.strip.notReported}</span>
-          ) : null}
-          {savedKnown && t.savedBasis ? (
-            <span className="text-xs text-muted-foreground">{copy.strip.basis(t.savedBasis)}</span>
-          ) : null}
-        </KpiTile>
-        {own ? (
-          <KpiTile
-            label={copy.budget.own}
-            aside={
-              budgets.preview ? (
-                <Badge variant="outline" className="text-3xs">
-                  {copy.budget.preview}
-                </Badge>
-              ) : null
-            }
-            // Floored, so 99.6% never reads as a full 100% while under the limit; a floor (≥) with unpriced calls.
-            value={
-              own.limit > 0
-                ? copy.budget.pct(Math.floor((own.used / own.limit) * 100), own.unpriced)
-                : '—'
-            }
-          >
-            <span className="text-xs text-muted-foreground">
-              {copy.budget.use(
-                fmtMoneyFloor(own.used, own.unpriced),
-                fmtMoney(own.limit),
-                budgetMonth(own.resetsAt),
-              )}
-            </span>
-            <span className="text-xs text-muted-foreground">{copy.budget.ownHint}</span>
-          </KpiTile>
-        ) : null}
-        <KpiTile label={copy.strip.needs} value={t.needing === null ? '—' : String(t.needing)} />
-      </div>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs text-muted-foreground">
-        {/* One note for both layouts: the table header's badge and stamp aren't announced, and phones have no header. */}
-        <p
-          className="m-0"
-          role={budgets.state === 'failed' || budgets.state === 'stale' ? 'status' : undefined}
-        >
-          {budgets.state === 'off'
-            ? copy.budget.off
-            : budgets.state === 'failed'
-              ? copy.budget.failed
-              : budgets.state === 'stale'
-                ? `${copy.budget.stale} · ${(budgets.preview ? copy.budget.note : copy.budget.liveNote)(stamp)}`
-                : (budgets.preview ? copy.budget.note : copy.budget.liveNote)(stamp)}
-        </p>
-        {asOf ? <p className="m-0">{copy.strip.asOf(fmtLocalTime(asOf))}</p> : null}
-      </div>
-    </section>
   )
 }

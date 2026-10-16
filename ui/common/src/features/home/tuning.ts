@@ -35,3 +35,5 @@ export const SAVED_BARS = 5
 export const BAND_STACK = 5
 /** The chart band's placeholder while its chunk loads. */
 export const BAND_SKELETON_PX = 420
+/** The summary bento's placeholder until the rows answer (two tile rows), so Needs you below it doesn't jump. */
+export const SUMMARY_SKELETON_PX = 216
