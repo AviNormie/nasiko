@@ -39,8 +39,6 @@ const ALPHA: f64 = 1.0;
 /// 5-fold cross-validation on the training split only (ECE ~0.08; the validation split was
 /// never used for tuning). See `calibration_cv_on_train_only`.
 const TEMPERATURE: f64 = 0.25;
-/// Logit scaling: `logit / (sqrt(n_tokens) * TEMPERATURE)`. Raw NB posteriors are saturated
-/// (~1.0) for long inputs; this brings confidence back to a usable, calibrated range.
 
 /// Context tokens count for less than query tokens.
 const CONTEXT_WEIGHT: f64 = 0.3;
