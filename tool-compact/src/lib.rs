@@ -111,7 +111,8 @@
 //! # Invariants
 //!
 //! * **Fail-closed** — the first problem fails the whole output. No call is guessed, repaired or
-//!   coerced; a call that passes carries the model's arguments unchanged.
+//!   coerced; a call that passes carries the model's arguments unchanged, except that a
+//!   required field allowing `null` that the model left out is added as `null`.
 //! * **Bypass, not loss** — a schema feature the grammar cannot express makes
 //!   [`encode_tools`] fail with [`CompactError::Unsupported`]; the caller sends native tools.
 //! * **Chunking-invariant** — [`StreamDecoder`] gives the same result however the output is
