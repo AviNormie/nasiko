@@ -4,7 +4,7 @@
  * don't reflow as checks resolve. The columns follow the list's width, not the viewport's (the
  * sidebar takes 240 px): below 672 px the row becomes two lines.
  */
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { m } from 'motion/react'
 import { ChevronDown, ScrollText } from 'lucide-react'
 import { memo, useState } from 'react'
@@ -48,6 +48,7 @@ export const SessionRow = memo(function SessionRow({
   expanded,
   onToggle,
   linkSearch,
+  linkState,
   fresh,
 }: {
   s: SessionSummary
@@ -60,6 +61,7 @@ export const SessionRow = memo(function SessionRow({
   expanded: boolean
   onToggle: (sessionId: string) => void
   linkSearch: Partial<SessionsSearch>
+  linkState: () => HistoryState
   fresh: boolean
 }) {
   const input = s.first_input ?? s.session_id
@@ -84,6 +86,7 @@ export const SessionRow = memo(function SessionRow({
           to="/sessions/$sessionId"
           params={{ sessionId: s.session_id }}
           search={linkSearch}
+          state={linkState}
           className="min-w-0 flex-1 px-2 py-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring @[672px]:grid @[672px]:grid-cols-[5.5rem_10rem_minmax(0,1fr)_5rem_4.5rem_8.5rem] @[672px]:items-center @[672px]:gap-x-3"
           aria-label={label}
         >

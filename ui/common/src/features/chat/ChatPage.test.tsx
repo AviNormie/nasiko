@@ -207,7 +207,10 @@ describe('/chat/$sessionId', () => {
   it('View trace opens the waterfall in a sheet; header totals sum the loaded replies', async () => {
     renderApp(`/chat/${DONE}`)
     expect(await screen.findByText('Three incidents')).toBeInTheDocument()
-    expect(screen.getAllByTestId('chat-totals')[0]).toHaveTextContent('908 tokens · $0.0021')
+    // The totals are in the ⋯ menu (each reply shows its own in the conversation).
+    await userEvent.click(screen.getByRole('button', { name: 'More chat actions' }))
+    expect(await screen.findByTestId('chat-totals')).toHaveTextContent('908 tokens · $0.0021')
+    await userEvent.keyboard('{Escape}')
     await userEvent.click(screen.getByRole('button', { name: 'View trace' }))
     const sheet = await screen.findByRole('dialog', { name: 'Trace for this reply' })
     expect(await within(sheet).findByRole('tree')).toBeInTheDocument()

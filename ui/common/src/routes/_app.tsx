@@ -7,6 +7,7 @@ import { BuildToasts } from '@/features/deploy/components/BuildToasts'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { followedCount, subscribeFollower } from '@/features/deploy/follower'
 import { useGuideHiddenNav } from '@/features/onboarding/api'
+import { TourHost } from '@/features/tour/TourHost'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { isSignedOutLocally } from '@/lib/session'
@@ -47,16 +48,18 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const slots = useSlots()
-  const navHidden = slots.navHidden
+  const navHidden = useSlots().navHidden
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
-  // Budgets are Enterprise only: an OSS build has no item to hide, and EE hides its own while the probe is out.
-  const budgetsHidden = slots.budgets.useNavHidden()
   return (
     <AppShell
-      end={<BuildToasts />}
-      hidden={[...guideHidden, ...layerHidden, ...budgetsHidden]}
+      end={
+        <>
+          <BuildToasts />
+          <TourHost />
+        </>
+      }
+      hidden={[...guideHidden, ...layerHidden]}
       badges={
         building
           ? { '/agents': { count: building, label: deployCopy.toast.agentsBadge(building) } }

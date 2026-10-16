@@ -63,6 +63,7 @@ export function TargetPicker({
     >
       <PopoverTrigger asChild>
         <Button
+          data-tour="chat-target"
           type="button"
           size="sm"
           variant="outline"

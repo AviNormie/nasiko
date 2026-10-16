@@ -73,7 +73,7 @@ describe('Your agents folding', () => {
     // It shows above the group, so the group says "more" and agrees with the strip's 15.
     expect(folded()).toHaveTextContent(copy.foldedTitleMore('14'))
     expect(
-      within(screen.getByRole('navigation', { name: copy.summaryLabel })).getByRole('button', {
+      within(screen.getByRole('tablist', { name: copy.summaryLabel })).getByRole('tab', {
         name: /^15 on your default/,
       }),
     ).toBeInTheDocument()
@@ -146,7 +146,7 @@ describe('Your agents folding', () => {
     await ready()
     await userEvent.click(toggle())
     await userEvent.click(
-      within(screen.getByRole('navigation', { name: copy.summaryLabel })).getByRole('button', {
+      within(screen.getByRole('tablist', { name: copy.summaryLabel })).getByRole('tab', {
         name: /on your default/,
       }),
     )

@@ -1,7 +1,9 @@
 /** An open chat's header (§7.3, §6.10): identity, title (inline rename), totals, View session and the ⋯ menu. */
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { Activity, MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { TopBar } from '@/app/shell/TopBar'
+import { PrevNext, type StepVia } from '@/components/shared/prev-next'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -14,16 +16,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ApiError } from '@/lib/api/client'
+import { siblingsAround } from '@/lib/siblings'
 import { useRenameChat } from '../api'
 import { copy } from '../copy'
 import { announce } from '../announce'
 import { fmtCostPerOp, fmtTokens } from '@/lib/format'
+import { useRailOrder } from '../railOrder'
 import { chatTotals } from '../format'
 import type { ChatIdentity } from '../identity'
 import type { ChatMessage, ChatSessionRow } from '../types'
 import { IdentityChip, IdentityIcon } from './ChatIdentity'
-import { CHAT_COLUMN } from './turnStyles'
-import { cn } from '@/lib/utils'
 
 // quirk: §10.11 — the server caps nothing; this is the UI's own cap.
 const TITLE_MAX = 80
@@ -63,31 +65,41 @@ export function SessionHeader({
   /** Set while Rename is chosen from the menu, so the closing menu doesn't pull focus off the input. */
   const renaming = useRef(false)
   return (
-    <header className="flex h-12 shrink-0 items-center border-b border-border">
-      <div className={cn(CHAT_COLUMN, 'flex min-w-0 items-center gap-2')}>
-        {railButton}
-        {identity ? <IdentityIcon kind={identity.kind} name={identity.name} size={20} /> : null}
-        {editing && row ? (
-          <RenameTitle sessionId={sessionId} title={row.title} onDone={() => setEditing(false)} />
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-auto min-w-0 shrink justify-start px-0 py-0 text-left text-sm font-medium hover:bg-transparent hover:underline dark:hover:bg-transparent pointer-coarse:min-h-11"
-            title={copy.rename}
-            onClick={() => row && !readOnly && setEditing(true)}
-          >
-            <span className="truncate">
-              {row?.title ?? (loading ? copy.loadingChat : copy.chatsNav)}
-            </span>
-          </Button>
-        )}
-        {/* The chip hides below 480 px of pane width; the icon keeps the kind (DS5). */}
-        {identity ? (
-          <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
-        ) : null}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <HeaderTotals replies={replies} partial={partial} className="hidden @min-[560px]:flex" />
+    // The app's top bar holds the chat's header: identity and title on the left, its actions, then Previous/Next.
+    <TopBar
+      pinActions
+      root={
+        <Link to="/chat" search={{}}>
+          {copy.chatsNav}
+        </Link>
+      }
+      trail={[
+        <div key="chat" className="flex min-w-0 items-center gap-2">
+          {railButton}
+          {identity ? <IdentityIcon kind={identity.kind} name={identity.name} size={20} /> : null}
+          {editing && row ? (
+            <RenameTitle sessionId={sessionId} title={row.title} onDone={() => setEditing(false)} />
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-auto min-w-0 shrink justify-start px-0 py-0 text-left text-sm font-medium hover:bg-transparent hover:underline dark:hover:bg-transparent pointer-coarse:min-h-11"
+              title={copy.rename}
+              onClick={() => row && !readOnly && setEditing(true)}
+            >
+              <span className="truncate">
+                {row?.title ?? (loading ? copy.loadingChat : copy.chatsNav)}
+              </span>
+            </Button>
+          )}
+          {/* The chip hides below 480 px of pane width; the icon keeps the kind (DS5). */}
+          {identity ? (
+            <IdentityChip identity={identity} className="hidden @min-[480px]:inline-flex" />
+          ) : null}
+        </div>,
+      ]}
+      actions={
+        <>
           <Button
             asChild
             size="sm"
@@ -121,12 +133,13 @@ export function SessionHeader({
                 }
               }}
             >
+              {/* The totals live here, not in the bar: each reply shows its own (one cost readout per place). */}
               {replies.length ? (
                 <>
-                  <DropdownMenuLabel className="font-normal @min-[560px]:hidden">
+                  <DropdownMenuLabel className="font-normal">
                     <HeaderTotals replies={replies} partial={partial} stacked />
                   </DropdownMenuLabel>
-                  <DropdownMenuSeparator className="@min-[560px]:hidden" />
+                  <DropdownMenuSeparator />
                 </>
               ) : null}
               <DropdownMenuItem asChild className="@min-[560px]:hidden pointer-coarse:min-h-11">
@@ -167,9 +180,43 @@ export function SessionHeader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
-      </div>
-    </header>
+        </>
+      }
+      stepper={<ChatSiblings sessionId={sessionId} />}
+    />
+  )
+}
+
+/**
+ * Previous/Next through the rail's chats as shown (railOrder.ts). Pushes, like a rail click; dev aids carry over.
+ * Below 480 px of pane width the buttons hide (the rail is the way there), but J/K still work: PrevNext stays mounted.
+ */
+function ChatSiblings({ sessionId }: { sessionId: string }) {
+  const navigate = useNavigate()
+  const ids = useRailOrder((s) => s.ids)
+  const around = siblingsAround(ids, sessionId)
+  if (!around) return null
+  const go = (id: string | undefined, via: StepVia) => {
+    if (id)
+      void navigate({
+        from: '/chat/$sessionId',
+        to: '/chat/$sessionId',
+        params: { sessionId: id },
+        search: (s) => ({ mock: s.mock, debug: s.debug }),
+        // A click lands in the composer; J/K keeps focus out of it, so the next key steps again.
+        state: { chatFocus: via === 'key' ? 'none' : 'composer' },
+      })
+  }
+  return (
+    <PrevNext
+      noun="chat"
+      index={around.index}
+      count={around.count}
+      onPrev={(via) => go(around.prev, via)}
+      onNext={(via) => go(around.next, via)}
+      restoreFocus={false}
+      className="hidden @min-[480px]:flex"
+    />
   )
 }
 

@@ -42,7 +42,7 @@ describe('partial mocks in live mode', () => {
       await screen.findByRole('table', { name: copy.agentsTitle })
       await waitFor(() =>
         expect(
-          within(screen.getByRole('navigation', { name: copy.summaryLabel })).getByRole('button', {
+          within(screen.getByRole('tablist', { name: copy.summaryLabel })).getByRole('tab', {
             name: '19 agents',
           }),
         ).toBeInTheDocument(),
