@@ -3,7 +3,7 @@
  * route, so /login stays bare. Pages keep their own max width; Chat fills the viewport height.
  */
 import { Outlet, useRouterState } from '@tanstack/react-router'
-import { type ReactNode, use, useState } from 'react'
+import { type ComponentType, type ReactNode, use, useState } from 'react'
 import { applyNav } from '@/app/edition'
 import { EditionContext } from '@/app/edition-context'
 import { Button } from '@/components/ui/button'
@@ -27,10 +27,12 @@ const BARE = /^\/(chat\/?)?$/
  */
 export function AppShell({
   end,
+  split: Split,
   badges,
   hidden,
 }: {
   end?: ReactNode
+  split?: ComponentType<{ path: string; children: ReactNode }> | null
   badges?: NavBadges
   /** Nav paths to leave out (onboarding hides Overview while its guide stands in for it). */
   hidden?: readonly string[]
@@ -57,6 +59,22 @@ export function AppShell({
   // The drill-in slot (sidebarPanel.ts): the sidebar hands out `target`, a page's SidebarPanel portals into it.
   const [target, setTarget] = useState<HTMLElement | null>(null)
   const [panels, setPanels] = useState(0)
+  const inset = (
+    <SidebarInset id="main" tabIndex={-1} className={cn('outline-none', fullHeight && 'min-h-0')}>
+      {/* One bar above every page (TopBar.tsx); on phones it also holds the menu button (§4.2). */}
+      <ShellTopBar item={item} pathname={pathname} bare={bare}>
+        {fullHeight ? (
+          <div className="min-h-0 flex-1">
+            <Outlet />
+          </div>
+        ) : (
+          <div className="mx-auto w-full max-w-page px-4 py-4">
+            <Outlet />
+          </div>
+        )}
+      </ShellTopBar>
+    </SidebarInset>
+  )
   return (
     <SidebarPanelContext value={{ target, setTarget, panels, setPanels }}>
       <SidebarProvider
@@ -76,24 +94,7 @@ export function AppShell({
           {copy.skipToContent}
         </Button>
         <AppSidebar badges={badges} hidden={hidden} />
-        <SidebarInset
-          id="main"
-          tabIndex={-1}
-          className={cn('outline-none', fullHeight && 'min-h-0')}
-        >
-          {/* One bar above every page (TopBar.tsx); on phones it also holds the menu button (§4.2). */}
-          <ShellTopBar item={item} pathname={pathname} bare={bare}>
-            {fullHeight ? (
-              <div className="min-h-0 flex-1">
-                <Outlet />
-              </div>
-            ) : (
-              <div className="mx-auto w-full max-w-page px-4 py-4">
-                <Outlet />
-              </div>
-            )}
-          </ShellTopBar>
-        </SidebarInset>
+        {Split ? <Split path={pathname}>{inset}</Split> : inset}
         {end}
       </SidebarProvider>
     </SidebarPanelContext>

@@ -50,6 +50,7 @@ coverage/
 
 # Playwright
 test-results/
+genui-eval/
 playwright-report/
 # Storybook
 storybook-static/

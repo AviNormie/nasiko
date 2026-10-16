@@ -2405,6 +2405,8 @@ function usageResponse(fn: () => unknown): Response {
 /** What an edition's mocks build on: the core mock's live state and response helpers (never copies of them). */
 export const mockCtx = {
   loggedIn: () => loggedIn,
+  seed: getSeed,
+  finopsSeed: getFinopsSeed,
   now: () => nowFn(),
   variant,
   superuser,

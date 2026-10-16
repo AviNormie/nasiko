@@ -10,7 +10,7 @@
  *   editions have (the harness usage endpoint's bare vs coded 404, crash-guardian fields). A probe never stands in
  *   for the edition.
  */
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { TourStep } from '@/lib/tour'
 import type { NavGroupId, NavItem } from './shell/nav'
 
@@ -90,6 +90,11 @@ export interface Slots {
   topbarStart: ComponentType | null
   shellEnd: ComponentType<{ path: string }> | null
   /**
+   * Wraps the page in a split with a panel of its own. While the panel shows beside the page, it sets
+   * `--shell-split-end` (its width) on an ancestor of `children`, so fixed page layers (`PageLoader`) stop short of it.
+   */
+  shellSplit: ComponentType<{ path: string; children: ReactNode }> | null
+  /**
    * Rows a layer adds to /optimization's Workspace footer, after the core's tiers row (EE: Organization policy;
    * plans/feat-optimization-page.md R5B). Superusers only, like the footer. Each renders a `WorkspaceRow` or nothing.
    */
@@ -126,6 +131,7 @@ export const OSS_SLOTS: Slots = {
   tokenopsOrgUnitFilter: null,
   topbarStart: null,
   shellEnd: null,
+  shellSplit: null,
   optimizationWorkspace: null,
   navHidden: null,
   tours: [],
@@ -174,6 +180,7 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     if (s.tokenopsOrgUnitFilter !== undefined) out.tokenopsOrgUnitFilter = s.tokenopsOrgUnitFilter
     if (s.topbarStart !== undefined) out.topbarStart = s.topbarStart
     if (s.shellEnd !== undefined) out.shellEnd = s.shellEnd
+    if (s.shellSplit !== undefined) out.shellSplit = s.shellSplit
     if (s.optimizationWorkspace !== undefined) out.optimizationWorkspace = s.optimizationWorkspace
     if (s.navHidden !== undefined) out.navHidden = s.navHidden
   }

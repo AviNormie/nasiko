@@ -174,7 +174,16 @@ pub async fn agent_proxy(
 
     // Every message send must belong to a persisted session (may inject a
     // generated contextId into the body — see `ensure_chat_session`).
-    let prepared = ensure_chat_session(&state, &claims, agent_id, &agent_base, body_bytes).await?;
+    let prepared = ensure_chat_session(
+        &state,
+        &claims,
+        agent_id,
+        &agent_base,
+        body_bytes,
+        agent.is_internal,
+        !agent.keeps_session_memory,
+    )
+    .await?;
     let (body_bytes, persist_info) = (prepared.body, prepared.persist);
 
     // What this request's history selection chose from, and what it kept. Recorded here rather
@@ -359,6 +368,7 @@ pub async fn agent_proxy(
     // already guaranteed the chat_sessions row, so the FK holds.
     if !body_bytes.is_empty()
         && let Ok(body_json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        && !(agent.is_internal && is_ephemeral(&body_json))
     {
         let context_id = body_json
             .pointer("/params/message/contextId")
@@ -618,6 +628,29 @@ const MESSAGE_SEND_METHODS: &[&str] = &[
     "message/stream",
 ];
 
+const EPHEMERAL_METADATA_KEY: &str = "nasiko_ephemeral";
+
+fn is_ephemeral(rpc: &serde_json::Value) -> bool {
+    rpc.pointer("/params/metadata")
+        .and_then(|m| m.get(EPHEMERAL_METADATA_KEY))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn session_binding(
+    state: &AppState,
+    session_id: &str,
+) -> Result<Option<(Uuid, Uuid)>, StatusCode> {
+    sqlx::query_as("SELECT user_id, agent_id FROM chat_sessions WHERE session_id = $1")
+        .bind(session_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %session_id, "agent proxy: session lookup failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
+}
+
 /// Session and user-message info extracted during `ensure_chat_session` so the
 /// proxy can persist both user and agent messages to `chat_messages` without
 /// re-parsing the request body a second time.
@@ -666,6 +699,8 @@ async fn ensure_chat_session(
     agent_id: Uuid,
     _agent_base_url: &str,
     body_bytes: axum::body::Bytes,
+    internal_agent: bool,
+    stitch_history: bool,
 ) -> Result<PreparedRequest, StatusCode> {
     // Not JSON, or not a message send → pass through; the agent is the
     // authority on whether the payload is valid A2A.
@@ -679,11 +714,24 @@ async fn ensure_chat_session(
     if !is_send {
         return Ok(PreparedRequest::passthrough(body_bytes));
     }
+    let user_id: Uuid = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
+    if internal_agent && is_ephemeral(&rpc) {
+        let context_id = rpc
+            .pointer("/params/message/contextId")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty());
+        if let Some(context_id) = context_id
+            && let Some((owner, _)) = session_binding(state, context_id).await?
+            && !claims.is_superuser
+            && owner != user_id
+        {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        return Ok(PreparedRequest::passthrough(body_bytes));
+    }
     let Some(message) = rpc.pointer_mut("/params/message") else {
         return Ok(PreparedRequest::passthrough(body_bytes));
     };
-
-    let user_id: Uuid = claims.sub.parse().map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     let existing_ctx = message
         .get("contextId")
@@ -758,16 +806,7 @@ async fn ensure_chat_session(
     // conversation into the second agent's prompt — checked regardless of
     // superuser status, since this is about context isolation, not access.
     let same_agent_session = if inserted.rows_affected() == 0 {
-        let existing: Option<(Uuid, Uuid)> =
-            sqlx::query_as("SELECT user_id, agent_id FROM chat_sessions WHERE session_id = $1")
-                .bind(&session_id)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, %session_id, "agent proxy: session lookup failed");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?;
-        match existing {
+        match session_binding(state, &session_id).await? {
             Some((owner, bound_agent)) => {
                 if !claims.is_superuser && owner != user_id {
                     return Err(StatusCode::FORBIDDEN);
@@ -795,7 +834,7 @@ async fn ensure_chat_session(
     // continuity its own "resume with --session-id" hint implies.
     let mut rewrite_needed = injected;
     let mut context_report = None;
-    if !user_text.is_empty() && same_agent_session {
+    if stitch_history && !user_text.is_empty() && same_agent_session {
         // This agent receives the history, so its switch decides IP-4; unreadable reads as off.
         // Via the shared helper rather than an inline query: that one also excludes soft-deleted
         // agents, which an inline `WHERE id = $1` does not.
