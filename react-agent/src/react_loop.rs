@@ -297,6 +297,18 @@ pub struct OrchestratorConfig {
     /// framing of what this orchestrator is for, while a policy is operator
     /// rules that outlive any one caller.
     pub policy: Option<Arc<dyn DelegationPolicy>>,
+    /// Text sent with every agent call this orchestration makes, as its own
+    /// message part after the model's own message. `None` sends the model's
+    /// own wording unchanged.
+    ///
+    /// Distinct from `preamble`, which reaches only this orchestrator's own
+    /// system prompt: a minted sub-leg is a fresh conversation with a different
+    /// model that never sees the preamble, so content that has to hold for the
+    /// *agents* has to travel on the wire to each of them. The loop carries it
+    /// as a resolved string rather than a callback because it is by definition
+    /// the same for every leg — resolving it once per turn is what keeps a
+    /// fan-out from paying for it N times.
+    pub outbound_prefix: Option<String>,
 }
 
 impl Default for OrchestratorConfig {
@@ -310,6 +322,7 @@ impl Default for OrchestratorConfig {
             base_url: None,
             api_key: None,
             policy: None,
+            outbound_prefix: None,
         }
     }
 }
@@ -361,14 +374,6 @@ impl Orchestrator {
             context,
             guard: None,
         }
-    }
-
-    /// This turn's IP-3 measurement (tool-result bytes in and out), shared with the clone
-    /// `run_stream` hands to its spawned task — so a streaming turn's compression is visible here
-    /// even though nothing else about that turn's context is. Take it before the run, read it
-    /// after.
-    pub fn compression_tally(&self) -> crate::context::CompressionTally {
-        self.context.compression_tally()
     }
 
     pub fn with_a2a_client(mut self, client: A2aClient) -> Self {
@@ -567,7 +572,8 @@ impl Orchestrator {
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             self.context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -618,7 +624,8 @@ impl Orchestrator {
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
 
@@ -738,7 +745,8 @@ impl Orchestrator {
 
         for agent in agents {
             let tool = A2aTool::new(agent.clone(), self.a2a_client.clone())
-                .with_policy(self.config.policy.clone());
+                .with_policy(self.config.policy.clone())
+                .with_outbound_prefix(self.config.outbound_prefix.clone());
             defs.push(ToolDyn::definition(&tool, String::new()).await);
             builder = builder.static_tool(tool);
         }
@@ -803,7 +811,8 @@ async fn run_stream_inner(
         let tool = A2aTool::new(agent.clone(), agents_ctx.a2a_client.clone())
             .with_progress(tx.clone())
             .with_file_parts(file_parts.to_vec())
-            .with_policy(config.policy.clone());
+            .with_policy(config.policy.clone())
+            .with_outbound_prefix(config.outbound_prefix.clone());
         tool_defs.push(ToolDyn::definition(&tool, String::new()).await);
         builder = builder.static_tool(tool);
     }
@@ -1027,7 +1036,8 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1081,7 +1091,8 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
             } else {
@@ -1271,7 +1282,8 @@ async fn run_stream_inner(
                             let completed_names = tool_calls[..results_for_context.len()]
                                 .iter()
                                 .map(|tc| tc.function.name.as_str())
-                                .collect::<Vec<_>>();
+                                .collect::<Vec<_>>()
+                                .join("+");
                             context.push_tool_result(
                                 &completed_names,
                                 &results_for_context.join("\n\n"),
@@ -1325,7 +1337,8 @@ async fn run_stream_inner(
                     &tool_calls
                         .iter()
                         .map(|tc| tc.function.name.as_str())
-                        .collect::<Vec<_>>(),
+                        .collect::<Vec<_>>()
+                        .join("+"),
                     &combined,
                 );
             } else {
@@ -1483,6 +1496,7 @@ mod awaiting_human_tests {
             description: "for tests".into(),
             endpoint: endpoint.into(),
             skills: vec![],
+            auth_header: None,
         }
     }
 
