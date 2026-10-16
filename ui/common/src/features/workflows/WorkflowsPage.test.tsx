@@ -63,10 +63,10 @@ describe('Workflow lists (plans/feat-workflows.md §2)', () => {
     renderApp('/workflows')
     await card('Ticket resolution')
     await userEvent.click(screen.getByRole('link', { name: copy.nav.drafts }))
-    expect(
-      await screen.findByRole('link', { name: copy.nav.drafts, current: 'page' }, T),
-    ).toBeVisible()
+    // Wait for the drafts list first: the page re-renders its sub-nav as the list loads, so a tab found before then
+    // can be detached by the time it is checked (the flake this replaced).
     const onboarding = await card('Onboarding checklist')
+    expect(screen.getByRole('link', { name: copy.nav.drafts, current: 'page' })).toBeVisible()
     expect(within(onboarding).getByText(/^Updated /)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Ticket resolution' })).toBeNull()
   })

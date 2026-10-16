@@ -2114,18 +2114,26 @@ function chatScenario(): ChatScenario | null {
   )
 }
 
+/**
+ * Agents an edition's mocks add for the chat mock only, the way the real server has internal agents no listing shows
+ * (EE: the Weave agent its assistant chats with). Keyed by id, so a module re-evaluated by HMR replaces its entry.
+ */
+const chatOnlyAgents = new Map<string, { id: string; name: string; running: boolean }>()
+
 const chatCtx: ChatMockContext = {
   loggedIn: () => loggedIn,
   userId: () => ADMIN_ID,
   now: () => nowFn(),
-  agents: () =>
-    getAgents()
+  agents: () => [
+    ...getAgents()
       .agents.filter((a) => !a.deleted && !a.tags.includes('coding-agent'))
       .map((a) => ({
         id: a.id,
         name: a.name,
         running: a.status === 'running' && !hasVariant('no-agents'),
       })),
+    ...chatOnlyAgents.values(),
+  ],
   scenario: chatScenario,
   traceId: () => observabilityData(getSeed()).showcaseTraceId || null,
   username: () => 'admin',
@@ -2580,6 +2588,10 @@ export const mockCtx = {
   harnessMessages,
   /** A budgets state under its own name or its router alias (eng D2), for the layer that owns the mock. */
   budgetVariant,
+  /** Adds an agent the chat mock knows (sessions may name it) but the agents mock never lists: an internal agent. */
+  addChatOnlyAgent: (agent: { id: string; name: string; running: boolean }) => {
+    chatOnlyAgents.set(agent.id, agent)
+  },
 }
 
 /**

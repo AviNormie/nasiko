@@ -63,7 +63,7 @@ describe('sidebar items', () => {
   })
 
   it.each([
-    ['/tokenops', 'TokenOps'],
+    ['/tokenops', 'Monitor'],
     ['/sessions', 'Sessions'],
     ['/harnesses', 'Harnesses'],
     ['/agents', 'Agents'],
@@ -94,7 +94,7 @@ describe('sidebar items', () => {
     // The other shared keys still cross into Sessions and TokenOps; the window doesn't.
     expect(navLink('Sessions').getAttribute('href')).toContain('compare=false')
     expect(navLink('Sessions').getAttribute('href')).not.toContain('preset')
-    expect(navLink('TokenOps').getAttribute('href')).not.toContain('preset')
+    expect(navLink('Monitor').getAttribute('href')).not.toContain('preset')
     expect(navLink('Chat').getAttribute('href')).toBe('/chat')
     expect(navLink('Agents').getAttribute('href')).toBe('/agents')
   })
@@ -102,7 +102,7 @@ describe('sidebar items', () => {
   it('keeps the shared keys and drops page-only ones when following the links', async () => {
     const { router } = renderApp('/sessions?preset=7d&day=2026-03-18')
     await screen.findByRole('navigation', { name: 'Main' })
-    await userEvent.click(navLink('TokenOps'))
+    await userEvent.click(navLink('Monitor'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     // TokenOps opens on its own 30 days, not Sessions' window.
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
@@ -559,10 +559,10 @@ describe('drill-in panel (one sidebar on Chat and Settings)', () => {
     expect(back).toHaveAttribute('title', 'Back to Chat')
     await userEvent.click(back)
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat'))
-    await userEvent.click(await screen.findByRole('button', { name: 'Back to TokenOps' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Back to Monitor' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     expect(router.state.location.search).toMatchObject({ preset: '7d' })
-    await waitFor(() => expect(document.activeElement).toBe(navLink('TokenOps')))
+    await waitFor(() => expect(document.activeElement).toBe(navLink('Monitor')))
   })
 
   it('leaves the panel for the app nav on a page without one', async () => {

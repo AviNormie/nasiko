@@ -42,19 +42,25 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'nav-fleet',
       side: 'right',
       title: 'Your fleet',
-      body: 'Agents are what you deploy and run. Workflows chain several agents into one repeatable job.',
+      body: 'Agents are what you deploy and run. Workflows chain several agents into one repeatable job. Harnesses are the coding tools connected to it.',
+    },
+    {
+      target: 'nav-observe',
+      side: 'right',
+      title: 'Watch',
+      body: 'Sessions and Flows show what happened, step by step.',
+    },
+    {
+      target: 'nav-tokenops',
+      side: 'right',
+      title: 'Spend',
+      body: 'Monitor shows what it cost. Optimise shows how to spend less.',
     },
     {
       target: 'nav-connect',
       side: 'right',
       title: 'What agents can call',
       body: 'The LLM router decides which model and key each agent uses. MCP servers give agents tools.',
-    },
-    {
-      target: 'nav-observe',
-      side: 'right',
-      title: 'Watch and pay',
-      body: 'Sessions and Flows show what happened, step by step. TokenOps, Optimization and Harnesses show what it cost and how to spend less.',
     },
     {
       target: 'nav-org',
