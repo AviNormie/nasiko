@@ -107,7 +107,11 @@ describe('checkZip (eng review R5: tail read, capped entries)', () => {
     expect(
       (
         await checkZip(
-          zip({ ...rest, Dockerfile: 'FROM node:20\nCMD ["node", "server.js"]\n', 'server.js': '' }),
+          zip({
+            ...rest,
+            Dockerfile: 'FROM node:20\nCMD ["node", "server.js"]\n',
+            'server.js': '',
+          }),
         )
       ).items.entrypoint.state,
     ).toBe('pass')
@@ -115,7 +119,11 @@ describe('checkZip (eng review R5: tail read, capped entries)', () => {
     expect(
       (
         await checkZip(
-          zip({ ...rest, Dockerfile: 'FROM rust:1\nENTRYPOINT ["/app/agent"]\n', 'Cargo.toml': '' }),
+          zip({
+            ...rest,
+            Dockerfile: 'FROM rust:1\nENTRYPOINT ["/app/agent"]\n',
+            'Cargo.toml': '',
+          }),
         )
       ).items.entrypoint.state,
     ).toBe('pass')
