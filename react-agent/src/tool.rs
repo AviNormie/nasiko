@@ -488,9 +488,9 @@ mod tests {
     ///
     /// Appended as a SEPARATE part, never spliced into the model's own wording — same
     /// representation `a2a_dispatch.rs`/`agent_proxy.rs` use via
-    /// `nasiko_agent_proxy::context_part::append_context_part`. The exact array (not just a
-    /// partial match on part 0) is what actually pins that the query stays untouched AND the
-    /// policy lands as an additional part, not merged into it.
+    /// `nasiko_agent_proxy::context_part::append_context_part`. The content match pins that the
+    /// query stays untouched AND the policy lands as an additional part, not merged into it; the
+    /// part count pins that nothing else rode along (a partial JSON match alone would not).
     #[tokio::test]
     async fn an_outbound_prefix_is_appended_as_its_own_message_part() {
         let mut server = mockito::Server::new_async().await;
@@ -502,6 +502,7 @@ mod tests {
                     {"kind": "text", "text": "POLICY"}
                 ]}}
             })))
+            .match_request(|request| forwarded_part_count(request) == 2)
             .with_status(200)
             .with_body(a2a_response_body())
             .create_async()
@@ -535,6 +536,7 @@ mod tests {
                     {"kind": "text", "text": "POLICY"}
                 ]}}
             })))
+            .match_request(|request| forwarded_part_count(request) == 3)
             .with_status(200)
             .with_body(a2a_response_body())
             .create_async()
@@ -566,6 +568,7 @@ mod tests {
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "params": {"message": {"parts": [{"text": "hi"}]}}
             })))
+            .match_request(|request| forwarded_part_count(request) == 1)
             .with_status(200)
             .with_body(a2a_response_body())
             .create_async()
@@ -581,6 +584,22 @@ mod tests {
 
         mock.assert_async().await;
         assert!(result.is_ok());
+    }
+
+    /// How many message parts a forwarded request carried. `mockito::Matcher::PartialJson` accepts
+    /// extra trailing array elements, so on its own it cannot say "and nothing else was sent"; a
+    /// test that claims an exact list pairs it with this.
+    fn forwarded_part_count(request: &mockito::Request) -> usize {
+        request
+            .body()
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(raw).ok())
+            .and_then(|body| {
+                body.pointer("/params/message/parts")
+                    .and_then(serde_json::Value::as_array)
+                    .map(Vec::len)
+            })
+            .unwrap_or(0)
     }
 
     fn input_required_response_body() -> String {
