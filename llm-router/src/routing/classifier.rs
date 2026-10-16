@@ -931,7 +931,7 @@ mod tests {
             Some(&"context ".repeat(200)),
         );
         assert_eq!(trivial, 1);
-        assert!(hard >= 4 && hard <= 5, "hard={hard}");
+        assert!((4..=5).contains(&hard), "hard={hard}");
         assert_eq!(
             estimate_complexity("same", None),
             estimate_complexity("same", None)
