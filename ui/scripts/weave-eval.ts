@@ -432,6 +432,68 @@ const linkTurns: Turn[] = [
   linkTurn('trick-haiku-agents', 'write a haiku about my agents', { uses: [] }, 'no-view'),
 ]
 
+const MODEL_LINK = ['$model', 'model: $model']
+const routerTurns: Turn[] = [
+  linkTurn(
+    'router-overview',
+    'Show me my LLM router: which models I use, what they cost, and let me click a model to see its trend and which agents use it',
+    { uses: ['fetchModelUsage', ...MODEL_LINK, 'CostDrivers('], sections: FULL },
+  ),
+  linkTurn(
+    'router-cheaper',
+    'Could we save money with cheaper models? Compare what each model costs us with its list price',
+    { uses: ['fetchModelUsage', 'price_per_1m'], sections: FULL },
+  ),
+  linkTurn(
+    'router-configs',
+    'How are my LLM calls routed? Show the routing configs and their fallbacks',
+    {
+      uses: ['fetchRoutingConfigs'],
+    },
+  ),
+  linkTurn('router-gpt4o-trend', 'How has our gpt-4o spend moved over the last 30 days?', {
+    uses: ['gpt-4o', 'SpendTimeline('],
+  }),
+  linkTurn('router-providers', 'Split our LLM spend by provider', {
+    uses: ['fetchModelUsage', 'provider'],
+  }),
+  linkTurn('router-only-table', 'only the model cost table, nothing else', {
+    uses: ['fetchModelUsage'],
+    absent: ['ModelSelect(', 'CostDrivers(', 'SpendTimeline('],
+    sections: [1, 1],
+  }),
+  linkTurn(
+    'router-agents-on-model',
+    'Which agents use claude-3-5-sonnet and how much do they spend on it?',
+    {
+      uses: ['claude-3-5-sonnet', 'CostDrivers('],
+    },
+  ),
+  linkTurn('router-slowest', 'Which model is the slowest, and is it worth its price?', {
+    uses: ['fetchModelUsage', 'avg_latency_ms'],
+  }),
+  linkTurn('router-missing-model', 'How much did we spend on gpt-7-turbo?', {
+    uses: ['gpt-7-turbo'],
+  }),
+  linkTurn(
+    'follow-router-agent',
+    'also let me focus an agent there to see its own trend',
+    { uses: ['$agent', 'agentId: $agent', ...MODEL_LINK] },
+    'patch',
+    'router-overview',
+  ),
+  linkTurn('trick-router-logs', 'show me the raw request logs of the LLM router', {
+    uses: [],
+    absent: ['Log'],
+  }),
+  linkTurn(
+    'trick-router-settings',
+    'change my default model to gpt-4o-mini',
+    { uses: [] },
+    'no-view',
+  ),
+]
+
 const CUSTOM_BRIEFS = [
   'A scatter plot of each agent: total cost (x) against average latency (y), one labelled dot per agent, from fetchCostDrivers rows.',
   'A treemap of spend by model for the range, each tile sized by cost and labelled with model name and share, from fetchCostDrivers with view "model".',
@@ -453,6 +515,7 @@ const plan = [
   ...firstTurns,
   ...cardTurns,
   ...linkTurns,
+  ...routerTurns,
   ...followUps,
   ...tricks,
   ...customs,
@@ -461,6 +524,7 @@ const ordered = [
   ...plan.filter((t) => firstTurns.includes(t)),
   ...plan.filter((t) => cardTurns.includes(t)),
   ...plan.filter((t) => linkTurns.includes(t)),
+  ...plan.filter((t) => routerTurns.includes(t)),
   ...plan.filter((t) => followUps.includes(t)),
   ...plan.filter((t) => tricks.includes(t)),
   ...plan.filter((t) => customs.includes(t)),
