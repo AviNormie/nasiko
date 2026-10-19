@@ -1,13 +1,18 @@
+/**
+ * The Overview's summary bento, shared with Weave's catalog view: the headline, month bar and token optimisation in the
+ * lead card (the page's one effect area) beside Spend, Tokens, Agent runs and Harnesses, 2×2 (redesign 2026-10-19: the
+ * tiles changed, the lead card didn't).
+ */
 import { Badge } from '@/components/ui/badge'
 import { SpotlightCard } from '@/components/aceternity/spotlight-card'
 import { Reveal, RevealItem } from '@/components/shared/reveal'
 import type { OverviewNarrative } from '@/features/narrative/overview'
 import type { OptimisationView } from '@/features/tokenops/optimisation'
-import type { FleetHealth, HarnessSummary, Spend } from '../api'
+import type { HarnessSummary, Spend } from '../api'
 import { copy } from '../copy'
 import { Harnesses } from './Harnesses'
 import { Headline } from './Headline'
-import { AgentsTile, RunsTile, SpendTile } from './Kpis'
+import { RunsTile, SpendTile, TokensTile } from './Kpis'
 import { MonthBar } from './MonthBar'
 import { Savings } from './Savings'
 
@@ -17,7 +22,6 @@ export function SummaryCard({
   nothing,
   spend,
   savings,
-  fleet,
   harnesses,
 }: {
   days: number
@@ -25,7 +29,6 @@ export function SummaryCard({
   nothing: boolean
   spend: Spend
   savings: { view: OptimisationView | undefined; isPending: boolean }
-  fleet: FleetHealth
   harnesses: HarnessSummary
 }) {
   return (
@@ -60,10 +63,10 @@ export function SummaryCard({
             <SpendTile spend={spend} />
           </RevealItem>
           <RevealItem className="flex *:flex-1">
-            <RunsTile spend={spend} />
+            <TokensTile spend={spend} />
           </RevealItem>
           <RevealItem className="flex *:flex-1">
-            <AgentsTile fleet={fleet} />
+            <RunsTile spend={spend} />
           </RevealItem>
           <RevealItem className="flex *:flex-1">
             <Harnesses data={harnesses} days={days} />

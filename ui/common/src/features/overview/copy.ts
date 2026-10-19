@@ -59,6 +59,11 @@ export const copy = {
     spend: 'Spend',
     runs: 'Agent runs',
     perDay: (n: string) => `${n} per day`,
+    perRun: (cost: string) => `${cost} per run`,
+    tokens: 'Tokens',
+    tokensInput: (pct: string) => `input ${pct}`,
+    tokensOutput: (pct: string) => `output ${pct}`,
+    running: (n: number, total: number) => `${n} of ${total} running`,
     agents: 'Agents running',
     of: (total: number) => `/ ${total}`,
     agentParts: {
@@ -71,8 +76,20 @@ export const copy = {
     noAgents: 'No agents yet',
     harnesses: 'Harnesses used',
     connected: 'connected',
+    est: 'est.',
+    connectedCount: (n: number) => `${n} connected`,
     devs: (n: number) => `${n} developer${n === 1 ? '' : 's'}`,
     yourUsage: 'your usage',
+  },
+  saved: {
+    title: 'Saved tokens by agent',
+    link: 'TokenOps',
+    what: 'savings by agent',
+    subtitle: (basis: string | null) =>
+      basis ? `Largest first · basis: ${basis}` : 'Largest first',
+    capped: 'Agents past the first 200 may have savings too',
+    none: 'No savings reported in this range.',
+    other: (n: number) => `Other (${n})`,
   },
   chats: {
     title: 'Recent chats',

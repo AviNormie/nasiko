@@ -260,6 +260,7 @@ const spendData = (over: Partial<SpendData> = {}): SpendData => ({
   rangeDays: 30,
   totals: { spend: 120, runs: 10, previous: null },
   totalsError: null,
+  tokens: null,
   days: [day('2026-09-28', 20), day('2026-09-29', 100)],
   stack: null,
   stackPending: false,
