@@ -247,6 +247,7 @@ async fn internal_agent_seed_deploy_carries_the_credentials_and_keeps_its_direct
                 ("OPENAI_API_KEY".into(), "direct-key".into()),
                 ("OPENAI_BASE_URL".into(), "http://direct.test/v1".into()),
             ]),
+            public: false,
         },
     )
     .await;
