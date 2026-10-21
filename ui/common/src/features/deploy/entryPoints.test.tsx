@@ -33,7 +33,8 @@ describe('Deploy an agent entry points', () => {
         const links = await deployLinks()
         expect(links.every((l) => l.getAttribute('href') === '/deploy')).toBe(true)
         const scope = testId ? within(screen.getByTestId(testId)) : screen
-        expect(scope.getByText(copy.entry.orCli)).toBeInTheDocument()
+        // The Overview's hero titles the steps without the colon.
+        expect(scope.getByText(/^Or use the CLI/)).toBeInTheDocument()
         expect(scope.getAllByRole('button', { name: /Copy/ }).length).toBeGreaterThan(0)
         cleanup()
       }
