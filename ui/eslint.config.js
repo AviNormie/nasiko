@@ -369,11 +369,15 @@ export default tseslint.config(
     },
   },
   // Node scripts aren't in a tsconfig program: syntax rules only.
-  { files: ['scripts/**'], ...tseslint.configs.disableTypeChecked },
-  { files: ['scripts/**'], rules: { '@typescript-eslint/no-non-null-assertion': 'off' } },
+  { files: ['scripts/**', '*/*/scripts/**'], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ['scripts/**', '*/*/scripts/**'],
+    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
+  },
   {
     files: [
       'scripts/**',
+      '*/*/scripts/**',
       'vite.shared.ts',
       'vitest.config.ts',
       '**/vite.config.ts',
