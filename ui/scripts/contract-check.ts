@@ -10,12 +10,19 @@
  * skip that reads as a pass; plan feat-budget-burn X4).
  *
  * `--only budgets` checks the proposed budgets 1.0 routes instead (docs/requirements/budgets.md §15): one verdict per
- * route, pass / fail / unavailable, against the UI's zod schemas (scripts/lib/budgetCheck.ts).
+ * route, pass / fail / unavailable, against the UI's zod schemas. Budgets belong to an edition, so the checks come
+ * from the edition that ships `scripts/lib/budgetCheck.ts`; a checkout with no such edition exits 3.
  */
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { checkBudgets, report } from './lib/budgetCheck.ts'
+import { importEditionModule } from './editions.ts'
 import { Failure, login, requireLoopback } from './lib/live.ts'
+
+type Get = (path: string) => Promise<{ status: number; body: unknown }>
+interface BudgetCheckModule {
+  checkBudgets(get: Get): Promise<{ code: number }>
+  report(result: { code: number }): string
+}
 
 const args = process.argv.slice(2)
 const onlyAt = args.indexOf('--only')
@@ -36,6 +43,14 @@ if (!url) {
 }
 
 if (only === 'budgets') {
+  const budgets = await importEditionModule<BudgetCheckModule>(
+    fileURLToPath(new URL('..', import.meta.url)),
+    'scripts/lib/budgetCheck.ts',
+  )
+  if (!budgets) {
+    console.error('contract:check: --only budgets: no edition in this checkout has budgets')
+    process.exit(3)
+  }
   try {
     const base = requireLoopback(url, 'NASIKO_CONTRACT_URL').replace(/\/$/, '')
     const { token } = await login(
@@ -57,8 +72,8 @@ if (only === 'budgets') {
       }
       return { status: r.status, body }
     }
-    const result = await checkBudgets(get)
-    console.log(report(result))
+    const result = await budgets.checkBudgets(get)
+    console.log(budgets.report(result))
     process.exit(result.code)
   } catch (err) {
     if (err instanceof Failure) {

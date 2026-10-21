@@ -53,8 +53,7 @@ async function errorFor(fx: Fx): Promise<ApiError> {
 
 const unknownRoute = load('errors/errors.unknown-route.json')
 const topTraces = load('tokenops/tokenops.top-traces.json')
-// Budgets are Enterprise only: their absent-route fixtures and the rule that reads them live in the EE suite
-// (`ee/web/src/features/budgets/absent.test.ts`).
+// Budgets are Enterprise only: their absent-route fixtures and the rule that reads them live in the EE suite.
 const noAuth = load('errors/errors.no-auth.json')
 const unknownAgent = load('errors/errors.unknown-agent.json')
 const requiresAdmin = load('errors/errors.requires-admin.json')
