@@ -65,7 +65,7 @@ describe('sidebar items', () => {
   it.each([
     ['/tokenops', 'Monitor'],
     ['/sessions', 'Sessions'],
-    ['/harnesses', 'Harnesses'],
+    ['/harnesses', 'Coding harnesses'],
     ['/agents', 'Agents'],
     ['/agents/mine', 'Agents'],
     ['/deploy', 'Agents'],
@@ -89,7 +89,10 @@ describe('sidebar items', () => {
     renderApp('/tokenops?preset=24h&compare=0')
     await screen.findByRole('navigation', { name: 'Main' })
     await waitFor(() =>
-      expect(navLink('Harnesses')).toHaveAttribute('href', expect.stringContaining('preset=24h')),
+      expect(navLink('Coding harnesses')).toHaveAttribute(
+        'href',
+        expect.stringContaining('preset=24h'),
+      ),
     )
     // The other shared keys still cross into Sessions and TokenOps; the window doesn't.
     expect(navLink('Sessions').getAttribute('href')).toContain('compare=false')
@@ -107,7 +110,7 @@ describe('sidebar items', () => {
     // TokenOps opens on its own 30 days, not Sessions' window.
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
     expect(router.state.location.search).not.toHaveProperty('day')
-    await userEvent.click(navLink('Harnesses'))
+    await userEvent.click(navLink('Coding harnesses'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/harnesses'))
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
   })

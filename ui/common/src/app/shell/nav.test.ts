@@ -8,7 +8,7 @@ const OLD_NAV = [
   // TokenOps became its own section; the page is its Monitor item.
   { to: '/tokenops', label: 'Monitor', shared: true },
   { to: '/sessions', label: 'Sessions', shared: true },
-  { to: '/harnesses', label: 'Harnesses', shared: true },
+  { to: '/harnesses', label: 'Coding harnesses', shared: true },
   { to: '/agents', label: 'Agents', shared: false },
   { to: '/chat', label: 'Chat', shared: false },
 ]
@@ -49,7 +49,7 @@ describe('nav items', () => {
       'Agents',
       'Workflows',
       'Chat',
-      'Harnesses',
+      'Coding harnesses',
       'Sessions',
       'Flows',
       'Monitor',
