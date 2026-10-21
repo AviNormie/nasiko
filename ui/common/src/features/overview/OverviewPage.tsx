@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { Reveal, RevealItem } from '@/components/shared/reveal'
 import { StateCard } from '@/components/shared/state-card'
 import { Button } from '@/components/ui/button'
 import { useChatSessions } from '@/features/chat/api'
@@ -42,9 +43,8 @@ import {
   useSavedByAgent,
   useSpend,
 } from './api'
-import { FirstRun, FirstRunLead, FirstRunPreview } from './components/FirstRun'
+import { FirstRunHero, FirstRunPreview } from './components/FirstRun'
 import { FleetHealth } from './components/FleetHealth'
-import { HarnessesLine } from './components/Harnesses'
 import { NeedsYou } from './components/NeedsYou'
 import { usePausedFlows } from '@/features/flows/paused'
 import { QuickActions } from './components/QuickActions'
@@ -52,6 +52,7 @@ import { RecentChats } from './components/RecentChats'
 import { RecentSessions } from './components/RecentSessions'
 import { SavedByAgent } from './components/SavedByAgent'
 import { SetupGuide } from './components/SetupGuide'
+import { SetUpNow } from './components/SetUpNow'
 import { SummaryCard } from './components/SummaryCard'
 import { Spend } from './components/Spend'
 import { copy } from './copy'
@@ -118,9 +119,6 @@ function HeaderActions({
     </>
   )
 }
-
-/** A first-run row that spans the grid at every width. */
-const FULL_ROW = '@[700px]/overview:col-span-2 @[1100px]/overview:col-span-3'
 
 /** Where each card sits: twelve columns from 1100 px, 2 from 700. Literal class names, so Tailwind sees them. */
 // Redesign 2026-10-13: Needs you, Budget burn and Spend span the row; then Fleet health beside Recent sessions and
@@ -223,7 +221,8 @@ function Overview({
   const chats = useChatSessions()
   // Budget burn (EE): the persona's default scope; null until the persona settles (it settles on a failure too).
   const persona = usePersona()
-  const burn = useSlots().budgets.useHomePanel({
+  const slots = useSlots()
+  const burn = slots.budgets.useHomePanel({
     scope: persona.settled ? homeScopeFor(persona.persona, me.is_superuser) : null,
     meSub: me.sub,
     isSuperuser: me.is_superuser,
@@ -245,8 +244,6 @@ function Overview({
     [spend.summary, spend.unpriced, needs],
   )
 
-  const grid =
-    'grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-3'
   const description = copy.greeting(now.getHours(), me.username, days)
   const actions = <HeaderActions search={search} setSearch={setSearch} setup={!firstRun} />
   // One page loader until the first paint's reads settle (data or error: a failed read renders its card's error), in
@@ -272,19 +269,30 @@ function Overview({
     )
   }
   if (firstRun) {
+    // A spending limit can be set before anything runs: the budgets layer's strip (EE; OSS has no budgets).
+    const { FirstRunStrip } = slots.budgets
+    // Nothing has run, so no range to pick and no window in the greeting; the tour button stays.
     return (
-      <Frame description={description} actions={actions}>
-        <FirstRunLead />
-        <div className={grid}>
-          {/* From 1100 px Quick actions and Harnesses' one line stack beside the first-run card, so neither stretches
-              to its height; below that each spans the grid. The preview of later cards sits apart, after a wider gap. */}
-          <FirstRun />
-          <div className="contents @[1100px]/overview:flex @[1100px]/overview:flex-col @[1100px]/overview:gap-3">
-            <QuickActions firstRun className={`${FULL_ROW} @[1100px]/overview:flex-1`} />
-            <HarnessesLine data={harnesses} days={days} className={FULL_ROW} />
-          </div>
-          <FirstRunPreview className={`${FULL_ROW} mt-3`} />
-        </div>
+      <Frame
+        description={copy.firstRun.greeting(now.getHours(), me.username)}
+        actions={<TourButton className="max-md:hidden" />}
+      >
+        <Reveal className="flex flex-col gap-3">
+          <RevealItem>
+            <FirstRunHero />
+          </RevealItem>
+          {FirstRunStrip ? (
+            <RevealItem>
+              <FirstRunStrip />
+            </RevealItem>
+          ) : null}
+          <RevealItem className="mt-3">
+            <SetUpNow harnesses={harnesses} days={days} />
+          </RevealItem>
+          <RevealItem className="mt-5">
+            <FirstRunPreview />
+          </RevealItem>
+        </Reveal>
       </Frame>
     )
   }

@@ -171,5 +171,6 @@ export const copy = {
     resume: 'Resume guide',
     done: 'Done',
     todo: 'Not yet',
+    progress: (done: number, total: number) => `${done} of ${total} done`,
   },
 }

@@ -5,6 +5,8 @@ import type { Rating, SpikeHit } from './health'
 import type { Severity, SourceId } from './needs'
 
 const pct = (v: number) => `${Math.round(v)}%`
+const hello = (hour: number, name: string) =>
+  `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, ${name}.`
 
 export const copy = {
   title: 'Home',
@@ -27,7 +29,7 @@ export const copy = {
     checking: 'Checking your fleet…',
   },
   greeting: (hour: number, name: string, days: number) =>
-    `Good ${hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, ${name}. Here is your workspace for the last ${days} days.`,
+    `${hello(hour, name)} Here is your workspace for the last ${days} days.`,
   range: {
     label: 'Range',
     item: (days: number) => `Last ${days} days`,
@@ -217,16 +219,32 @@ export const copy = {
     copyDeploy: 'Copy the deploy command',
     adjustBudget: 'Adjust budget',
   },
+  /** The first run's panel of what works before any agent (components/SetUpNow.tsx). */
+  setUpNow: {
+    title: 'Works before your first agent',
+    orchestrator: 'Chat now. Once agents run, it routes each question to the right one.',
+    model: 'Connect a model',
+    models: (n: number) => `${n} model config${n === 1 ? '' : 's'} ready`,
+    noModel: 'No model connected yet',
+    tools: 'Connect an MCP server',
+    serversOn: (n: number) => `${n} tool server${n === 1 ? '' : 's'} connected`,
+    serversOff: (n: number) => `${n} available, none connected yet`,
+    noServers: 'No MCP servers yet',
+    noHarnesses: 'None connected yet',
+    unknown: "Couldn't check. Open the page for details.",
+  },
   firstRun: {
-    title: 'Deploy your first agent',
-    link: 'Agents',
-    after: 'Once it is running, cost, health and sessions show up here.',
-    headline: 'Deploy your first agent to see cost, health and sessions here.',
+    greeting: hello,
+    title: 'Get your first agent running',
+    headline:
+      'OpenRuntime hosts it, routes its model calls and records every session. Once it runs, this page shows what it costs, how healthy it is and what needs you.',
     cli: (n: number) => `Or use the CLI (${n} commands)`,
+    cliTitle: 'Or use the CLI',
   },
   /** The first run's preview of the cards a deploy brings: what each will show, never a number. */
   preview: {
     title: 'After your first deploy',
+    note: 'These fill in once an agent runs.',
     needs: 'Agents that need action, requests waiting for you and failed sessions, worst first.',
     spend:
       "Fleet spend for the range against the previous one, by agent, with this month's forecast.",

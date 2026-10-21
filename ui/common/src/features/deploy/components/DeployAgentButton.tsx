@@ -16,7 +16,7 @@ export function DeployAgentButton({
 }: {
   name?: string
   variant?: 'default' | 'outline'
-  size?: 'sm' | 'default'
+  size?: 'sm' | 'default' | 'lg'
   className?: string
 }) {
   return (
