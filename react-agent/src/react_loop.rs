@@ -1497,7 +1497,6 @@ mod awaiting_human_tests {
             description: "for tests".into(),
             endpoint: endpoint.into(),
             skills: vec![],
-            auth_header: None,
         }
     }
 
