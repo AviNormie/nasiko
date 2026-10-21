@@ -270,6 +270,7 @@ const spendData = (over: Partial<SpendData> = {}): SpendData => ({
   other: null,
   driversError: null,
   unpriced: false,
+  latency: null,
   retry: vi.fn(),
   ...over,
 })
