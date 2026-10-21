@@ -1,7 +1,6 @@
 /**
- * The Overview's one search param: the range its KPI tiles, Spend and Harnesses cover (7, 30 or 90 days). Needs you,
- * Fleet health and Recent sessions keep their own windows (their rules are defined on them). Replaced, not pushed. Only
- * the schema lives here: the route's `validateSearch` is in the shell chunk, so the window helpers stay in `api.ts`.
+ * The window the home reads its money for (7, 30 or 90 days), kept from the Overview (`?range=`). Needs you keeps its own
+ * windows (its rules are defined on them). Loaded with the shell (the home's schema uses it), so no query code here.
  */
 import { z } from 'zod/mini'
 import { opt } from '@/lib/search'
@@ -13,7 +12,9 @@ export type Range = (typeof RANGES)[number]
 export const overviewSearchSchema = z.object({
   range: opt(z.enum(RANGES)),
 })
-export const DEFAULT_RANGE: Range = '30d'
 export type OverviewSearch = z.infer<typeof overviewSearchSchema>
+
+/** 30 days when `?range=` is unset (the home's window, `home/search.ts`, keeps the Overview's key). */
+export const DEFAULT_RANGE: Range = '30d'
 
 export const RANGE_DAYS: Record<Range, number> = { '7d': 7, '30d': 30, '90d': 90 }

@@ -10,8 +10,7 @@ import {
   type AgentHealthInput,
 } from './health'
 import { mergeNeeds } from './needs'
-import { previousWindow, rangeWindow } from './api'
-import { overviewSearchSchema } from './search'
+import { rangeWindow } from './api'
 import { stackSpend } from './stack'
 
 const NOW = Date.parse('2026-09-29T12:00:00Z')
@@ -229,7 +228,7 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
     requests: ok({ chats: [], outside: 0 }),
     agents: ok([]),
     budgets: ok([]),
-    sessions: ok({ failed: 0, checked: 25, agents: [] }),
+    sessions: ok({ failed: 0, agents: [] }),
   }
   const chat = (sessionId: string, at: string) => ({
     sessionId,
@@ -267,8 +266,23 @@ describe('mergeNeeds (design 5A, eng R5)', () => {
         outside: 2,
       }),
       agents: ok([{ id: 'x', name: 'X', reason: 'crashed', budget: false }]),
-      budgets: ok([{ id: 'bud', label: 'Your monthly', crossed: 80, state: 'warning' as const }]),
-      sessions: ok({ failed: 3, checked: 25, agents: ['X'] }),
+      budgets: ok([
+        {
+          id: 'bud',
+          label: 'Your monthly',
+          agentId: null,
+          crossed: 80,
+          state: 'warning' as const,
+          over: null,
+          stopped: false,
+          stops: false,
+          runsOutOn: null,
+          resetsAt: null,
+          period: 'month' as const,
+          covers: 'routed_calls' as const,
+        },
+      ]),
+      sessions: ok({ failed: 3, agents: ['X'] }),
     })
     expect(n.rows.map((r) => r.key)).toEqual([
       'request-a',
@@ -348,7 +362,9 @@ describe('stackSpend', () => {
     label: date,
     spend,
     operations: 0,
+    p50: null,
     p95: null,
+    p99: null,
     topAgent: null,
     topAgentSpend: null,
   })
@@ -379,15 +395,5 @@ describe('the page range', () => {
     const w = rangeWindow('90d', now)
     expect(w.params.start_time).toBe('2026-07-04T00:00:00.000Z')
     expect(w.params.end_time).toBe('2026-10-01T15:30:00.000Z')
-    // The window before it is as long, ends where it starts, and has a key of its own.
-    const p = previousWindow(w)
-    expect(p.end.getTime()).toBe(w.start.getTime())
-    expect(w.end.getTime() - w.start.getTime()).toBe(p.end.getTime() - p.start.getTime())
-    expect(p.key).not.toBe(w.key)
-  })
-
-  it('drops a junk range rather than failing the page', () => {
-    expect(overviewSearchSchema.parse({ range: '1y' })).toEqual({ range: undefined })
-    expect(overviewSearchSchema.parse({ range: '90d' })).toEqual({ range: '90d' })
   })
 })

@@ -1,5 +1,3 @@
-'use client'
-
 // Lab: the real d3 curve type, not the kit's `any`.
 import type { CurveFactory } from 'd3-shape'
 import { scaleLinear } from '@visx/scale'

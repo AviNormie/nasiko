@@ -3,7 +3,7 @@ import { encodeSpanId, findRetryLoops, flattenSpans } from '@/features/observabi
 import type { SpanNode, TraceDetail } from '@/features/observability/types'
 import { spanDetail, traceDetail, observabilityData } from '@/mocks/observability'
 import { generateSeed } from '@/mocks/seed'
-import { findSpike, spikeSentence, tokenopsNarrative } from './tokenops'
+import { findSpike, fmtFactor, spikeSentence, tokenopsNarrative } from './tokenops'
 import { narrativeText, traceNarrative, wasteCostSpans, wasteFetchable } from './trace'
 
 const seed = generateSeed({ anchor: new Date('2026-03-20T15:00:00Z') })
@@ -414,5 +414,27 @@ describe('tokenops narrative: edges', () => {
     })
     expect(n.spike?.date).toBe('2026-03-03')
     expect(n.sentences.at(-1)).toMatch(/^Spend peaked on Mar 3/)
+  })
+})
+
+describe('TokenOps narrative: extreme ratios', () => {
+  it('spike factors round as they grow and stop at "over 100×"', () => {
+    expect(fmtFactor(4.03)).toBe('4.0×')
+    expect(fmtFactor(37.4)).toBe('37×')
+    expect(fmtFactor(131364)).toBe('over 100×')
+  })
+
+  it('a change of 1000% or more is a multiple of the period before', () => {
+    const n = tokenopsNarrative({
+      windowLabel: 'Last 30 days',
+      total: 3386.78,
+      previous: 78,
+      unpriced: false,
+      rows: [],
+      days: [],
+    })
+    expect(n.sentences[0]).toBe(
+      'In the last 30 days you spent $3,386.78, 43× as much as the period before.',
+    )
   })
 })

@@ -1,6 +1,6 @@
 /**
- * One build (plans/feat-deploy.md §5): the title, one row of four progress segments (design review 14), the outcome
- * directly under it (3), and full-width Details with the build-logs line (10, 11).
+ * One build (plans/feat-deploy.md §5): the title with its source and time, the outcome first once there is one (3),
+ * then the stages as a run log with the build-logs line under them (10, 11).
  *
  * Live status: the deploy stream while the build runs; a dropped stream falls back to polling the upload row; after
  * the image is built, the agent's own status decides Running vs "Built, but not running". Stage times exist only for
@@ -8,20 +8,14 @@
  */
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, Info, RotateCw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, RotateCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PanelError } from '@/components/shared/panel'
 import { PageLoader } from '@/components/shared/page-loader'
 import { StateCard } from '@/components/shared/state-card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
+import { TopBar } from '@/app/shell/TopBar'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { relTime } from '@/features/agents/format'
@@ -41,7 +35,7 @@ import {
   SLOW_BUILD_MS,
 } from './tuning'
 import { BuildBadge } from './components/BuildBadge'
-import { ProgressSegments } from './components/ProgressSegments'
+import { StageList } from './components/StageList'
 
 /** The agent directory's query key (agents/api.ts `agentKeys.directory`), invalidated exactly like the Overview does. */
 const DIRECTORY = AGENTS_DIRECTORY_KEY
@@ -152,23 +146,36 @@ export function BuildPage({ buildId }: { buildId: string }) {
   const error = view.outcome === 'failed' ? explainError(upload.data?.error_details?.[0]) : null
   const title = `${name} ${version}`.trim()
 
+  // Only what the icon can't say: the current stage's expectation, a done stage's time when this page saw it.
   const sub = (s: (typeof view.stages)[number]) => {
     if (s.state === 'current')
-      return `${fmtElapsed(elapsed)} · ${slow ? copy.build.slow(`${BUILD_TIMEOUT_MIN} min`) : copy.build.usual}`
-    if (s.state === 'done') {
-      const at = seen.current.get(s.id)
-      const nextId = view.stages[view.stages.indexOf(s) + 1]?.id
-      const end = nextId ? seen.current.get(nextId) : undefined
-      return at && end ? `${copy.build.done} · ${fmtElapsed(end - at)}` : copy.build.done
-    }
-    if (s.state === 'pending') return copy.build.pending
-    return null
+      return slow ? copy.build.slow(`${BUILD_TIMEOUT_MIN} min`) : copy.build.usual
+    if (s.state !== 'done') return null
+    const at = seen.current.get(s.id)
+    const nextId = view.stages[view.stages.indexOf(s) + 1]?.id
+    const end = nextId ? seen.current.get(nextId) : undefined
+    return at && end ? fmtElapsed(end - at) : null
   }
+  const agentLink = agent ? (
+    <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
+      {copy.build.openAgent}
+    </Link>
+  ) : null
 
   return (
     <Frame>
+      <Crumbs
+        title={title}
+        actions={
+          // The outcome card carries its own Open agent once there is one.
+          agentLink && view.outcome !== 'running' && view.outcome !== 'notRunning' ? (
+            <Button asChild size="sm" variant="outline" className="pointer-coarse:min-h-11">
+              {agentLink}
+            </Button>
+          ) : null
+        }
+      />
       <PageHeader
-        breadcrumb={<Crumbs title={title} />}
         title={
           <span className="flex flex-wrap items-center gap-2">
             {title} <BuildBadge badge={view.badge} />
@@ -191,7 +198,6 @@ export function BuildPage({ buildId }: { buildId: string }) {
           .filter(Boolean)
           .join(' · ')}
       />
-      <ProgressSegments stages={view.stages} sub={sub} />
       {/* The one polite region: a success isn't an Alert, and the follower doesn't toast the open build. */}
       <p className="sr-only" role="status">
         {view.outcome === 'running' ? copy.build.running(name) : ''}
@@ -201,44 +207,40 @@ export function BuildPage({ buildId }: { buildId: string }) {
         <Card
           className="flex-row flex-wrap items-center justify-between gap-3 p-4 motion-safe:animate-in motion-safe:duration-200 motion-safe:fade-in"
           data-testid="build-outcome"
+          data-tour="build-outcome"
           data-outcome="running"
         >
           <p className="flex items-center gap-2 font-medium">
             <CheckCircle2 className="size-5 text-success" aria-hidden />
             {copy.build.running(name)}
           </p>
-          <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:flex-col">
-            {agent ? (
+          {agent ? (
+            <div className="flex flex-wrap gap-2 max-sm:w-full max-sm:flex-col">
               <Button asChild className="pointer-coarse:min-h-11">
                 <Link to="/chat" search={{ agent: agent.id } as never}>
                   {copy.build.chat}
                 </Link>
               </Button>
-            ) : null}
-            {agent ? (
               <Button asChild variant="outline" className="pointer-coarse:min-h-11">
-                <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
-                  {copy.build.openAgent}
-                </Link>
+                {agentLink}
               </Button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </Card>
       ) : view.outcome === 'notRunning' ? (
         <Alert
           className="gap-y-2 border-warning/40 bg-warning/5 [&>svg]:text-warning"
           data-testid="build-outcome"
+          data-tour="build-outcome"
           data-outcome="notRunning"
         >
           <AlertTriangle aria-hidden />
           <AlertTitle className="line-clamp-none">{copy.build.notRunning}</AlertTitle>
           <AlertDescription className="gap-2">
             <p>{copy.build.notRunningHint}</p>
-            {agent ? (
+            {agentLink ? (
               <Button asChild size="sm" variant="outline" className="pointer-coarse:min-h-11">
-                <Link to="/agents/$agentId" params={{ agentId: agent.id }} search={{}}>
-                  {copy.build.openAgent}
-                </Link>
+                {agentLink}
               </Button>
             ) : null}
           </AlertDescription>
@@ -247,6 +249,7 @@ export function BuildPage({ buildId }: { buildId: string }) {
         <Alert
           className="gap-y-2 border-destructive/30 bg-destructive/5 [&>svg]:text-destructive"
           data-testid="build-outcome"
+          data-tour="build-outcome"
           data-outcome="failed"
         >
           <AlertTriangle aria-hidden />
@@ -269,42 +272,16 @@ export function BuildPage({ buildId }: { buildId: string }) {
             </Button>
           </AlertDescription>
         </Alert>
-      ) : (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Info className="size-4" aria-hidden />
-          {copy.build.leave}
-        </p>
-      )}
+      ) : null}
 
-      <Card className="gap-3 p-4">
-        <h2 className="text-sm font-semibold">{copy.build.details}</h2>
-        <dl className="grid gap-x-8 gap-y-2 text-sm sm:grid-cols-[auto_1fr] md:flex md:flex-wrap md:gap-x-10">
-          <Detail label={copy.build.source}>
-            {repo
-              ? copy.source.github(repo, record?.commit_hash ?? null)
-              : record
-                ? buildSource(record)
-                : copy.source.upload}
-          </Detail>
-          <Detail label={copy.build.version}>{version || '—'}</Detail>
-          <Detail label={copy.build.agent}>
-            {agent ? (
-              <Link
-                to="/agents/$agentId"
-                params={{ agentId: agent.id }}
-                search={{}}
-                className="text-primary-text underline-offset-4 hover:underline"
-              >
-                {agent.display_name || agent.name}
-              </Link>
-            ) : (
-              name
-            )}
-          </Detail>
-        </dl>
-        <p className="border-t pt-3 text-xs text-muted-foreground">
-          {copy.build.logs} · {copy.build.logsUnavailable}
-        </p>
+      <Card data-tour="build-stages" className="gap-0 p-0">
+        <div className="p-4">
+          <StageList stages={view.stages} sub={sub} />
+        </div>
+        <div className="flex flex-col gap-1 border-t px-4 py-3 text-xs text-muted-foreground">
+          {view.terminal ? null : <p>{copy.build.leave}</p>}
+          <p>{copy.build.logsUnavailable}</p>
+        </div>
       </Card>
     </Frame>
   )
@@ -330,31 +307,17 @@ function Frame({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto flex w-full max-w-page flex-col gap-4">{children}</div>
 }
 
-function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+/** Agents › Builds › this build. */
+function Crumbs({ title, actions }: { title: string; actions?: React.ReactNode }) {
   return (
-    <div className="flex gap-2 sm:contents md:flex">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate">{children}</dd>
-    </div>
-  )
-}
-
-function Crumbs({ title }: { title: string }) {
-  return (
-    <Breadcrumb aria-label="Breadcrumb">
-      <BreadcrumbList className="gap-1 sm:gap-1">
-        <BreadcrumbItem>
-          <BreadcrumbLink asChild className="underline-offset-2 hover:underline">
-            <Link to="/builds">{copy.build.breadcrumb}</Link>
-          </BreadcrumbLink>
-        </BreadcrumbItem>
-        <BreadcrumbSeparator />
-        <BreadcrumbItem className="min-w-0">
-          <span aria-current="page" className="truncate text-foreground">
-            {title}
-          </span>
-        </BreadcrumbItem>
-      </BreadcrumbList>
-    </Breadcrumb>
+    <TopBar
+      actions={actions}
+      trail={[
+        <Link key="builds" to="/builds">
+          {copy.build.breadcrumb}
+        </Link>,
+        title,
+      ]}
+    />
   )
 }

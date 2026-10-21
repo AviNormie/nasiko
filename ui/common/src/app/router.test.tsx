@@ -11,7 +11,7 @@ describe('route loaders prefetch on intent (plan §8 Phase 3)', () => {
   it('hovering a nav link starts the target page’s first request; the page then reuses it', async () => {
     // A quiet page (the Overview at / fetches the dashboard itself and has its own TokenOps link).
     renderApp('/status')
-    const link = await screen.findByRole('link', { name: 'TokenOps' })
+    const link = await screen.findByRole('link', { name: 'Monitor' })
     const reqs = recordRequests()
     try {
       await userEvent.hover(link)

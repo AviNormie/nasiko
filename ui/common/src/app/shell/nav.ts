@@ -1,6 +1,6 @@
 /**
  * The sidebar's items (plans/feat-app-shell.md §3): one source for AppSidebar and its tests.
- * Only pages that exist get an item. Overview is `/`; Status (`/status`) is reached from the footer's status row,
+ * Only pages that exist get an item. Home is `/`; Status (`/status`) is reached from the footer's status row,
  * and Settings (the account's) opens from the account menu. Deploy and Builds belong to Agents (its sub-nav), so they mark it current.
  *
  * `shared` items carry the shared context (window, filters, compare) between them through
@@ -10,7 +10,7 @@ import {
   Bot,
   DollarSign,
   Gauge,
-  LayoutDashboard,
+  House,
   ListTree,
   MessageSquare,
   Network,
@@ -24,14 +24,18 @@ import {
 import type { AnyNavItem } from '../edition'
 import { copy } from './copy'
 
-export type NavGroupId = 'work' | 'fleet' | 'connect' | 'observe' | 'org' | 'lab'
+export type NavGroupId =
+  'work' | 'fleet' | 'observe' | 'tokenops' | 'connect' | 'views' | 'org' | 'lab'
 
 /** In display order, grouped by job; the first group has no header. */
 export const NAV_GROUPS: readonly { id: NavGroupId; label: string | null }[] = [
   { id: 'work', label: null },
   { id: 'fleet', label: copy.nav.fleet },
-  { id: 'connect', label: copy.nav.connect },
   { id: 'observe', label: copy.nav.observe },
+  { id: 'tokenops', label: copy.nav.tokenops },
+  { id: 'connect', label: copy.nav.connect },
+  // EE's Custom views is its only item, so the core never draws it.
+  { id: 'views', label: copy.nav.views },
   // The workspace's settings (EE inserts Access control before them).
   { id: 'org', label: copy.nav.org },
   { id: 'lab', label: copy.nav.lab },
@@ -60,8 +64,8 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { to: '/', label: copy.nav.overview, icon: LayoutDashboard, group: 'work', shared: false },
-  { to: '/chat', label: copy.nav.chat, icon: MessageSquare, group: 'work', shared: false },
+  // plans/feat-agent-centric.md PR3: Home alone opens the nav; Chat sits in Fleet beside the agents it talks to.
+  { to: '/', label: copy.nav.home, icon: House, group: 'work', shared: false },
   // plans/feat-deploy.md §3: Deploy and Builds are Agents' sub-pages (its sub-nav and "Deploy an agent").
   {
     to: '/agents',
@@ -73,29 +77,31 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   // plans/feat-workflows.md §1: Drafts and Runs are its sub-pages (/workflows/*).
   { to: '/workflows', label: copy.nav.workflows, icon: Workflow, group: 'fleet', shared: false },
-  // What agents can call: models (plans/feat-llm-router.md §4), then tools (plans/feat-mcp.md §1).
-  { to: '/router', label: copy.nav.router, icon: Waypoints, group: 'connect', shared: false },
-  { to: '/mcp', label: copy.nav.mcp, icon: Plug, group: 'connect', shared: false },
-  { to: '/sessions', label: copy.nav.sessions, icon: ListTree, group: 'observe', shared: true },
-  // One request's orchestration (plans/feat-flows.md F1): its own 7-day window, so it doesn't carry the shared one.
-  { to: '/flows', label: copy.nav.flows, icon: Network, group: 'observe', shared: false },
-  { to: '/tokenops', label: copy.nav.tokenops, icon: DollarSign, group: 'observe', shared: true },
-  // What context optimization saves and your settings for it (plans/feat-optimization-page.md P7, P2).
-  {
-    to: '/optimization',
-    label: copy.nav.optimization,
-    icon: Gauge,
-    group: 'observe',
-    shared: true,
-    also: ['/settings/optimization'],
-  },
+  { to: '/chat', label: copy.nav.chat, icon: MessageSquare, group: 'fleet', shared: false },
   {
     to: '/harnesses',
     label: copy.nav.harnesses,
     icon: SquareTerminal,
-    group: 'observe',
+    group: 'fleet',
     shared: true,
   },
+  { to: '/sessions', label: copy.nav.sessions, icon: ListTree, group: 'observe', shared: true },
+  // One request's orchestration (plans/feat-flows.md F1): its own 7-day window, so it doesn't carry the shared one.
+  { to: '/flows', label: copy.nav.flows, icon: Network, group: 'observe', shared: false },
+  { to: '/tokenops', label: copy.nav.monitor, icon: DollarSign, group: 'tokenops', shared: true },
+  // Budgets (Control) are Enterprise only (docs/requirements/budgets.md): the item is an EE nav patch, after Optimise.
+  // What context optimization saves and your settings for it (plans/feat-optimization-page.md P7, P2).
+  {
+    to: '/optimization',
+    label: copy.nav.optimise,
+    icon: Gauge,
+    group: 'tokenops',
+    shared: true,
+    also: ['/settings/optimization'],
+  },
+  // What agents can call: models (plans/feat-llm-router.md §4), then tools (plans/feat-mcp.md §1).
+  { to: '/router', label: copy.nav.router, icon: Waypoints, group: 'connect', shared: false },
+  { to: '/mcp', label: copy.nav.mcp, icon: Plug, group: 'connect', shared: false },
   // Workspace and Security settings; the account's own (Appearance, Password) are /account, from the account menu.
   { to: '/settings', label: copy.nav.settings, icon: Settings, group: 'org', shared: false },
 ]
@@ -105,7 +111,7 @@ const under = (pathname: string, to: string) =>
 
 /**
  * The item for a pathname, including its sub-routes (`/agents/mine`, `/chat/<id>`) and the pages it owns (`/builds/<id>`
- * is Agents); Overview only on `/` itself, none on `/status` or `/account` (footer rows).
+ * is Agents); Home only on `/` itself, none on `/status` or `/account` (footer rows).
  */
 export function activeItem(
   pathname: string,

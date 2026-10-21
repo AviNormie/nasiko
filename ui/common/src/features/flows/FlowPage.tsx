@@ -6,8 +6,7 @@
  * differ from the server's (A4, O5); when it does, a line says why. Open trace and Open chat need the flow's chat
  * session (O1). The page's clock ticks only while the flow moves.
  */
-import { Link } from '@tanstack/react-router'
-import { ArrowLeft } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { Announcer } from '@/components/shared/announcer'
 import { useAnnounce } from '@/components/shared/announce'
@@ -15,6 +14,8 @@ import { CopyButton } from '@/components/shared/copy-button'
 import { KpiTile } from '@/components/shared/kpi-tile'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
+import { TopBar } from '@/app/shell/TopBar'
 import { Panel, PanelError } from '@/components/shared/panel'
 import { StateCard } from '@/components/shared/state-card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -27,6 +28,7 @@ import { flowNarrative } from '@/features/narrative/flows'
 import { ApiError } from '@/lib/api/client'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useNow } from '@/lib/useNow'
+import { useSiblings } from '@/lib/siblings'
 import { isGone, useFlowView } from './api'
 import { waitFrom } from './calls'
 import { PAUSED_TICK_MS, TICK_MS } from './tuning'
@@ -116,6 +118,8 @@ function FlowBody({
     const status = query.error instanceof ApiError ? query.error.status : null
     return (
       <Frame>
+        {/* The arrows stay, so a flow that's gone isn't a dead end. */}
+        <TopBar root={<FlowsLink />} stepper={<FlowSiblings flowId={flowId} />} />
         {status === 404 ? (
           <StateCard title={copy.page.notFound}>{copy.page.notFoundHint}</StateCard>
         ) : status === 403 && query.data ? (
@@ -189,8 +193,12 @@ function FlowBody({
 
   return (
     <Frame>
+      <TopBar
+        root={<FlowsLink />}
+        trail={[title]}
+        stepper={<FlowSiblings flowId={flow.flow_id} />}
+      />
       <PageHeader
-        breadcrumb={<BackToFlows />}
         title={title}
         description={
           <span className="inline-flex flex-wrap items-center gap-x-2">
@@ -203,26 +211,28 @@ function FlowBody({
           </span>
         }
         actions={
-          session ? (
-            <>
-              {tempo ? (
-                <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
-                  <Link
-                    to="/sessions/$sessionId"
-                    params={{ sessionId: session }}
-                    search={{ trace: flow.flow_id }}
-                  >
-                    {copy.actions.openTrace}
+          <>
+            {session ? (
+              <>
+                {tempo ? (
+                  <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
+                    <Link
+                      to="/sessions/$sessionId"
+                      params={{ sessionId: session }}
+                      search={{ trace: flow.flow_id }}
+                    >
+                      {copy.actions.openTrace}
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button asChild variant="ghost" size="sm" className="pointer-coarse:min-h-11">
+                  <Link to="/chat/$sessionId" params={{ sessionId: session }}>
+                    {copy.actions.openChat}
                   </Link>
                 </Button>
-              ) : null}
-              <Button asChild variant="ghost" size="sm" className="pointer-coarse:min-h-11">
-                <Link to="/chat/$sessionId" params={{ sessionId: session }}>
-                  {copy.actions.openChat}
-                </Link>
-              </Button>
-            </>
-          ) : null
+              </>
+            ) : null}
+          </>
         }
       />
 
@@ -243,7 +253,7 @@ function FlowBody({
       ) : null}
 
       {narrative.length ? (
-        <p className="text-base" data-testid="flow-narrative">
+        <p data-tour="flow-narrative" className="text-base" data-testid="flow-narrative">
           {narrative.map((sentence) => sentence.map((c) => c.text).join('')).join(' ')}
         </p>
       ) : null}
@@ -256,7 +266,7 @@ function FlowBody({
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div data-tour="flow-kpis" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <KpiTile
           label={copy.kpi.status}
           compact
@@ -309,6 +319,7 @@ function FlowBody({
           actions={
             <>
               <ToggleGroup
+                data-tour="flow-view"
                 type="single"
                 variant="outline"
                 size="sm"
@@ -395,19 +406,42 @@ function FlowBody({
 }
 
 /** "← Flows", back to the list as the user left it (F20), else to its defaults. */
-function BackToFlows() {
+/** Flows, back to the list as it was left (`listSearch.ts`): the breadcrumb's first level. */
+function FlowsLink(props: Record<string, unknown>) {
   const search = useListSearch((s) => s.search)
   return (
-    <Button
-      asChild
-      variant="link"
-      size="sm"
-      className="h-auto self-start p-0 text-muted-foreground"
-    >
-      <Link to="/flows" search={search ?? {}} aria-label={copy.backLabel}>
-        <ArrowLeft aria-hidden /> {copy.back}
-      </Link>
-    </Button>
+    // `props`: the breadcrumb's link styling, passed through by its Slot.
+    <Link {...props} to="/flows" search={search ?? {}} aria-label={copy.backLabel}>
+      {copy.back}
+    </Link>
+  )
+}
+
+/** Previous/Next through the Flows rows this flow was opened from (lib/siblings.ts); nothing on a deep link. */
+function FlowSiblings({ flowId, className }: { flowId: string; className?: string }) {
+  const navigate = useNavigate()
+  const around = useSiblings(flowId)
+  if (!around) return null
+  // Replace: Back still returns to the list. `?step=` is one flow's call, so it doesn't carry over.
+  const go = (id: string | undefined) => {
+    if (id)
+      void navigate({
+        to: '/flows/$flowId',
+        params: { flowId: id },
+        search: {},
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="flow"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+      className={className}
+    />
   )
 }
 

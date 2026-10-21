@@ -30,7 +30,8 @@ import {
 import { seriesAt } from '@/lib/chart'
 import { cn } from '@/lib/utils'
 import { copy } from '../copy'
-import { pctOf, savedShare, tokensShort, type BucketSize, type TrendRow } from '../lead'
+import { pctOf, savedShare, tokensShort, type TrendRow } from '../lead'
+import { type BucketSize } from '@/lib/slice'
 import { Without } from './Without'
 
 const SENT = seriesAt(0)

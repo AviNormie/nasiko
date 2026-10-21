@@ -11,7 +11,9 @@ export interface TimelinePoint {
   label: string
   spend: number
   operations: number
+  p50: number | null
   p95: number | null
+  p99: number | null
   topAgent: string | null
   topAgentSpend: number | null
 }
@@ -24,17 +26,26 @@ export function bucketLabel(d: Date, bucket: 'hour' | 'day'): string {
 /** Bucket cap: a malformed window can never render thousands of bars. */
 export const MAX_BUCKETS = 800
 
-function toPoint(
-  d: Date,
-  bucket: 'hour' | 'day',
-  p: SpendTimeseriesPoint | undefined,
-): TimelinePoint {
+/**
+ * What a timeline needs from a point: a bucket, a spend and an op count. The
+ * latency and top-agent fields are read optionally, so a per-agent series
+ * (`group_by=agent`, which carries only the three) fills a timeline too.
+ */
+export type TimelineSource = Pick<
+  SpendTimeseriesPoint,
+  'bucket_start' | 'spend_usd' | 'operations'
+> &
+  Partial<SpendTimeseriesPoint>
+
+function toPoint(d: Date, bucket: 'hour' | 'day', p: TimelineSource | undefined): TimelinePoint {
   return {
     iso: d.toISOString(),
     label: bucketLabel(d, bucket),
     spend: p?.spend_usd ?? 0,
     operations: p?.operations ?? 0,
+    p50: p?.p50_latency_ms ?? null,
     p95: p?.p95_latency_ms ?? null,
+    p99: p?.p99_latency_ms ?? null,
     topAgent: p?.top_agent_name ?? null,
     topAgentSpend: p?.top_agent_spend_usd ?? null,
   }
@@ -52,7 +63,7 @@ const HOUR = 3_600_000
 const DAY = 24 * HOUR
 
 export function zeroFillTimeline(
-  points: SpendTimeseriesPoint[],
+  points: readonly TimelineSource[],
   bucket: 'hour' | 'day',
   start: Date,
   end: Date,

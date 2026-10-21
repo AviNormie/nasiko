@@ -6,6 +6,7 @@ import { CONFIG_CACHE_SECONDS, SPEND_DAYS } from './tuning'
 
 export const copy = {
   title: 'LLM router',
+  sub: 'Which model and key each of your agents uses, and who pays',
   loading: 'Loading the LLM router',
   howItWorks: 'How routing works',
   howTitle: 'How a call is routed',
@@ -35,7 +36,7 @@ export const copy = {
   anchorsLabel: 'Sections',
 
   // Summary strip
-  summaryLabel: 'Routing summary',
+  summaryLabel: 'Filter agents by routing',
   atLeast: (n: number) => `at least ${n}`,
   summaryAgents: (n: string) => `${n} agents`,
   summaryDefault: (n: string, detail: string | null) =>
@@ -45,13 +46,10 @@ export const copy = {
     `${provider}, ${yourKey ? 'your key' : 'platform key'}`,
   filterNames: { attached: 'Attached', default: 'Your default', none: 'No config' },
   summaryNone: (n: string) => `${n} no config (platform key)`,
-  kpiAgents: 'Your agents',
-  kpiAgentsNote: 'Show all',
+  filterAll: 'All',
   kpiNoDefault: 'No default config',
   kpiAttachedNote: 'A config of their own',
   kpiNoneNote: 'Platform key',
-  filteredBy: (what: string) => `Showing agents: ${what}`,
-  clearFilter: 'Show all',
   foldedTitle: (n: string) => `${n} agents on your default`,
   foldedTitleMore: (n: string) => `${n} more on your default`,
   foldedDetail: (config: string, key: string) => `${config} · ${key}`,
@@ -115,6 +113,7 @@ export const copy = {
 
   // Your configs
   configsTitle: 'Your configs',
+  configsCount: (n: number) => `${n} ${n === 1 ? 'config' : 'configs'}`,
   newConfig: 'New config',
   setADefault: 'Set a default',
   noConfigs: 'No configs yet',
@@ -135,6 +134,7 @@ export const copy = {
 
   // Providers
   providersTitle: 'Providers',
+  providersCount: (n: number) => `${n} ${n === 1 ? 'provider' : 'providers'}`,
   colProvider: 'Provider',
   colModels: 'Models',
   colPrice: 'In / out per 1M',
@@ -232,6 +232,7 @@ export const copy = {
 
   // Agent routing sheet
   routingTitle: (name: string) => `Change routing · ${name}`,
+  saveBeforeStepping: 'Save or discard your changes first',
   routeWith: 'Route this agent with',
   useMyDefault: 'Use my default',
   useOwnersDefault: 'Use the owner’s default',
@@ -274,98 +275,6 @@ export const copy = {
   labelFallbacks: 'Fallbacks',
   labelOverride: 'Override',
   none: 'Not set',
-
-  // Budgets (R2, plan §5.1; proposed R-L10 contract, mocked)
-  budgetsTitle: 'Budgets',
-  budgetsSubtitle: (reset: string) =>
-    `Router-metered spend this UTC month (token_usage). Covers routed calls only · resets ${reset}`,
-  newBudget: 'New budget',
-  noBudgets: 'No budgets yet',
-  noBudgetsText:
-    'A budget alerts you as spend crosses its marks, and can stop an agent’s calls at 100%.',
-  createFirstBudget: 'Create a budget',
-  budgetsFailed: 'Couldn’t load budgets',
-  budgetsMissing: 'Budgets need a newer OpenRuntime server',
-  budgetsMissingBody:
-    'This section uses the proposed /api/budgets endpoints, which this server doesn’t have yet. Set VITE_NASIKO_MOCK=router,agents,providers to preview it with mock data.',
-  unpriced: (n: string) => `${n} calls with no price count as $0`,
-  stopKeeps100: 'Stop calls always alerts at 100%.',
-  budgetChanged:
-    'This budget changed elsewhere. Close the sheet and open it again to see the latest.',
-  budgetStatusFailed: 'Couldn’t read this month’s spend for these budgets.',
-  colScope: 'Scope',
-  colUsedOfLimit: 'Used of limit',
-  usedOf: (used: string, limit: string) => `${used} of ${limit}`,
-  colForecast: 'Forecast',
-  colState: 'State',
-  colAt100: 'At 100%',
-  budgetOwner: 'You',
-  budgetOwnerHint: 'All calls billed to you',
-  budgetOwnerOption: 'You (all calls billed to you)',
-  budgetUnknownAgent: (id: string) => `Agent ${id.slice(0, 8)}… (not listed)`,
-  budgetOk: 'OK',
-  budgetWarning: (pct: number) => `Warning · ${pct}%`,
-  budgetExceeded: 'Exceeded',
-  forecastBand: (low: string, high: string) => (low === high ? high : `${low} – ${high}`),
-  forecastTooEarly: 'Too early',
-  forecastNoSpend: 'No spend yet',
-  forecastStopped: 'Stopped at the limit',
-  forecastNote:
-    'Forecast: a month-end range from this month’s daily spend (median and mean daily rates), from day 3.',
-  forecastOver: 'over the limit',
-  actionAlert: 'Alert only',
-  actionStop: 'Stop calls',
-  stoppedUntil: (date: string) => `Calls get an error until ${date}`,
-  raiseLimit: 'Raise limit',
-  switchToAlert: 'Switch to Alert only',
-  switchedToAlert: (name: string | null) =>
-    `${name ? `${name} is` : 'Your budget is'} on Alert only. Calls resume within about a minute.`,
-  alertsTitle: 'Alerts',
-  alertsSubtitle: 'In-app, one per budget per mark per month. Email and webhooks are server work.',
-  noAlerts: 'No alerts this month or last',
-  alertCrossed: (label: string, pct: number, amount: string, stopped: boolean) =>
-    `${label} crossed ${pct}% (${amount})${stopped ? ' · calls stopped' : ''}`,
-  viewBudget: 'View budget',
-  alertOwner: 'Your budget',
-
-  // Budget sheet
-  budgetNew: 'New budget',
-  budgetEdit: (name: string | null) => `Budget · ${name ?? 'You (calls billed to you)'}`,
-  budgetDescription:
-    'A monthly limit on router-metered spend, with alerts as it crosses each mark.',
-  budgetStatusLine: (used: string, limit: string, reset: string) =>
-    `${used} used of ${limit} this month · resets ${reset} · router-metered`,
-  budgetScope: 'Applies to',
-  budgetScopeAgentHint: 'An agent budget counts every call to that agent, whoever is billed.',
-  budgetScopeOwnerHint:
-    'Your budget counts every routed call billed to you, including your chats with other people’s agents.',
-  budgetNoScopes: 'Every agent you own already has a budget, and so do you.',
-  monthlyLimit: 'Monthly limit (USD)',
-  limitPositive: 'Enter an amount above $0.',
-  alertAt: 'Alert at',
-  alertAtHint: 'One in-app alert each time spend crosses a mark.',
-  addThreshold: 'Add threshold',
-  thresholdPlaceholder: 'e.g. 90',
-  removeThreshold: (pct: number) => `Remove ${pct}%`,
-  thresholdsRequired: 'Keep at least one mark.',
-  thresholdRange: 'Use whole percents from 1 to 100.',
-  thresholdDuplicate: 'That mark is already set.',
-  at100: 'At 100%',
-  alertOnlyHint: 'You get an alert; calls continue.',
-  stopHint: 'The router refuses the calls this budget counts until the month resets.',
-  stopConsequenceAgent: (agent: string, date: string) =>
-    `Calls from ${agent} get an error until ${date}. Its callers see the agent’s normal error.`,
-  stopConsequenceOwner: (date: string) =>
-    `Every routed call billed to you gets an error until ${date}, including your chats with other people’s agents.`,
-  budgetTiming: 'Limit changes apply within about a minute.',
-  deleteBudget: 'Remove budget',
-  deleteBudgetTitle: (name: string | null) =>
-    name ? `Remove the budget for ${name}?` : 'Remove your budget?',
-  deleteBudgetBody: 'Alerts stop and, if calls were stopped, they resume.',
-  budgetSaved: (name: string | null) =>
-    name ? `Budget saved for ${name}.` : 'Your budget is saved.',
-  budgetDeleted: (name: string | null) =>
-    name ? `Budget removed for ${name}.` : 'Your budget is removed.',
 
   // Custom provider sheet
   cpNew: 'Add custom provider',

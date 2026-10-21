@@ -30,7 +30,7 @@ export function SavedByAgent({ data, className }: { data: SavedByAgentData; clas
       title={copy.saved.title}
       to="/tokenops"
       linkLabel={copy.saved.link}
-      linkSearch={{ open: 'optimize' }}
+      linkSearch={{ open: 'optimise' }}
       titleRef={titleRef}
       meta={bars.length ? copy.saved.subtitle(basis) : undefined}
       className={className}

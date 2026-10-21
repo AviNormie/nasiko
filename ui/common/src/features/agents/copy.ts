@@ -8,6 +8,7 @@ import { SERVER_TEXT_MAX } from './tuning'
 
 export const copy = {
   catalogTitle: 'Agents',
+  catalogSub: 'Discover, inspect and manage every agent in your workspace',
   mineTitle: 'Your agents',
   // The module's sub-nav (components/bits AgentsNav): Deploy and Builds moved here from the sidebar.
   sections: { label: 'Agents', all: 'All agents', mine: 'Your agents', builds: 'Builds' },
@@ -17,14 +18,19 @@ export const copy = {
   availableToYou: 'Available to you',
   publicChip: 'Public',
   harnessChip: 'Coding harness',
-  showHarnesses: (n: number) => `Show coding harnesses (${n})`,
-  hideHarnesses: 'Hide coding harnesses',
+  harnessesToggle: (n: number) => `Coding harnesses (${n})`,
+  ownerLabel: 'Owner',
+  ownerFilter: 'Filter by owner',
+  anyone: 'Anyone',
+  tagLabel: 'Tag',
+  tagFilter: 'Filter by tag',
+  allTags: 'All',
   harnessUsage: 'See usage on Harnesses',
   excludesHarnesses: (n: number) => `Excludes ${n} coding harness${n === 1 ? '' : 'es'}`,
   noResults: 'No agents match this search',
   noResultsHint: 'Try another name, tag or skill, or clear the search and filters.',
   clearSearch: 'Clear search',
-  /** The Overview's Fleet health filter (overview design 15A). */
+  /** The health filter: the home's rating badges link here (overview design 15A; plans/feat-agent-centric.md PR2a). */
   healthChip: (rating: string) => `Health: ${rating}`,
   clearHealth: (rating: string) => `Remove the Health: ${rating} filter`,
   healthReason: (reason: string) => `Why: ${reason}`,
@@ -66,7 +72,6 @@ export const copy = {
   noAgentsInTab: (tab: string) => `No agents in ${tab}`,
   noAgentsInTabHint: 'None of your agents are in this tab right now.',
   showAllAgents: 'Show all your agents',
-  agentsCount: (n: number) => `${n} agent${n === 1 ? '' : 's'}`,
   dismiss: 'Dismiss',
   deletedNotice: (name: string) => `Deleted ${name}.`,
   deletedWithErrors: (name: string, stopped: number) =>
@@ -87,6 +92,7 @@ export const copy = {
   tabMcp: 'MCP',
   tabAccess: 'Access',
   tabSettings: 'Settings',
+  tabDetails: 'Details',
 
   crashTitle: 'This agent crashed',
   crashOss: 'The runtime reports this agent as crashed. Recent error lines:',
@@ -104,6 +110,9 @@ export const copy = {
   noDescription: 'No description.',
   skills: 'Skills',
   noSkills: 'No skills advertised.',
+  showMore: 'Show more',
+  showLess: 'Show less',
+  showAllSkills: (n: number) => `Show all ${n} skills`,
   callThisAgent: 'Call this agent',
   tryIt: 'Try it',
   tryItTitle: (name: string) => `Chat with ${name} in the browser`,
@@ -111,6 +120,8 @@ export const copy = {
   liveCard: 'Live agent card',
   liveCardUnavailable: 'Live card available when running.',
   viewRaw: 'View raw',
+  copyLiveCard: 'Copy the live agent card',
+  copyRaw: 'Copy the raw responses',
   learnMore: 'Learn more',
   version: 'Version',
   ownerLine: (owner: string) => `Owner: ${owner}`,
@@ -131,6 +142,7 @@ export const copy = {
   copyExample: (ex: string) => `Copy example: ${ex}`,
   copyCommand: (cmd: string) => `Copy: ${cmd}`,
 
+  summary: 'Usage and resources',
   stats: 'Last 24 hours',
   turns: 'Turns',
   cost: 'Est. cost',
@@ -140,17 +152,13 @@ export const copy = {
   noResources: 'Resource usage appears when the agent is running.',
   obsOff:
     'Observability is not configured: set OTEL_EXPORTER_OTLP_ENDPOINT, TEMPO_URL and LOKI_URL.',
-  recentSessions: 'Recent sessions',
-  noSessions: (n: number) => `No sessions for this agent in the latest ${n} sessions.`,
-  nameCollision:
-    "Matched by name; may include sessions of another owner's agent, or a deleted one, with the same name.",
   logs: 'Logs',
   noLogs: 'No log lines yet.',
   liveTail: 'Live tail',
   errorsDot: 'Errors in the latest log lines',
   cpu: 'CPU',
   memory: 'Memory',
-  memoryLimit: 'Memory limit',
+  memoryOfLimit: (pct: number) => `Memory: ${pct}% of the limit`,
   level: 'Level',
   allLevels: 'All',
   searchLogs: 'Search logs',

@@ -15,6 +15,7 @@ import { renderApp } from '@/test/renderApp'
 import { recordRequests, server } from '@/test/setup'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { copy } from './copy'
+import { FAILED_SESSION_ROWS, RECENT_SESSION_ROWS, SAVED_BARS } from './tuning'
 
 setupPinnedSeed()
 afterEach(() => {
@@ -47,7 +48,7 @@ describe('Spend', () => {
     expect(document.body).not.toHaveTextContent(/You've spent/i)
   })
 
-  it('stacks 30 days by the top drivers, whose own series come from the filtered timeseries', async () => {
+  it('stacks 30 days by the top drivers, whose series come from one grouped timeseries', async () => {
     const reqs = recordRequests()
     renderApp('/')
     await loaded()
@@ -57,15 +58,23 @@ describe('Spend', () => {
     const heads = within(fig)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-    const filtered = reqs.urls.filter(
-      (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.has('agent_id'),
+    // The drivers' series used to be one filtered request each — a fan-out that
+    // grew with the chart. `group_by=agent` returns all of them at once.
+    expect(
+      reqs.urls.filter(
+        (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.has('agent_id'),
+      ),
+    ).toEqual([])
+    const grouped = reqs.urls.filter(
+      (u) => u.pathname.endsWith('/spend-timeseries') && u.searchParams.get('group_by') === 'agent',
     )
-    // One filtered series per driver with spend, at most five (one per chart colour).
-    const k = new Set(filtered.map((u) => u.searchParams.get('agent_id'))).size
+    expect(grouped).toHaveLength(1)
+    expect(grouped[0].searchParams.get('top')).toBe('5')
+    // Columns are Day, one per driver that actually spent, Other, Total — so the
+    // chart can carry fewer series than the drivers table has rows.
+    const k = heads.length - 3
     expect(k).toBeGreaterThan(0)
     expect(k).toBeLessThanOrEqual(5)
-    // Day, the drivers (named as in the drivers table), Other, Total.
-    expect(heads).toHaveLength(k + 3)
     const drivers = within(spend).getAllByTestId('spend-driver')
     heads.slice(1, k + 1).forEach((h, i) => expect(drivers[i]).toHaveTextContent(h!))
     reqs.stop()
@@ -107,7 +116,12 @@ describe('Fleet health', () => {
           name: `Remove the Health: ${copy.rating.watch} filter`,
         })
         await waitFor(() =>
-          expect(within(screen.getByRole('main')).queryAllByRole('listitem')).toHaveLength(n),
+          expect(
+            within(screen.getByRole('main'))
+              .queryAllByRole('listitem')
+              // The top bar's breadcrumb is a list too.
+              .filter((li) => !li.closest('[data-slot="breadcrumb"]')),
+          ).toHaveLength(n),
         )
       }
     }
@@ -347,7 +361,7 @@ describe('first run (design 7A)', () => {
 })
 
 describe('Recent sessions and the session checks (eng R7)', () => {
-  it('status-checks at most the newest 25 sessions', async () => {
+  it('reads session status from the list, with no per-session or per-trace fan-out', async () => {
     const rec = recordRequests()
     renderApp('/')
     await loaded()
@@ -357,11 +371,19 @@ describe('Recent sessions and the session checks (eng R7)', () => {
       { timeout: 5000 },
     )
     rec.stop()
-    const details = new Set(
-      rec.urls.map((u) => u.pathname).filter((p) => /\/session\/(?!list)[^/]+$/.test(p)),
+    const paths = rec.urls.map((u) => u.pathname)
+    // `session/list` carries `status`, so the Overview no longer downloads a
+    // session detail (and 3 traces each) to compute one boolean per row. This
+    // was up to 100 requests, every one a trace-store read on the server.
+    expect(paths.filter((p) => /\/session\/(?!list)[^/]+$/.test(p))).toEqual([])
+    expect(paths.filter((p) => p.includes('/trace/'))).toEqual([])
+    // Two list reads: the rows shown, and the failed ones Needs you counts.
+    const lists = rec.urls.filter((u) => u.pathname.endsWith('/session/list'))
+    expect(lists).toHaveLength(2)
+    expect(lists.map((u) => Number(u.searchParams.get('limit'))).sort((x, y) => x - y)).toEqual(
+      [RECENT_SESSION_ROWS, FAILED_SESSION_ROWS].sort((x, y) => x - y),
     )
-    expect(details.size).toBeGreaterThan(0)
-    expect(details.size).toBeLessThanOrEqual(25)
+    expect(lists.some((u) => u.searchParams.get('status') === 'failed')).toBe(true)
   })
 
   it('says the trace store is needed when the session list fails with a 503', async () => {
@@ -414,14 +436,14 @@ describe('Budgets', () => {
     ).toHaveAttribute('href', '/router#router-budgets')
   })
 
-  it('hides both on a server without budgets (a bare 404), and Recent sessions takes the row', async () => {
+  it('hides both on a server without budgets (a bare 404); Recent sessions sits beside Fleet health', async () => {
     server.use(http.get('*/api/budgets', () => new HttpResponse(null, { status: 404 })))
     renderApp('/')
     await loaded()
     await waitFor(() => expect(card('overview-budget')).toBeNull())
     const actions = card('overview-actions')
     expect(within(actions).queryByRole('link', { name: copy.actions.adjustBudget })).toBeNull()
-    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-4')
+    expect(card('overview-sessions').className).toContain('@[1100px]/overview:col-span-7')
   })
 })
 
@@ -431,13 +453,13 @@ describe('structure (design 14A)', () => {
     await loaded()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     const ids = [
-      // Savings sits between the summary and the detail grid: a headline feature, above the fold.
+      // Savings is the summary card's last block; Fleet health sits beside Needs you (redesign 2026-10-19).
       'overview-savings',
       'overview-needs',
-      'overview-spend',
-      // 'overview-budget', // Budgets hidden: no server support yet (R-L10).
       'overview-health',
+      'overview-spend',
       'overview-sessions',
+      'overview-saved',
       'overview-chats',
       'overview-actions',
     ]
@@ -494,8 +516,11 @@ describe('Savings', () => {
     const row = await screen.findByTestId('overview-savings')
     await user.click(within(row).getByRole('link', { name: /See the breakdown/ }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
-    const section = await screen.findByRole('button', { name: /^Token optimisation/ })
-    expect(section).toHaveAttribute('aria-expanded', 'true')
+    // TokenOps has no expanders: `open=optimise` scrolls to the section, which is always on the page.
+    expect(router.state.location.search).toMatchObject({ open: 'optimise' })
+    expect(
+      await screen.findByRole('heading', { name: 'Token optimisation savings' }),
+    ).toBeInTheDocument()
   })
 
   it('keeps the tile grid to the four like-for-like counters', async () => {
@@ -605,5 +630,36 @@ describe('Savings', () => {
     renderApp('/')
     await screen.findByTestId('kpi-spend')
     expect(screen.queryByTestId('overview-savings')).toBeNull()
+  })
+})
+
+describe('the summary tiles (redesign 2026-10-19)', () => {
+  it('Tokens shows the range’s total and its input / output split; Runs shows cost per run', async () => {
+    renderApp('/')
+    await loaded()
+    const tokens = card('kpi-tokens')
+    expect(within(tokens).getByText(/^\d[\d.]*[KMB]?$/)).toBeInTheDocument()
+    expect(within(tokens).getByText(/^input \d/)).toBeInTheDocument()
+    expect(within(tokens).getByText(/^output \d/)).toBeInTheDocument()
+    expect(within(card('kpi-runs')).getByTestId('kpi-cost-per-run')).toHaveTextContent(/per run$/)
+    // The run states moved from the old Agents running tile to Fleet health.
+    expect(screen.queryByTestId('kpi-agents')).toBeNull()
+    expect(within(card('overview-health')).getByTestId('health-run-states')).toHaveTextContent(
+      /^\d+ of \d+ running/,
+    )
+  })
+})
+
+describe('Saved tokens by agent (redesign 2026-10-19)', () => {
+  it('ranks visible agents largest first, each opening its hub, and folds the rest into Other', async () => {
+    renderApp('/')
+    await loaded()
+    const saved = card('overview-saved')
+    const list = await within(saved).findByRole('list', { name: copy.saved.title })
+    const links = within(list).getAllByRole('link')
+    expect(links.length).toBeGreaterThan(0)
+    expect(links.length).toBeLessThanOrEqual(SAVED_BARS)
+    for (const l of links) expect(l.getAttribute('href')).toMatch(/^\/agents\/[^/]+$/)
+    expect(saved).toHaveTextContent(copy.saved.subtitle('measured'))
   })
 })

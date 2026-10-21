@@ -15,6 +15,7 @@ import {
 export const STATUS_LABEL: Record<Status, string> = {
   failed: '✕ failed',
   ok: '✓ ok',
+  running: '• running',
   unchecked: '— unchecked',
   unknown: '? unknown',
   checking: '… checking',
@@ -33,10 +34,8 @@ export const copy = {
   statusCaption: (checked: number, total: number) => `Status checked for ${checked} of ${total}`,
   laneScope: (day?: string) => (day ? `p95 within ${day}` : 'p95 over loaded sessions'),
   notEnoughToRank: 'Not enough sessions to rank',
-  nothingNeedsAttention: 'Nothing needs attention',
   failingTooltip: `Failing = an unrecovered span error in one of the session's ${STATUS_TRACES_PER_SESSION} largest traces (from span status; a retry that worked is not a failure).`,
 
-  viewingDay: (day: string) => `Viewing ${day}`,
   clearDay: 'Clear day',
   scanning: (page: number, of: number) => `Scanning sessions… (page ${page} of ${of})`,
   scanCapped: (day: string, scanned: number) =>
@@ -96,6 +95,8 @@ export const copy = {
   captureOff:
     'Content capture is off for this agent (OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT).',
   unknownSpan: "That span isn't in this trace; showing the default span instead.",
+  /** A harness session's ledger (plans/feat-agent-centric.md PR1b): one row per turn instead of the trace. */
+  openLedger: 'Ledger',
   linkCopied: 'Link copied',
   copyFailed: 'Copy failed: select the address bar and copy it instead.',
   logsEmpty: 'No log lines yet',

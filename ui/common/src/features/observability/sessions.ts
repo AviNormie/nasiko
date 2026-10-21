@@ -37,7 +37,34 @@ export function percentile(values: readonly (number | null | undefined)[], q = P
   return xs[rank - 1]
 }
 
-export type Status = 'failed' | 'ok' | 'unchecked' | 'unknown' | 'checking'
+/**
+ * `failed` / `ok` / `running` are the server's own values (`session/list`,
+ * derived from the flow outcome recorded at the proxy). The rest are client
+ * states: `unchecked` when the server has no recorded request to judge by, and
+ * `unknown` / `checking` for the Sessions page's per-trace checks.
+ */
+export type Status = 'failed' | 'ok' | 'running' | 'unchecked' | 'unknown' | 'checking'
+
+/**
+ * A sample's checked-sessions verdict, the rule the Overview's and the agent hub's Needs you share (design 5A, QA
+ * ISSUE-005, /ship adversarial finding 7): still checking is loading; most of the sample must answer before "no
+ * failures" counts (every check coming back unknown, e.g. no trace store, is a failed source); failures actually found
+ * always show. `checked` counts the sessions that answered (failed or ok).
+ */
+export function checkSessions(i: {
+  listError: boolean
+  listPending: boolean
+  verdicts: readonly (Status | undefined)[]
+}): { state: 'failed' } | { state: 'loading' } | { state: 'ok'; checked: number; failed: number } {
+  const checked = i.verdicts.filter((v) => v === 'ok' || v === 'failed').length
+  const failed = i.verdicts.filter((v) => v === 'failed').length
+  const checking = i.verdicts.some((v) => v === 'checking')
+  const noneChecked =
+    !checking && !failed && i.verdicts.length > 0 && checked * 2 < i.verdicts.length
+  if (i.listError || noneChecked) return { state: 'failed' }
+  if (i.listPending || checking) return { state: 'loading' }
+  return { state: 'ok', checked, failed }
+}
 
 export interface Lanes {
   /** Lanes are hidden below LANE_MIN_SESSIONS loaded rows. */

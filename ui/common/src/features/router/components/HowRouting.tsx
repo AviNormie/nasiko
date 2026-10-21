@@ -1,5 +1,5 @@
 /**
- * "How routing works" (plan §4.1): the page title's disclosure. Five numbered steps, left to right from lg on a line a
+ * "How routing works" (plan §4.1): the page's disclosure, toggled from the top bar. Five numbered steps, left to right from lg on a line a
  * beam travels along and stacked below with a connecting line, then a footer with this viewer's own numbers.
  * Opens by default on a first visit with no configs; an explicit choice is remembered (prefs.ts).
  */
@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { TopBar } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { Button } from '@/components/ui/button'
 import { enter, transitions } from '@/lib/motion'
@@ -55,10 +56,11 @@ export function RouterTitle({
   const toggleRef = useRef<HTMLButtonElement>(null)
   return (
     <div className="space-y-3">
-      <PageHeader
-        title={copy.title}
+      {/* The explainer's toggle is a page action: the top bar's right, above the panel it opens. */}
+      <TopBar
         actions={
           <Button
+            data-tour="router-how"
             ref={toggleRef}
             variant="ghost"
             size="sm"
@@ -78,6 +80,7 @@ export function RouterTitle({
           </Button>
         }
       />
+      <PageHeader title={copy.title} description={copy.sub} />
       <AnimatePresence initial={false}>
         {shown ? (
           <m.section

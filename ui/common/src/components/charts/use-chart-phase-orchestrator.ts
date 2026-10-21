@@ -1,7 +1,6 @@
 /* eslint-disable react-hooks/refs, react-hooks/set-state-in-effect -- Kit animation code (from the React migration's visx kit): a
    phase state machine that steps through animation phases in effects and mirrors the phase into a ref during render.
    Correct without the React Compiler, so the file opts out of it with 'use no memo'. */
-'use client'
 'use no memo'
 
 import { useCallback, useEffect, useRef, useState } from 'react'

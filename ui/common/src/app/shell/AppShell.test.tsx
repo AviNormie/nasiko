@@ -55,6 +55,7 @@ describe('sidebar items', () => {
   it('lists every page with a name, even as the collapsed rail', async () => {
     renderApp('/tokenops')
     await screen.findByRole('navigation', { name: 'Main' })
+    // Every core item is static: the one probe-gated item (Budgets) is Enterprise only, so the EE suite covers it.
     // jsdom is 1024 px wide: no cookie means the first-visit rail (design review 9A).
     expect(sidebarState()).toBe('collapsed')
     for (const n of NAV_ITEMS)
@@ -62,7 +63,7 @@ describe('sidebar items', () => {
   })
 
   it.each([
-    ['/tokenops', 'TokenOps'],
+    ['/tokenops', 'Monitor'],
     ['/sessions', 'Sessions'],
     ['/harnesses', 'Harnesses'],
     ['/agents', 'Agents'],
@@ -70,7 +71,7 @@ describe('sidebar items', () => {
     ['/deploy', 'Agents'],
     ['/builds', 'Agents'],
     ['/chat', 'Chat'],
-    ['/', 'Overview'],
+    ['/', 'Home'],
   ])('marks %s as %s with aria-current', async (url, label) => {
     renderApp(url)
     await waitFor(() => expect(navLink(label)).toHaveAttribute('aria-current', 'page'))
@@ -93,7 +94,7 @@ describe('sidebar items', () => {
     // The other shared keys still cross into Sessions and TokenOps; the window doesn't.
     expect(navLink('Sessions').getAttribute('href')).toContain('compare=false')
     expect(navLink('Sessions').getAttribute('href')).not.toContain('preset')
-    expect(navLink('TokenOps').getAttribute('href')).not.toContain('preset')
+    expect(navLink('Monitor').getAttribute('href')).not.toContain('preset')
     expect(navLink('Chat').getAttribute('href')).toBe('/chat')
     expect(navLink('Agents').getAttribute('href')).toBe('/agents')
   })
@@ -101,7 +102,7 @@ describe('sidebar items', () => {
   it('keeps the shared keys and drops page-only ones when following the links', async () => {
     const { router } = renderApp('/sessions?preset=7d&day=2026-03-18')
     await screen.findByRole('navigation', { name: 'Main' })
-    await userEvent.click(navLink('TokenOps'))
+    await userEvent.click(navLink('Monitor'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     // TokenOps opens on its own 30 days, not Sessions' window.
     expect(router.state.location.search).toMatchObject({ preset: '30d' })
@@ -114,7 +115,7 @@ describe('sidebar items', () => {
   it('shows a way back into the app on an unknown URL', async () => {
     renderApp('/no-such-page')
     await screen.findByRole('heading', { name: 'Page not found' })
-    expect(screen.getByRole('link', { name: 'Back to Overview' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/')
     expect(screen.getByRole('link', { name: 'Go to Chat' })).toHaveAttribute('href', '/chat')
   })
 
@@ -158,7 +159,7 @@ describe('sidebar items', () => {
 })
 
 describe('header brand link', () => {
-  it('goes to the Overview through the router without marking itself current', async () => {
+  it('goes Home through the router without marking itself current', async () => {
     wide()
     const { router } = renderApp('/agents')
     await screen.findByRole('navigation', { name: 'Main' })
@@ -167,7 +168,7 @@ describe('header brand link', () => {
     await userEvent.click(brand)
     await waitFor(() => expect(router.state.location.pathname).toBe('/'))
     expect(brand).not.toHaveAttribute('aria-current')
-    expect(navLink('Overview')).toHaveAttribute('aria-current', 'page')
+    expect(navLink('Home')).toHaveAttribute('aria-current', 'page')
   })
 
   it('leaves a modified click (new tab) to the browser', async () => {
@@ -208,7 +209,8 @@ describe('layout', () => {
     await router.navigate({ to: '/agents' })
     await waitFor(() => expect(wrapper()).toHaveClass('min-h-screen'))
     expect(wrapper()).not.toHaveClass('h-dvh')
-    expect(document.getElementById('main')).toHaveClass('max-w-page')
+    // The page column keeps the max width; the top bar spans the whole page area.
+    expect(document.querySelector('#main .max-w-page')).toBeInTheDocument()
   })
 
   it.each(['/login', '/no-such-page'])(
@@ -557,10 +559,10 @@ describe('drill-in panel (one sidebar on Chat and Settings)', () => {
     expect(back).toHaveAttribute('title', 'Back to Chat')
     await userEvent.click(back)
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat'))
-    await userEvent.click(await screen.findByRole('button', { name: 'Back to TokenOps' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Back to Monitor' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     expect(router.state.location.search).toMatchObject({ preset: '7d' })
-    await waitFor(() => expect(document.activeElement).toBe(navLink('TokenOps')))
+    await waitFor(() => expect(document.activeElement).toBe(navLink('Monitor')))
   })
 
   it('leaves the panel for the app nav on a page without one', async () => {
