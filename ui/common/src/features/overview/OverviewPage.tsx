@@ -16,13 +16,21 @@
  * with Home's Budget burn panel (the `budgets.useHomePanel` slot, EE only) spanning the row under Needs you. The panel
  * reads the persona's default scope (`homeScopeFor`: Fleet for leads and finance, Yours otherwise), since the Overview
  * has no scope switch; the first paint waits for it, so it never pushes the cards down mid-look.
+ *
+ * OSS only: the header's view switch swaps the summary bento for the estate's canvas (plans/feat-village-overview.md,
+ * ported from nasiko-ui-lab feat/product-shell); the cards under it stay either way. `?view=village` draws the village
+ * and `?view=map` the Map's board (`fleet/`), with the same HUD and insight drawer. A bare `/` opens the viewer's last
+ * pick (`homeViewKey`), else the summary; a `?sel=` without a view opens the village. The estate is read only while the
+ * canvas shows. Admins pick Org or Mine (`?scope=`) beside the range on the canvas; the filters bar shows only while a
+ * filter is set. Other editions get the summary alone, whatever the URL says.
  */
-import { useSlots } from '@/app/edition-context'
+import { useEdition, useSlots } from '@/app/edition-context'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { RotateCw } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { toast } from 'sonner'
 import { TourButton } from '@/app/shell/TopBar'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -34,6 +42,8 @@ import { overviewNarrative } from '@/features/narrative/overview'
 import { usePersona } from '@/features/onboarding/api'
 import { homeScopeFor } from '@/features/onboarding/logic'
 import { meQuery, type Me } from '@/lib/api/auth'
+import { DRAFT_PREFIX } from '@/lib/draftKeys'
+import { isEndpointAbsent } from '@/lib/api/detect'
 import { useReturnTick } from '@/lib/useReturnTick'
 import {
   useFleetHealth,
@@ -55,11 +65,42 @@ import { SetupGuide } from './components/SetupGuide'
 import { SetUpNow } from './components/SetUpNow'
 import { SummaryCard } from './components/SummaryCard'
 import { Spend } from './components/Spend'
+import { FilterBar } from './components/FilterBar'
 import { copy } from './copy'
+import { useEstate, useProblemAction } from './estate/api'
+import { estateCopy } from './estate/copy'
+import type { ProblemPatch } from './estate/types'
+import { useEstateView } from './estate/useEstateView'
+import { formatSel, parseSel, type Selection } from './map/selection'
+import type { ProblemActions } from './panel/ProblemCard'
 import { DEFAULT_RANGE, RANGE_DAYS, RANGES, type OverviewSearch } from './search'
 import { RETURN_REFRESH_MS } from './tuning'
+import type { VillageView } from './village/Hud'
+import { VillageCanvas, VillageLoading } from './village'
+import { loadVillage } from './village/load'
 
 type SetSearch = (patch: Partial<OverviewSearch>) => void
+type HomeView = 'overview' | VillageView
+const HOME_VIEWS: readonly HomeView[] = ['overview', 'village', 'map']
+
+/** The view a bare `/` opens, per viewer, under the drafts prefix (sign-out clears it, as chat's rail view). */
+const homeViewKey = (sub: string) => `${DRAFT_PREFIX}${sub}:meta:homeView`
+function readHomeView(sub: string): HomeView {
+  try {
+    const v = globalThis.localStorage?.getItem(homeViewKey(sub))
+    return HOME_VIEWS.find((x) => x === v) ?? 'overview'
+  } catch {
+    return 'overview'
+  }
+}
+/** Written when the viewer picks a view; arriving with `?view=` alone doesn't. */
+function rememberHomeView(sub: string, view: HomeView) {
+  try {
+    globalThis.localStorage?.setItem(homeViewKey(sub), view)
+  } catch {
+    // Blocked storage: a bare `/` opens the cards.
+  }
+}
 
 function Frame({
   description,
@@ -82,14 +123,64 @@ function HeaderActions({
   search,
   setSearch,
   setup,
+  admin,
+  view,
+  onView,
 }: {
   search: OverviewSearch
   setSearch: SetSearch
   /** False on first run: the Setup guide (or deploy) card is on the page already. */
   setup: boolean
+  /** Admins choose Org or Mine for the canvas; members only ever see their own. */
+  admin: boolean
+  view: HomeView
+  /** Null where the canvas isn't offered (any edition but OSS): no view switch. */
+  onView: ((v: HomeView) => void) | null
 }) {
   return (
     <>
+      {onView ? (
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={view}
+          onValueChange={(v) => v && onView(v as HomeView)}
+          aria-label={copy.views.label}
+        >
+          {HOME_VIEWS.map((v) => (
+            <ToggleGroupItem
+              key={v}
+              value={v}
+              className="px-3 text-xs pointer-coarse:min-h-11"
+              // Intent to open the canvas starts its download, so the switch feels instant.
+              onPointerEnter={v === 'overview' ? undefined : () => void loadVillage()}
+              onFocus={v === 'overview' ? undefined : () => void loadVillage()}
+            >
+              {copy.views[v]}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      ) : null}
+      {admin && view !== 'overview' ? (
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          value={search.scope ?? 'org'}
+          onValueChange={(s) =>
+            s && setSearch({ scope: s === 'org' ? undefined : 'mine', sel: undefined })
+          }
+          aria-label={estateCopy.scope.label}
+        >
+          <ToggleGroupItem value="mine" className="px-3 text-xs pointer-coarse:min-h-11">
+            {estateCopy.scope.mine}
+          </ToggleGroupItem>
+          <ToggleGroupItem value="org" className="px-3 text-xs pointer-coarse:min-h-11">
+            {estateCopy.scope.org}
+          </ToggleGroupItem>
+        </ToggleGroup>
+      ) : null}
       <ToggleGroup
         data-tour="overview-range"
         type="single"
@@ -205,6 +296,7 @@ function Overview({
     void qc.invalidateQueries({ queryKey: ['budgets', 'v1'] })
     // The month calendar is keyed by month, not window: refresh it too, as TokenOps does (/ship review).
     void qc.invalidateQueries({ queryKey: ['tokenops', 'calendar'] })
+    void qc.invalidateQueries({ queryKey: ['overview', 'estate'] })
   }, [returnTick, qc])
 
   const fleet = useFleetHealth(now)
@@ -244,8 +336,103 @@ function Overview({
     [spend.summary, spend.unpriced, needs],
   )
 
+  // The village and the map are OSS only. `list` was the village's List view; its list is the Map's System card now, so
+  // an old link opens the Map.
+  const offersCanvas = useEdition() === 'oss'
+  const [remembered, setRemembered] = useState(() => readHomeView(me.sub))
+  const view: HomeView = !offersCanvas
+    ? 'overview'
+    : search.view === 'list'
+      ? 'map'
+      : (search.view ?? (search.sel ? 'village' : remembered))
+  const canvas = view !== 'overview'
+  // The canvas's chunk downloads alongside the estate, not after it.
+  useEffect(() => {
+    if (canvas) void loadVillage()
+  }, [canvas])
+  const pickView = (v: HomeView) => {
+    rememberHomeView(me.sub, v)
+    setRemembered(v)
+    // The summary is the bare `/`; leaving the canvas drops its selection with it.
+    setSearch(v === 'overview' ? { view: undefined, sel: undefined } : { view: v })
+  }
+
+  // The canvas's estate: the server's (OV-1), or one built from the fleet when the endpoint is absent. Read only while
+  // the canvas shows, so the summary never waits for it.
+  const admin = me.is_superuser
+  const estateQ = useEstate(range, !firstRun && canvas)
+  const absent = estateQ.data === null || (estateQ.isError && isEndpointAbsent(estateQ.error))
+  const v = useEstateView({
+    estate: estateQ.data,
+    absent,
+    fleet,
+    me,
+    search,
+    admin,
+    waiting: needsYou.waiting,
+    now: now.getTime(),
+  })
+  // Selections made in the panel, so Back walks them.
+  const [trail, setTrail] = useState<string[]>([])
+  const select = useCallback(
+    (s: Selection) => {
+      const next = formatSel(s)
+      if (search.sel && search.sel !== next) setTrail((t) => [...t.slice(-20), search.sel ?? ''])
+      setSearch({ sel: next })
+    },
+    [search.sel, setSearch],
+  )
+  const clear = useCallback(() => {
+    setTrail([])
+    setSearch({ sel: undefined })
+  }, [setSearch])
+  const back = trail.length
+    ? () => {
+        const prev = trail[trail.length - 1]
+        setTrail((t) => t.slice(0, -1))
+        setSearch({ sel: prev || undefined })
+      }
+    : null
+  // OV-2: optimistic, with Undo in the toast.
+  const act = useProblemAction()
+  const problemActions: ProblemActions = {
+    enabled: !!estateQ.data && !v?.fallback,
+    me: me.sub,
+    patch: (id, patch: ProblemPatch, undo, message) =>
+      act.mutate(
+        { id, patch },
+        {
+          onSuccess: () => {
+            if (!message) return
+            toast(
+              message,
+              undo
+                ? {
+                    action: {
+                      label: estateCopy.card.toast.undo,
+                      onClick: () => act.mutate({ id, patch: undo }),
+                    },
+                  }
+                : undefined,
+            )
+          },
+          onError: () => toast.error(estateCopy.card.toast.failed),
+        },
+      ),
+    showChain: (id) => select({ type: 'chain', id }),
+  }
+
   const description = copy.greeting(now.getHours(), me.username, days)
-  const actions = <HeaderActions search={search} setSearch={setSearch} setup={!firstRun} />
+  const actions = (
+    <HeaderActions
+      search={search}
+      setSearch={setSearch}
+      setup={!firstRun}
+      admin={admin}
+      view={view}
+      onView={offersCanvas ? pickView : null}
+    />
+  )
   // One page loader until the first paint's reads settle (data or error: a failed read renders its card's error), in
   // place of every card's skeleton. Latched: a later range change or return tick keeps the cards' own loading states.
   // Needs you's rating and session checks aren't waited for: its card shows them loading (a fan-out can be slow).
@@ -296,16 +483,67 @@ function Overview({
       </Frame>
     )
   }
+  const filtered = !!(search.team || search.owner || search.kind || search.tier)
+  const clearFilters = () =>
+    setSearch({ team: undefined, owner: undefined, kind: undefined, tier: undefined })
+  /** The village's own selections (`place:…`) are raw `sel` values the map's parser doesn't know. */
+  const selectRaw = (raw: string) => {
+    const s = parseSel(raw)
+    if (s) select(s)
+    else setSearch({ sel: raw })
+  }
   return (
     <Frame description={description} actions={actions}>
-      <SummaryCard
-        days={days}
-        narrative={narrative}
-        nothing={needs.empty}
-        spend={spend}
-        savings={savings}
-        harnesses={harnesses}
-      />
+      {/* The summary, or in its place the canvas (OSS): the cards under it stay either way. */}
+      {!canvas ? (
+        <SummaryCard
+          days={days}
+          narrative={narrative}
+          nothing={needs.empty}
+          spend={spend}
+          savings={savings}
+          harnesses={harnesses}
+        />
+      ) : v ? (
+        <div className="flex flex-col gap-3">
+          {filtered ? (
+            <FilterBar v={v} search={search} me={me.sub} onChange={(patch) => setSearch(patch)} />
+          ) : null}
+          <VillageCanvas
+            v={v}
+            sel={search.sel}
+            onSel={(s) => (s ? selectRaw(s) : clear())}
+            view={view === 'map' ? 'map' : 'village'}
+            onView={pickView}
+            panel={{
+              select,
+              back,
+              close: clear,
+              needs: needsYou,
+              actions: problemActions,
+              filtered,
+              clearFilters,
+              now: now.getTime(),
+            }}
+            saved={savings.view?.costSaved ?? null}
+            optimisation={savings.view}
+            spend={spend}
+            now={now.getTime()}
+          />
+        </div>
+      ) : estateQ.isError && !absent ? (
+        <StateCard
+          tone="error"
+          title={estateCopy.error.title}
+          action={
+            <Button size="sm" variant="outline" onClick={() => void estateQ.refetch()}>
+              <RotateCw className="size-3.5" aria-hidden /> {estateCopy.error.retry}
+            </Button>
+          }
+        />
+      ) : (
+        <VillageLoading view={view === 'map' ? 'map' : 'village'} />
+      )}
       <div className="grid grid-cols-1 items-stretch gap-3 @[700px]/overview:grid-cols-2 @[1100px]/overview:grid-cols-12">
         <NeedsYou
           data={needsYou}

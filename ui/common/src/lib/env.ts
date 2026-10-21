@@ -41,6 +41,8 @@ export const MOCKABLE = [
   'optimization',
   // The proposed agent event log (plans/feat-agent-centric.md PR1a): change markers on the agent hub.
   'events',
+  // The Overview's proposed estate, problem state and pins (docs/requirements/overview.md OV-1..OV-3).
+  'overview',
 ] as const
 export type Mockable = (typeof MOCKABLE)[number]
 

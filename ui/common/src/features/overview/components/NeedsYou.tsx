@@ -147,7 +147,7 @@ export function NeedsYou({
                     key={r.key}
                     className="border-t border-border first:border-t-0 @[900px]/card:rounded-lg @[900px]/card:border @[900px]/card:bg-muted/20 @[900px]/card:px-3 @[900px]/card:first:border-t"
                   >
-                    <Row
+                    <NeedRowView
                       row={r}
                       now={now}
                       userId={userId}
@@ -176,7 +176,8 @@ export function NeedsYou({
   )
 }
 
-function Row({
+/** One Needs you row: its icon, what it is, and its one action (the insight panel lists requests with it too). */
+export function NeedRowView({
   row,
   now,
   userId,

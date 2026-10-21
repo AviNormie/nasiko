@@ -13,6 +13,7 @@ import { KpiTile } from '@/components/shared/kpi-tile'
 import { Skeleton } from '@/components/ui/skeleton'
 import { seriesAt, type Series } from '@/lib/chart'
 import { POLARITY } from '@/lib/delta'
+import { cn } from '@/lib/utils'
 import { fmtCostPerOp, fmtInt, fmtMoneyFloor, fmtMoneyShort, fmtPct, fmtTokens } from '@/lib/format'
 import type { Spend } from '../api'
 import { copy } from '../copy'
@@ -46,20 +47,24 @@ export function TileLabel({
 export const TILE = 'min-w-0 gap-2 p-4'
 const PENDING = <Skeleton className="h-8 w-28 motion-reduce:animate-none" />
 
-/** A tiny decorative chart under a figure: a line with a light area, or bars. */
+/** A tiny decorative chart under a figure: a line with a light area, or bars. The village's meters use it too. */
 export function Spark({
   points,
   kind,
   series,
+  className,
 }: {
   /** One point per day, keyed by its ISO start. */
   points: readonly { key: string; value: number }[]
   kind: 'line' | 'bars'
   series: Series
+  /** Overrides the size (the tiles' is `h-10 w-full`). */
+  className?: string
 }) {
   const values = points.map((p) => p.value)
   const max = Math.max(0, ...values)
-  if (!values.length || max <= 0) return <div className="mt-auto h-10" aria-hidden />
+  if (!values.length || max <= 0)
+    return <div className={cn('mt-auto h-10', className)} aria-hidden />
   const y = (v: number) => 30 - (v / max) * 28
   if (kind === 'bars') {
     const w = 100 / values.length
@@ -68,7 +73,7 @@ export function Spark({
         aria-hidden
         viewBox="0 0 100 32"
         preserveAspectRatio="none"
-        className="mt-auto h-10 w-full"
+        className={cn('mt-auto h-10 w-full', className)}
       >
         {points.map(({ key, value: v }, i) => (
           <rect
@@ -93,7 +98,7 @@ export function Spark({
       aria-hidden
       viewBox="0 0 100 32"
       preserveAspectRatio="none"
-      className="mt-auto h-10 w-full"
+      className={cn('mt-auto h-10 w-full', className)}
     >
       <polygon points={`0,32 ${pts} 100,32`} fill={series.fill} opacity={0.35} />
       <polyline

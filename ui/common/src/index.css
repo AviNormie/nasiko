@@ -48,6 +48,8 @@
   --warning: #b94e00;
   --destructive: #c2272d;
   --info: #196ea9;
+  /* Spend and tokens as a kind of problem (the Overview): money's blue, as on the system map; never a status color. */
+  --cost: #2f63d6;
   --logo: #bb8f06;
   /* Settings → Appearance's mode previews: a drawing of the app in each mode, the same in every theme and mode (a
      nested .dark can't do it: the dark token blocks apply only on <html>). Decorative; the tiles carry names. */
@@ -157,6 +159,7 @@
   --warning: #f49752;
   --destructive: #fa706a;
   --info: #6bbaf0;
+  --cost: #8fb0f5;
   --logo: #f7e19c;
   --showcase-bg:
     radial-gradient(
@@ -504,6 +507,7 @@
   --color-warning: var(--warning);
   --color-destructive: var(--destructive);
   --color-info: var(--info);
+  --color-cost: var(--cost);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
