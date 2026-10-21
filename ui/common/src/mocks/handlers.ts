@@ -488,7 +488,7 @@ const SETTINGS_DEFAULTS = {
   catalog_tabs: null,
 }
 // Budgets are Enterprise only (docs/requirements/budgets.md): their whole mock — the engine, the world, the golden
-// scenario and every route — lives in `ee/web/src/mocks/budgetMocks.ts` and registers through `editionHandlers`.
+// scenario and every route — lives in the Enterprise layer and registers through `editionHandlers`.
 // What stays here is only what the harness itself owns: the `?mock=` variant names and the `budgets` group key.
 /** Partial-live mode: the live user's id, learned from their `owner=` agent list (the mock has no session). */
 let liveOwner: string | null = null
@@ -1806,7 +1806,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     state: getWorkflows,
   }),
   // Budgets are Enterprise only (docs/requirements/budgets.md): both groups are empty here and EE fills them
-  // through `editionHandlers` (`ee/web/src/mocks/budgetMocks.ts`). The keys stay so `VITE_NASIKO_MOCK=budgets`
+  // through `editionHandlers`. The keys stay so `VITE_NASIKO_MOCK=budgets`
   // and the `?mock=budgets-*` variants keep working in both editions' harnesses.
   budgets: [],
   'budgets-fill': [],

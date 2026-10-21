@@ -45,8 +45,7 @@ describe('the owner’s ledger', () => {
     expect(within(p).getByText('telemetry', { exact: false })).toBeInTheDocument()
   })
 
-  // The budgets preview is Enterprise only, so the EE suite asserts it
-  // (`ee/web/src/features/budgets/LedgerBudgets.test.tsx`).
+  // The budgets preview is Enterprise only, so the EE suite asserts it.
   it('previews (context, memory, controls) are labelled, and controls come only from records', async () => {
     renderApp(ledgerUrl(C4))
     const t = await table()
@@ -231,8 +230,7 @@ describe('states the review asked for', () => {
     expect(screen.getByText(c.totals.turns(50))).toBeInTheDocument()
   })
 
-  // The budgets panel's own states (failure, absent route, none) are Enterprise only:
-  // `ee/web/src/features/budgets/LedgerBudgets.test.tsx`.
+  // The budgets panel's own states (failure, absent route, none) are Enterprise only; the EE suite asserts them.
 
   it('the trace page offers the ledger only on the viewer’s own chat (review: red team)', async () => {
     server.use(

@@ -120,7 +120,7 @@ export interface LayerTour {
 
 /**
  * Budgets are an **Enterprise** feature end to end (docs/requirements/budgets.md, user decision 2026-10-14): the
- * feature, its queries, its mocks and its pages live in `ee/web/src/features/budgets`, and an OSS build contains
+ * feature, its queries, its mocks and its pages live in the Enterprise layer, and an OSS build contains
  * none of it. What stays in the core is this contract — the shapes the core's own surfaces render when a layer
  * fills them, exactly as `HomeLevel` is the contract for EE's org units.
  *
