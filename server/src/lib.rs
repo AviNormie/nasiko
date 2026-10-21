@@ -31,6 +31,7 @@ pub mod observability;
 pub mod onboarding;
 pub mod openapi;
 pub mod orchestrator_policy;
+pub mod overview;
 pub mod pool;
 pub mod prompt_context;
 pub mod rate_limit;
@@ -311,6 +312,7 @@ where
         .merge(chat::router())
         .merge(context_selection::router())
         .merge(onboarding::router())
+        .merge(overview::router())
         .merge(coding_agent_telemetry::router())
         .merge(maf::router(maf_run_limiter, maf_read_limiter))
         .merge(secrets::router())
