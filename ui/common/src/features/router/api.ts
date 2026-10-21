@@ -59,7 +59,7 @@ const routerLimiter = createLimiter(ROUTING_READ_CONCURRENCY)
 
 const list = { staleTime: LIST_STALE_MS, refetchOnWindowFocus: true } as const
 
-export const configsQuery = {
+const configsQuery = {
   queryKey: routerKeys.configs,
   queryFn: ({ signal }: { signal: AbortSignal }) =>
     apiData<LlmConfig[]>('/api/llm-configs', { signal }),
