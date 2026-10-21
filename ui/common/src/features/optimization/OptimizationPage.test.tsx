@@ -170,7 +170,7 @@ describe('Your settings on /optimization#settings', () => {
     await form()
     const heading = screen.getByRole('heading', { level: 2, name: copy.hub.yourSettings })
     await waitFor(() => expect(heading).toHaveFocus())
-    const item = await screen.findByRole('link', { name: 'Optimise' }, T)
+    const item = await screen.findByRole('link', { name: 'Optimize' }, T)
     expect(item).toHaveAttribute('aria-current', 'page')
   })
 

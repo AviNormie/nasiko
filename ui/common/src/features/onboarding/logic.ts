@@ -2,7 +2,7 @@
 import { DRAFT_PREFIX } from '@/lib/draftKeys'
 import type { Onboarding, Persona } from './types'
 
-export const STEPS = ['welcome', 'role', 'model', 'agent', 'optimise', 'ready'] as const
+export const STEPS = ['welcome', 'role', 'model', 'agent', 'optimize', 'ready'] as const
 export type StepId = (typeof STEPS)[number]
 
 /** The page a persona opens first (spec §3). Data analysts get TokenOps: Weave is EE and dev only. */

@@ -304,7 +304,7 @@ describe('settings', () => {
     const rec = recordRequestBodies()
     renderApp(url(2, 'settings'))
     const section = await screen.findByRole('region', { name: 'Coding agent behavior' })
-    const ladder = within(section).getByRole('switch', { name: 'Minimal-code mode (Ponytail)' })
+    const ladder = within(section).getByRole('switch', { name: 'Minimal-code mode' })
     const review = within(section).getByRole('switch', { name: 'Self-review' })
     expect(review).toBeDisabled()
 
@@ -319,13 +319,13 @@ describe('settings', () => {
     expect(put?.body).toMatchObject({ name: 'CODING_AGENT_SELF_REVIEW', value: 'false' })
   })
 
-  it('marks every optimisation switch as beta, with the same caveat in each place', async () => {
+  it('marks every optimization switch as beta, with the same caveat in each place', async () => {
     // These change what a model receives and what we claim they saved. Someone deciding whether to
     // flip one deserves to know the behaviour is young — and that it is reversible. Worded once so
     // three sections cannot drift into three different degrees of caution.
     renderApp(url(1, 'settings'))
     const features = await screen.findByRole('region', { name: 'Features' })
-    const tokens = screen.getByRole('region', { name: 'Token optimization (Caveman)' })
+    const tokens = screen.getByRole('region', { name: 'Token optimization' })
     for (const section of [features, tokens]) {
       const badge = within(section).getByLabelText(/^Beta\./)
       expect(badge).toHaveTextContent('Beta')
@@ -333,11 +333,11 @@ describe('settings', () => {
     }
   })
 
-  it('feature switches save at once; coding behaviour shows only for a code-work card', async () => {
+  it('feature switches save at once; coding behavior shows only for a code-work card', async () => {
     const rec = recordRequestBodies()
     renderApp(url(1, 'settings'))
     const features = await screen.findByRole('region', { name: 'Features' })
-    expect(screen.getByRole('region', { name: 'Token optimization (Caveman)' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Token optimization' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Coding agent behavior' })).toBeNull()
     const prompt = within(features).getByRole('switch', { name: 'Prompt comments' })
     expect(prompt).not.toBeChecked()
@@ -353,7 +353,7 @@ describe('settings', () => {
   it('self-review is a child of minimal-code mode: off and locked until its parent is on', async () => {
     renderApp(url(2, 'settings'))
     const section = await screen.findByRole('region', { name: 'Coding agent behavior' })
-    const minimal = within(section).getByRole('switch', { name: 'Minimal-code mode (Ponytail)' })
+    const minimal = within(section).getByRole('switch', { name: 'Minimal-code mode' })
     const review = within(section).getByRole('switch', { name: 'Self-review' })
     expect(minimal).not.toBeChecked()
     expect(review).not.toBeChecked()

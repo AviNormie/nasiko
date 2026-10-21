@@ -33,7 +33,7 @@ export const copy = {
     flows: 'Flows',
     tokenops: 'TokenOps',
     monitor: 'Monitor',
-    optimise: 'Optimise',
+    optimise: 'Optimize',
     harnesses: 'Harnesses',
     settings: 'Settings',
   },

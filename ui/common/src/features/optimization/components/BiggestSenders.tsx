@@ -1,7 +1,7 @@
 /**
  * Biggest senders (plans/feat-optimization-page.md R1C, R7A, R7C; eng C4, C5): the requests that carried the most
  * history in the window, or in the chart bar you picked (its chip names the interval and clears it). Each row is the
- * chat, its agent and what that message carried: ~without → ~sent, plus "Token optimization (Caveman) off" for an agent
+ * chat, its agent and what that message carried: ~without → ~sent, plus "Token optimization off" for an agent
  * with it off. Your own chats open the trace at the request (`?trace=`, `?span=` when the server sends it); another user's chat
  * is "Another user's chat" with the agent and counts, no title and no link (C4). Loads and fails on its own (R2C).
  */

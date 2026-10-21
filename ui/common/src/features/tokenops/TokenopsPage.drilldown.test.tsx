@@ -49,7 +49,7 @@ describe('a day in the URL', () => {
     // The day panel follows the chart it drills into.
     expect(spend.compareDocumentPosition(day) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^Spend over time/, expanded: false })).toBeNull()
-    for (const heading of ['Who is driving cost', 'This month', 'Token optimisation savings'])
+    for (const heading of ['Who is driving cost', 'This month', 'Token optimization savings'])
       expect(await screen.findByRole('heading', { name: new RegExp(`^${heading}`) })).toBeVisible()
   })
 })

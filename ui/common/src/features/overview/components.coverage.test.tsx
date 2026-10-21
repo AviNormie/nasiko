@@ -348,7 +348,7 @@ describe('Spend chart', () => {
     expect(screen.queryByRole('figure')).toBeNull()
   })
 
-  it('keys each driver to its colour, and the Table view lists the stacked days by keyboard', async () => {
+  it('keys each driver to its color, and the Table view lists the stacked days by keyboard', async () => {
     renderInRouter(<Spend now={Date.parse('2026-09-30T12:00:00Z')} spend={stacked()} />)
     const fig = await screen.findByRole('figure')
     expect(fig).toHaveAccessibleName(/\$120\.00 in all, peaking on 09-29 at \$100\.00/)

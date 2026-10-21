@@ -129,7 +129,7 @@ const SKILLS: Record<string, [string, string, string][]> = {
     ['smoke', 'Run a smoke test', 'Run the smoke suite on staging'],
   ],
   'legal-reviewer': [['review', 'Review a contract', 'Flag risky clauses in this NDA']],
-  'growth-analyst': [['funnel', 'Analyse a funnel', 'Where do signups drop off this month?']],
+  'growth-analyst': [['funnel', 'Analyze a funnel', 'Where do signups drop off this month?']],
   'legacy-migrator': [['plan', 'Plan a migration', 'Plan moving the cron jobs to the queue']],
   'forecast-bot': [['forecast', 'Forecast a metric', 'Forecast next month’s support volume']],
   'kb-curator': [['gap', 'Find gaps', 'Which help articles are out of date?']],

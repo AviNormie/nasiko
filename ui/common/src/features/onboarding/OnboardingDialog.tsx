@@ -197,7 +197,7 @@ export function OnboardingDialog({
             {step === 'agent' ? (
               <AgentStep started={agent} onStarted={setAgent} onLeave={onClose} />
             ) : null}
-            {step === 'optimise' ? (
+            {step === 'optimize' ? (
               <OptimiseStep
                 onOpenAgents={() => {
                   onClose()
@@ -255,7 +255,7 @@ export function OnboardingDialog({
             ) : null}
             {/* Informational, so there is nothing to complete: the opt-out is worded as a
                 decision rather than as skipping an unfinished task. */}
-            {step === 'optimise' ? (
+            {step === 'optimize' ? (
               <Button type="button" variant="outline" onClick={next}>
                 {copy.optimise.skip}
               </Button>

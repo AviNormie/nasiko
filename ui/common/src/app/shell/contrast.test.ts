@@ -41,7 +41,7 @@ function toLinearRgb(value: string, t: Record<string, string>): [number, number,
     return [lin(((n >> 16) & 255) / 255), lin(((n >> 8) & 255) / 255), lin((n & 255) / 255)]
   }
   const ok = /^oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)$/.exec(value)
-  if (!ok) throw new Error(`unsupported colour: ${value}`)
+  if (!ok) throw new Error(`unsupported color: ${value}`)
   const [L, C, H] = [Number(ok[1]), Number(ok[2]), (Number(ok[3]) * Math.PI) / 180]
   const a = C * Math.cos(H)
   const b = C * Math.sin(H)

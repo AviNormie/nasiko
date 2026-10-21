@@ -139,7 +139,7 @@ describe('first-run guide', () => {
     expect(await screen.findByText('Building')).toBeInTheDocument()
   })
 
-  it('teaches the optimisation switches and says where each one lives', async () => {
+  it('teaches the optimization switches and says where each one lives', async () => {
     // The only place in the product that tells a new user these exist: they are one tab deep on an
     // agent and every one is off by default, so a feature nobody discovers may as well not ship.
     firstTime()
@@ -155,11 +155,7 @@ describe('first-run guide', () => {
     const step = await screen.findByRole('heading', { name: 'Cut what your agents spend' })
     expect(step).toBeInTheDocument()
     // Each switch is named for what it trims, with the path to find it.
-    for (const name of [
-      'Smaller prompts (Caveman)',
-      'Shorter chat history',
-      'Less code written (Ponytail)',
-    ]) {
+    for (const name of ['Smaller prompts', 'Shorter chat history', 'Less code written']) {
       expect(screen.getByText(name)).toBeInTheDocument()
     }
     expect(screen.getByText(/Agent → Settings → Token optimization/)).toBeInTheDocument()
