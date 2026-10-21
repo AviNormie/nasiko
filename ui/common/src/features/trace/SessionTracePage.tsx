@@ -8,22 +8,17 @@
  * failing, then most tokens, then slowest. `?span=` is the HEX span id.
  */
 import { useQueryClient } from '@tanstack/react-query'
-import { Link, useRouter } from '@tanstack/react-router'
-import { Link2, ListTree, Table2, Workflow } from 'lucide-react'
+import { Link, useNavigate, useRouter } from '@tanstack/react-router'
+import { Link2, ListTree, Rows3, Table2, Workflow } from 'lucide-react'
 import { useDeferredValue, useMemo, useState } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
+import { PrevNext } from '@/components/shared/prev-next'
 import { EmptyState } from '@/components/shared/state-card'
 import { SearchInput } from '@/components/shared/search-input'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/toggle'
+import { useChatProbe } from '@/features/chat/api'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
 import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import {
@@ -35,6 +30,7 @@ import {
 } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { pickShared, withoutWindow } from '@/app/shell/context'
+import { TopBar } from '@/app/shell/TopBar'
 import {
   narrativeText,
   traceNarrative,
@@ -59,10 +55,12 @@ import { IN_PROGRESS_MS } from '@/features/observability/tuning'
 import type { TraceDetail, TraceEntry } from '@/features/observability/types'
 import { AgentLink } from '@/features/agents/components/AgentLink'
 import { useAgentsDirectory } from '@/features/agents/api'
+import { isHarness } from '@/features/agents/status'
 import { requestSpanOf } from '@/features/optimization/logic'
 import { sessionKeys, useSessionDetail } from '@/features/sessions/api'
 import type { SessionsSearch, TraceSearch } from '@/features/sessions/search'
 import { fmtLatency, fmtMoney, fmtShortDay, fmtTokens, fmtUtcDayTime } from '@/lib/format'
+import { useSiblings } from '@/lib/siblings'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import { useAgentCallTargets, useKnownFailing, useTraceDetail, useWasteCosts } from './api'
 import { SessionOptimisation } from './SessionOptimisation'
@@ -70,6 +68,41 @@ import { SpanPanel, type SpanTab } from './SpanPanel'
 import { Legend, SpanTable, Waterfall } from './Waterfall'
 import { useCopy } from '@/lib/useCopy'
 import { useFrozenNow } from '@/lib/useReturnTick'
+
+/**
+ * Previous/Next through the Sessions rows this trace was opened from (lib/siblings.ts). The list's window and filters
+ * go along; the trace and span are this session's own, so they don't. Replaced: Back still returns to the list.
+ */
+function SessionSiblings({
+  sessionId,
+  back,
+}: {
+  sessionId: string
+  back: Partial<SessionsSearch>
+}) {
+  const navigate = useNavigate()
+  const around = useSiblings(sessionId)
+  if (!around) return null
+  const go = (id: string | undefined) => {
+    if (id)
+      void navigate({
+        to: '/sessions/$sessionId',
+        params: { sessionId: id },
+        search: back,
+        state: { siblings: around.siblings },
+        replace: true,
+      })
+  }
+  return (
+    <PrevNext
+      noun="session"
+      index={around.index}
+      count={around.count}
+      onPrev={() => go(around.prev)}
+      onNext={() => go(around.next)}
+    />
+  )
+}
 
 type SetTraceSearch = (patch: Partial<TraceSearch>, opts?: { replace?: boolean }) => void
 
@@ -275,6 +308,10 @@ export function SessionTracePage({
   const agentLabel = agentRaw
     ? (agents.byName.get(agentRaw)?.display_name ?? agentRaw)
     : copy.unknownAgent
+  const agentRow = agentRaw ? agents.byName.get(agentRaw) : undefined
+  const agentIsHarness = !!agentRow && isHarness(agentRow)
+  // The ledger reads the chat's messages, which only its owner can: chat's own probe (shared with Open chat) says so.
+  const ownChat = useChatProbe(sessionId, agentIsHarness).state === 'yours'
   const sessionCost = session.data?.cost_summary.total.cost
   const numTraces = session.data?.num_traces ?? traces.length
   const firstStart = traces[0]?.root_span.start_time
@@ -283,7 +320,11 @@ export function SessionTracePage({
   if (session.isError) {
     return (
       <div className="flex flex-col gap-4">
-        <Crumbs back={back} day={search.day} title="Trace" />
+        {/* The arrows stay, so a session that fails to load isn't a dead end. */}
+        <TopBar
+          {...crumbs(back, search.day, 'Trace')}
+          stepper={<SessionSiblings sessionId={sessionId} back={back} />}
+        />
         <ErrorState
           error={session.error}
           onRetry={() => void session.refetch()}
@@ -297,10 +338,11 @@ export function SessionTracePage({
 
   return (
     <div className="flex flex-col gap-4">
+      <TopBar
+        {...crumbs(back, search.day, session.data?.title ?? sessionId)}
+        stepper={<SessionSiblings sessionId={sessionId} back={back} />}
+      />
       <PageHeader
-        breadcrumb={
-          <Crumbs back={back} day={search.day} title={session.data?.title ?? sessionId} />
-        }
         title={
           <span className="inline-block">
             {session.data ? (
@@ -338,6 +380,17 @@ export function SessionTracePage({
         }
         actions={
           <>
+            {agentIsHarness && ownChat ? (
+              <Button asChild variant="outline" size="sm" className="pointer-coarse:min-h-11">
+                <Link
+                  to="/sessions/$sessionId"
+                  params={{ sessionId }}
+                  search={{ ...search, view: 'ledger' }}
+                >
+                  <Rows3 className="size-3.5" aria-hidden /> {copy.openLedger}
+                </Link>
+              </Button>
+            ) : null}
             <OpenChatLink sessionId={sessionId} />
             {/* The selected trace's flow: a flow's id is its trace id (plans/feat-flows.md F19). */}
             {traceId ? <OpenFlowLink flowId={traceId} /> : null}
@@ -417,6 +470,7 @@ export function SessionTracePage({
 
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
                 <section
+                  data-tour="session-spans"
                   aria-labelledby="spans-title"
                   className="flex min-w-0 flex-col gap-2 rounded-lg border border-border p-3"
                 >
@@ -463,7 +517,7 @@ export function SessionTracePage({
                 </section>
                 {selected && traceId && !narrow ? (
                   // Sticky: on a long trace the panel (and its ↑/↓) stays in view while the tree scrolls.
-                  <div className="sticky top-4 max-h-[calc(100dvh-2rem)] self-start overflow-y-auto">
+                  <div className="sticky top-[calc(var(--topbar-h)+1rem)] max-h-[calc(100dvh-2rem-var(--topbar-h))] self-start overflow-y-auto">
                     <SpanPanel
                       traceId={traceId}
                       span={selected}
@@ -510,50 +564,25 @@ export function SessionTracePage({
   )
 }
 
-function Crumbs({
-  back,
-  day,
-  title,
-}: {
-  back: Partial<SessionsSearch>
-  day?: string
-  title: string
-}) {
-  return (
-    <Breadcrumb aria-label="Breadcrumb">
-      <BreadcrumbList className="gap-1 sm:gap-1">
-        <BreadcrumbItem>
-          <BreadcrumbLink asChild className="underline-offset-2 hover:underline">
-            <Link
-              to="/sessions"
-              search={{ ...back, day: undefined, sort: undefined, lane: undefined }}
-            >
-              Sessions
-            </Link>
-          </BreadcrumbLink>
-        </BreadcrumbItem>
-        {day ? (
-          <>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbLink asChild className="underline-offset-2 hover:underline">
-                <Link to="/sessions" search={back}>
-                  {fmtShortDay(day)}
-                </Link>
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-          </>
-        ) : null}
-        <BreadcrumbSeparator />
-        <BreadcrumbItem className="min-w-0">
-          {/* Plain text, not shadcn's BreadcrumbPage (role="link" on a non-link). */}
-          <span aria-current="page" className="truncate text-foreground">
-            {title}
-          </span>
-        </BreadcrumbItem>
-      </BreadcrumbList>
-    </Breadcrumb>
-  )
+/** Sessions (the list as it was, its window and filters) › the day, when the list was one › this session. */
+function crumbs(back: Partial<SessionsSearch>, day: string | undefined, title: string) {
+  return {
+    root: (
+      <Link to="/sessions" search={{ ...back, day: undefined, sort: undefined, lane: undefined }}>
+        Sessions
+      </Link>
+    ),
+    trail: [
+      ...(day
+        ? [
+            <Link key="day" to="/sessions" search={back}>
+              {fmtShortDay(day)}
+            </Link>,
+          ]
+        : []),
+      title,
+    ],
+  }
 }
 
 function Narrative({
@@ -598,7 +627,11 @@ function Narrative({
       <span key={i}>{c.text}</span>
     )
   return (
-    <section aria-label="What happened" className="flex max-w-[70ch] flex-col gap-2">
+    <section
+      data-tour="session-narrative"
+      aria-label="What happened"
+      className="flex max-w-[70ch] flex-col gap-2"
+    >
       <p className="text-lead leading-7" aria-describedby="narrative-plain">
         {narrative.sentences.map((s) => (
           // A sentence's text is its identity: each comes from a different template.

@@ -1,5 +1,5 @@
 import { skipToken, useQuery } from '@tanstack/react-query'
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { createFileRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
 import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
@@ -7,6 +7,7 @@ import { BuildToasts } from '@/features/deploy/components/BuildToasts'
 import { copy as deployCopy } from '@/features/deploy/copy'
 import { followedCount, subscribeFollower } from '@/features/deploy/follower'
 import { useGuideHiddenNav } from '@/features/onboarding/api'
+import { TourHost } from '@/features/tour/TourHost'
 import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { isSignedOutLocally } from '@/lib/session'
@@ -47,13 +48,25 @@ function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
   const guideHidden = useGuideHiddenNav()
   // A layer's own hidden items (EE: Access control for members).
-  const navHidden = useSlots().navHidden
+  const slots = useSlots()
+  const { navHidden, shellEnd: ShellEnd, shellSplit } = slots
   const layer = useQuery({ queryKey: ['nav-hidden'], queryFn: skipToken, ...navHidden?.query })
   const layerHidden = navHidden ? navHidden.hidden(layer.data) : NONE
+  const path = useRouterState({ select: (s) => s.location.pathname })
+  // Budgets are Enterprise only: an OSS build has no item to hide, and EE hides its own while the probe is out.
+  const budgetsHidden = slots.budgets.useNavHidden()
   return (
     <AppShell
-      end={<BuildToasts />}
-      hidden={[...guideHidden, ...layerHidden]}
+      split={shellSplit}
+      end={
+        <>
+          <BuildToasts />
+          <TourHost />
+          {/* A layer's chrome beside every page (EE: the Weave dock). */}
+          {ShellEnd ? <ShellEnd path={path} /> : null}
+        </>
+      }
+      hidden={[...guideHidden, ...layerHidden, ...budgetsHidden]}
       badges={
         building
           ? { '/agents': { count: building, label: deployCopy.toast.agentsBadge(building) } }

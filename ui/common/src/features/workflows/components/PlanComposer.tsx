@@ -74,7 +74,7 @@ export function PlanComposer({
     else onGenerate(desc)
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div data-tour="wf-plan" className="flex flex-col gap-3">
       <InputGroup>
         <InputGroupTextarea
           id="wf-desc"

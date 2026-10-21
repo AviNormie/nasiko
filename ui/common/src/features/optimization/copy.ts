@@ -184,6 +184,12 @@ export const copy = {
       const extra = [cost ? `≈ ${cost}` : null, pct !== null ? `${pct}%` : null].filter(Boolean)
       return `${superuser ? 'All agents' : 'Agents you can access'} sent ~${sent} tokens where they would have sent ~${without}: ~${saved} fewer${extra.length ? ` (${extra.join(', ')})` : ''}.`
     },
+    /** The lead's four figures (redesign 2026-10-13); the baseline label is `preview.without`. */
+    figures: {
+      notBilled: 'Input not billed',
+      fewer: (pct: number) => `${pct}% fewer tokens`,
+      reported: (pct: number) => `${pct}% of requests reported`,
+    },
     /** C2. */
     basedOn: (reports: number, eligible: number, pct: number) =>
       `Based on ${reports.toLocaleString('en-US')} of ${eligible.toLocaleString('en-US')} requests (${pct}%).`,

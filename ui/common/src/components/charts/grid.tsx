@@ -1,5 +1,3 @@
-'use client'
-
 import { GridColumns, GridRows } from '@visx/grid'
 import { motion } from 'motion/react'
 import { useId } from 'react'

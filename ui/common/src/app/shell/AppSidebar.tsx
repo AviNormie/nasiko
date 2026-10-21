@@ -58,6 +58,7 @@ import { meQuery } from '@/lib/api/auth'
 import { ApiError } from '@/lib/api/client'
 import { SIDEBAR_HEALTH_INTERVAL_MS, useHealth } from '@/lib/api/health'
 import { env } from '@/lib/env'
+import { IS_MAC } from '@/lib/keys'
 import { cn } from '@/lib/utils'
 import { pickShared, withoutWindow } from './context'
 import { copy } from './copy'
@@ -143,7 +144,7 @@ export function AppSidebar({
             <>
               <SidebarMenuItem className="min-w-0 flex-1">
                 <SidebarMenuButton asChild tooltip={copy.brandTooltip} className={cn(ROW, 'h-10')}>
-                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Overview item
+                  {/* A plain link: TanStack's Link would mark it aria-current on /, doubling the nav's Home item
                       (§3 rule 4: one current item). */}
                   <a
                     href="/"
@@ -322,11 +323,12 @@ function NavGroups({
                 : undefined,
         )}
       >
-        {/* A group with no items (Lab, in a production build) has no header either. */}
-        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g) => (
-          <SidebarGroup key={g.id} className={cn(GROUP, 'py-0')}>
+        {/* A group with no items (Lab, in a production build) has no header either, and the first group drawn has none:
+            while the onboarding guide hides Home, Fleet opens the nav without a header or a leading hairline. */}
+        {NAV_GROUPS.filter((g) => items.some((n) => n.group === g.id)).map((g, i) => (
+          <SidebarGroup key={g.id} data-tour={`nav-${g.id}`} className={cn(GROUP, 'py-0')}>
             {/* In the rail a header becomes a short hairline: the icons stay one even column, the groups still apart. */}
-            {g.label ? (
+            {g.label && i > 0 ? (
               <>
                 <SidebarGroupLabel className="mt-5 mb-1 h-4 px-2 text-2xs font-medium tracking-[0.04em] text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
                   {g.label}
@@ -359,7 +361,7 @@ function NavGroups({
                                   : pickShared(prev)
                             : undefined
                         }
-                        // `/` is a prefix of every path: Overview is active only on `/` itself.
+                        // `/` is a prefix of every path: Home is active only on `/` itself.
                         activeOptions={{ includeSearch: false, exact: n.to === '/' }}
                         // The Link only knows its own path; Agents is current on Deploy and Builds too (`also`).
                         aria-current={active?.to === n.to ? 'page' : undefined}
@@ -649,8 +651,6 @@ function ThemeSubmenu() {
     </DropdownMenuSub>
   )
 }
-
-const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 /** Top right of the header; in the rail, under the mark. Phones open the sheet from the top bar instead. */
 /** Top right of the open sidebar's header. Phones open the sheet from the top bar instead. */

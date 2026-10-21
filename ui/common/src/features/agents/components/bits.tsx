@@ -3,7 +3,7 @@
  * components/shared/copy-button), error note, first-run steps, monogram, "Learn more" link,
  * and `Section` (the shared `Panel`, named by its heading).
  */
-import { Link } from '@tanstack/react-router'
+import { Link, type HistoryState } from '@tanstack/react-router'
 import { ChevronRight, ExternalLink, MessagesSquare, RotateCw } from 'lucide-react'
 import { useId, useState, type ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopyButton } from '@/components/shared/copy-button'
 import { Panel } from '@/components/shared/panel'
+import { TopBar } from '@/app/shell/TopBar'
+import { PageHeader } from '@/components/shared/page-header'
 import { SectionNav } from '@/components/shared/section-nav'
 import { cn } from '@/lib/utils'
 import { firstRunCommands } from '../format'
@@ -207,16 +209,20 @@ export function AgentLinkTo({
   id,
   children,
   className,
+  state,
 }: {
   id: string
   children: ReactNode
   className?: string
+  /** A list's `useSiblingState`, for Previous/Next on the agent page. */
+  state?: () => HistoryState
 }) {
   return (
     <Link
       to="/agents/$agentId"
       params={{ agentId: id }}
       search={{}}
+      state={state}
       className={cn('underline-offset-4 hover:underline', className)}
     >
       {children}
@@ -256,7 +262,30 @@ const SECTIONS = [
   { to: '/builds', label: copy.sections.builds },
 ] as const
 
-/** All agents · Your agents · Builds (the Builds page uses it too); "Deploy an agent" stays the header's action. */
+/**
+ * The Agents module's header, the same on All agents, Your agents and Builds: "Deploy an agent" in the top bar, the
+ * module's title, a line about the open section, then the sections. A page whose empty state already offers Deploy
+ * passes no `action`, so the button never shows twice.
+ */
+export function AgentsHeader({
+  current,
+  description,
+  action,
+}: {
+  current: (typeof SECTIONS)[number]['to']
+  description?: ReactNode
+  action: ReactNode
+}) {
+  return (
+    <>
+      <TopBar actions={action} />
+      <PageHeader title={copy.catalogTitle} description={description} />
+      <AgentsNav current={current} />
+    </>
+  )
+}
+
+/** All agents · Your agents · Builds (the Builds page uses it too). */
 export function AgentsNav({ current }: { current: (typeof SECTIONS)[number]['to'] }) {
   return <SectionNav label={copy.sections.label} sections={SECTIONS} current={current} />
 }

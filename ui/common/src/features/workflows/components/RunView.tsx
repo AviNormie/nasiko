@@ -1,6 +1,8 @@
 /** One run of the workflow (plans/feat-workflows.md §6), live while it moves (a paused run included). */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { ChevronLeft, RotateCw } from 'lucide-react'
+import { TopBar } from '@/app/shell/TopBar'
 import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
 import { Button } from '@/components/ui/button'
@@ -98,6 +100,21 @@ export function RunView({ wf, exec, onBack }: { wf: Workflow; exec: string; onBa
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 [&>*]:min-w-0">
       <title>{`${title} · Nasiko`}</title>
+      <TopBar
+        trail={[
+          <Link
+            key="workflow"
+            to="/workflows/$workflowId"
+            params={{ workflowId: wf.id }}
+            search={{}}
+            // Keeps the list this workflow was opened from (lib/siblings.ts).
+            state={(s) => ({ siblings: s.siblings })}
+          >
+            {wf.name}
+          </Link>,
+          copy.execution,
+        ]}
+      />
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon-sm" aria-label={copy.backToWorkflow} onClick={onBack}>
           <ChevronLeft aria-hidden />

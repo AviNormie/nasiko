@@ -1,5 +1,3 @@
-'use client'
-
 import { animate, useMotionValue, useReducedMotion, useTransform } from 'motion/react'
 import { useEffect } from 'react'
 import {

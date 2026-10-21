@@ -42,7 +42,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'nav-fleet',
       side: 'right',
       title: 'Your fleet',
-      body: 'Agents are what you deploy and run. Workflows chain several agents into one repeatable job. Coding harnesses are the coding tools connected to it.',
+      body: 'Agents are what you deploy and run. Workflows chain several agents into one repeatable job. Harnesses are the coding tools connected to it.',
     },
     {
       target: 'nav-observe',
@@ -54,7 +54,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'nav-tokenops',
       side: 'right',
       title: 'Spend',
-      body: 'Monitor shows what it cost. Optimize shows how to spend less.',
+      body: 'Monitor shows what it cost. Optimise shows how to spend less.',
     },
     {
       target: 'nav-connect',
@@ -83,7 +83,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
     {
       target: 'overview-range',
       title: 'Pick the window',
-      body: 'Switch between 7, 30 and 90 days. The headline, Spend and Coding harnesses follow it.',
+      body: 'Switch between 7, 30 and 90 days. The headline, Spend and Harnesses follow it.',
     },
     {
       target: 'overview-summary',
@@ -478,7 +478,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
 
   harnesses: [
     {
-      title: 'Coding harnesses',
+      title: 'Harnesses',
       body: 'Your coding harnesses (like Claude Code or Codex): sessions, models and estimated cost.',
     },
     {
@@ -699,7 +699,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'appearance-theme',
       side: 'top',
       title: 'Theme',
-      body: 'The color theme. The account menu has a quick switch too.',
+      body: 'The colour theme. The account menu has a quick switch too.',
     },
     {
       target: 'password-form',

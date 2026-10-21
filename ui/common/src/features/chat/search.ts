@@ -25,6 +25,8 @@ declare module '@tanstack/react-router' {
   interface HistoryState {
     /** The Waiting row's request, carried in history state so the opened chat focuses its card (v1c M4). */
     waitingRequest?: string
+    /** How a Previous/Next step opened this chat: a click focuses the composer, J/K leaves focus alone (keys go on). */
+    chatFocus?: 'composer' | 'none'
   }
 }
 

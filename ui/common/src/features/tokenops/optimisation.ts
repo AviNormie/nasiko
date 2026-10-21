@@ -97,7 +97,10 @@ export function summarizeOptimisation(s: SavingsData) {
     sessions: sessionRows(s),
     categories: categoryRows(s),
     tokensBefore: s.total.baseline_tokens,
+    tokensActual: s.total.actual_tokens,
     tokensSaved: s.total.saved_tokens,
+    costBefore: s.total.baseline_cost_usd,
+    costActual: s.total.actual_cost_usd,
     /** Server-computed. Null when nothing was billed in the window. */
     savedPct: s.total.token_reduction_pct,
     costSaved: s.total.saved_cost_usd,

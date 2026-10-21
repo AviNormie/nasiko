@@ -7,9 +7,9 @@ import type { Severity, SourceId } from './needs'
 const pct = (v: number) => `${Math.round(v)}%`
 
 export const copy = {
-  title: 'Overview',
+  title: 'Home',
   loading: 'Loading',
-  loadingPage: 'Loading the Overview',
+  loadingPage: 'Loading Home',
   meFailed: "Couldn't reach OpenRuntime to load your account.",
   checkStatus: 'Check server status',
   retry: 'Retry',
@@ -36,7 +36,7 @@ export const copy = {
     button: 'Setup guide',
     title: 'Set up OpenRuntime',
     intro:
-      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on the Overview once it runs.',
+      'Deploy an agent from the app, or use the CLI. Cost, health and sessions show up on Home once it runs.',
   },
   // Overview's token-optimisation band. One figure, one next step, then hand off to TokenOps.
   savings: {
@@ -59,6 +59,11 @@ export const copy = {
     spend: 'Spend',
     runs: 'Agent runs',
     perDay: (n: string) => `${n} per day`,
+    perRun: (cost: string) => `${cost} per run`,
+    tokens: 'Tokens',
+    tokensInput: (pct: string) => `input ${pct}`,
+    tokensOutput: (pct: string) => `output ${pct}`,
+    running: (n: number, total: number) => `${n} of ${total} running`,
     agents: 'Agents running',
     of: (total: number) => `/ ${total}`,
     agentParts: {
@@ -71,8 +76,20 @@ export const copy = {
     noAgents: 'No agents yet',
     harnesses: 'Harnesses used',
     connected: 'connected',
+    est: 'est.',
+    connectedCount: (n: number) => `${n} connected`,
     devs: (n: number) => `${n} developer${n === 1 ? '' : 's'}`,
     yourUsage: 'your usage',
+  },
+  saved: {
+    title: 'Saved tokens by agent',
+    link: 'TokenOps',
+    what: 'savings by agent',
+    subtitle: (basis: string | null) =>
+      basis ? `Largest first · basis: ${basis}` : 'Largest first',
+    capped: 'Agents past the first 200 may have savings too',
+    none: 'No savings reported in this range.',
+    other: (n: number) => `Other (${n})`,
   },
   chats: {
     title: 'Recent chats',
@@ -122,15 +139,41 @@ export const copy = {
     openAgentLabel: (name: string) => `Open ${name}`,
     budgets: 'Budgets',
     budgetsLabel: (name: string) => `Budgets for ${name}`,
+    // An agent budget's row opens the agent's own Budget section (B5).
+    agentBudget: 'Budget',
+    agentBudgetLabel: (name: string) => `Budget for ${name}`,
     anAgent: 'An agent',
     yourBudget: 'Your monthly',
     budget: (label: string, state: 'warning' | 'exceeded', crossed: number | null) =>
       state === 'exceeded'
         ? `${label} budget is over its limit`
         : `${label} budget is at ${crossed ?? 0}%`,
-    budgetDetail: 'This month, routed calls',
-    sessions: (failed: number, checked: number) =>
-      `${failed} of the ${checked} latest sessions checked failed`,
+    // plans/feat-budget-burn.md F8: how much over and whether calls stop; when it reaches its limit ("runs out" only
+    // where calls stop, design 1C).
+    budgetStopped: (label: string) => `${label} budget ran out: calls are stopped`,
+    budgetOverBy: (amount: string, until: string | null) =>
+      until ? `Over by ${amount} · calls stopped until ${until}` : `Over by ${amount} this period`,
+    budgetRunsOut: (label: string, day: string, stops: boolean) =>
+      stops
+        ? `${label} budget runs out around ${day}`
+        : `${label} budget exceeds its limit around ${day}`,
+    budgetProjected: 'Projected from the last 7 days',
+    budgetDetailFor: (
+      period: 'month' | 'quarter' | 'session',
+      covers: 'routed_calls' | 'all_priced',
+    ) =>
+      `${period === 'session' ? 'This session' : `This ${period}`}, ${covers === 'all_priced' ? 'all priced spend' : 'routed calls'}`,
+    aBudget: 'A budget',
+    fleetBudget: 'The fleet',
+    budgetStoppedUntil: (until: string | null) =>
+      until ? `Calls stopped until ${until}` : 'Calls stopped',
+    // An exact count: `session/list?status=failed` counts every match in the
+    // window in SQL. It used to read "N of the M latest sessions checked
+    // failed", because the status of each row was sampled client-side.
+    sessions: (failed: number) =>
+      failed === 1
+        ? '1 session failed in the last 7 days'
+        : `${failed} sessions failed in the last 7 days`,
     seeSessions: 'See sessions',
     unknownAgent: 'Unknown agent',
   },
@@ -161,6 +204,7 @@ export const copy = {
     what: 'recent sessions',
     failed: 'Failed',
     ok: 'Succeeded',
+    running: 'Running',
     unchecked: 'Not checked',
     none: 'No sessions in the last 7 days.',
     traceStore: 'Sessions need the trace store.',

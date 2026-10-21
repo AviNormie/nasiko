@@ -241,6 +241,9 @@ export function buildAgentsState(seed: Seed, hs: HarnessSeed, now: number): Agen
     }
   })
   for (const h of hs.agents) {
+    // Registered no later than its first recorded session (the seed spans 30 days); never "created today" with older use.
+    const first = Math.min(...hs.sessions.filter((x) => x.agent_id === h.id).map((x) => x.ts))
+    const created = Number.isFinite(first) ? iso(Math.min(first, Date.parse(hs.anchor))) : hs.anchor
     agents.push({
       id: h.id,
       name: h.name,
@@ -252,7 +255,7 @@ export function buildAgentsState(seed: Seed, hs: HarnessSeed, now: number): Agen
       tags: ['local', 'coding-agent'],
       skills: [],
       capabilities: {},
-      created_at: hs.anchor,
+      created_at: created,
       updated_at: hs.anchor,
       image: null,
       icon_url: null,
@@ -302,12 +305,12 @@ const capabilities = (a: MockAgent) => ({
 })
 
 /** A full `Agent` row; the generated type predates `compress_enabled` (catalog/models.rs at 05f22246). */
-export function listRow(
-  a: MockAgent,
-  now: number,
-): S['Agent'] & { compress_enabled: boolean; minimal_code_enabled: boolean } {
+export function listRow(a: MockAgent, now: number): S['Agent'] & { compress_enabled: boolean } {
   const row = {
     id: a.id,
+    // `minimal_code_enabled` is part of the generated `Agent` now, so it belongs
+    // inside the `satisfies` check rather than being bolted on after it.
+    minimal_code_enabled: a.minimal_code_enabled ?? false,
     name: a.name,
     display_name: a.display_name,
     description: a.description,
@@ -331,12 +334,8 @@ export function listRow(
     icon_url: a.icon_url,
     documentation_url: a.documentation_url,
   } satisfies S['Agent']
-  // models.rs `Agent` serializes both columns on list rows and the PUT reply.
-  return {
-    ...row,
-    compress_enabled: a.compress,
-    minimal_code_enabled: a.minimal_code_enabled ?? false,
-  }
+  // models.rs `Agent` serializes this column on list rows and the PUT reply.
+  return { ...row, compress_enabled: a.compress }
 }
 
 /** `AgentDetailResponse`: camelCase except the renamed fields (catalog/routes.rs:616). Status NOT reconciled. */

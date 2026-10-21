@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Announcer } from '@/components/shared/announcer'
 import { PageHeader } from '@/components/shared/page-header'
 import { PanelError } from '@/components/shared/panel'
+import { Reveal, RevealItem } from '@/components/shared/reveal'
 import { TimeControl } from '@/components/shared/time-control'
 import { useAgentsDirectory, useOwnedAgents } from '@/features/agents/api'
 import { bucketLabel } from '@/features/tokenops/series'
@@ -39,15 +40,8 @@ import { Workspace } from './components/Workspace'
 import { Lead } from './components/Lead'
 import { NeedsAttention } from './components/NeedsAttention'
 import { copy } from './copy'
-import {
-  leadState,
-  parseSlice,
-  sliceLabel,
-  sliceOf,
-  trendRows,
-  weeklyPoints,
-  type BucketSize,
-} from './lead'
+import { leadState, sliceLabel, trendRows, weeklyPoints } from './lead'
+import { parseSlice, sliceOf, type BucketSize } from '@/lib/slice'
 import { OptimizationPage } from './OptimizationPage'
 import type { OptimizationSearch } from './search'
 
@@ -172,9 +166,12 @@ export function OptimizationHubPage() {
   return (
     // R6x: the page's one polite live region (shared with the LLM router).
     <Announcer>
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-page flex-col gap-6">
         {/* TokenOps' sticky bar: title, the window, and the jump to your settings (R1D, R7A). */}
-        <div className="sticky top-0 z-20 -mx-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
+        <div
+          data-tour="optimization-header"
+          className="sticky top-(--topbar-h) z-20 -mx-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur"
+        >
           <PageHeader
             title={copy.title}
             description={phone ? undefined : <SettingsLink />}
@@ -226,59 +223,81 @@ export function OptimizationHubPage() {
               onSelect={(iso, size) => setSearch({ slice: sliceOf(iso, size) })}
             />
             <NeedsAttention />
-            <ByAgent
-              result={byAgent.data}
-              pending={byAgent.isPending}
-              error={byAgent.error}
-              onRetry={() => void byAgent.refetch()}
-              period={period}
-              sort={search.sort}
-              all={search.all === true}
-              // R7B: sort and the expander replace history (TokenOps' table rule).
-              onSort={(sort) => setSearch({ sort }, { replace: true })}
-              onShowAll={(all) => setSearch({ all: all || undefined }, { replace: true })}
-              noAgents={noAgents}
-            />
-            {/* §11: what cuts tokens, where each is set and its state (B12). */}
-            <Mechanisms win={win} period={period} superuser={superuser} enabled={ready} />
-            <BiggestSenders
-              result={top.data}
-              pending={top.isPending}
-              error={top.error}
-              onRetry={() => void top.refetch()}
-              period={period}
-              // The chip names what was asked for: the bar clipped to the window (review: adversarial).
-              slice={clipped ? sliceLabel(clipped) : null}
-              onClear={() => setSearch({ slice: undefined }, { replace: true })}
-              nameOf={(id, raw) => {
-                const a = directory.byId.get(id)
-                return a ? a.display_name || a.name : raw
-              }}
-              noAgents={noAgents}
-            />
+            <Reveal className="flex flex-col gap-6">
+              <RevealItem>
+                <ByAgent
+                  result={byAgent.data}
+                  pending={byAgent.isPending}
+                  error={byAgent.error}
+                  onRetry={() => void byAgent.refetch()}
+                  period={period}
+                  sort={search.sort}
+                  all={search.all === true}
+                  // R7B: sort and the expander replace history (TokenOps' table rule).
+                  onSort={(sort) => setSearch({ sort }, { replace: true })}
+                  onShowAll={(all) => setSearch({ all: all || undefined }, { replace: true })}
+                  noAgents={noAgents}
+                />
+              </RevealItem>
+              {/* §11: what cuts tokens, where each is set and its state (B12). Full width, on By agent's edges. */}
+              <RevealItem>
+                <Mechanisms win={win} period={period} superuser={superuser} enabled={ready} />
+              </RevealItem>
+              <RevealItem>
+                <BiggestSenders
+                  result={top.data}
+                  pending={top.isPending}
+                  error={top.error}
+                  onRetry={() => void top.refetch()}
+                  period={period}
+                  // The chip names what was asked for: the bar clipped to the window (review: adversarial).
+                  slice={clipped ? sliceLabel(clipped) : null}
+                  onClear={() => setSearch({ slice: undefined }, { replace: true })}
+                  nameOf={(id, raw) => {
+                    const a = directory.byId.get(id)
+                    return a ? a.display_name || a.name : raw
+                  }}
+                  noAgents={noAgents}
+                />
+              </RevealItem>
+            </Reveal>
           </>
         )}
         <section
+          data-tour="optimization-settings"
           ref={settingsSection}
           id="settings"
           aria-labelledby="optimization-settings-h"
-          className="scroll-mt-24"
+          className="@container/settings flex scroll-mt-24 flex-col gap-3"
         >
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pb-3">
+          <header className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h2
               id="optimization-settings-h"
               ref={settingsHeading}
               tabIndex={-1}
               // The jump scrolls the heading itself, so the margin clears the sticky header here (review: design).
-              className="scroll-mt-24 text-sm font-semibold outline-none"
+              className="scroll-mt-24 text-base font-semibold tracking-tight outline-none"
             >
               {copy.hub.yourSettings}
             </h2>
-            <span className="text-xs text-muted-foreground">{copy.hub.yourSettingsNote}</span>
+            <span className="text-sm text-muted-foreground">{copy.hub.yourSettingsNote}</span>
+          </header>
+          {/* The form in the main column; a superuser's workspace settings beside it (members have none). */}
+          <div
+            className={
+              // Beside the form only when there is room for both (64rem of section): the form needs 640 px for its
+              // tiles in a row, so narrower it stacks with the workspace card under it.
+              superuser
+                ? 'grid items-start gap-6 @5xl/settings:grid-cols-[minmax(0,1fr)_20rem]'
+                : 'max-w-4xl'
+            }
+          >
+            <div className="min-w-0">
+              <OptimizationPage previewEnabled={settingsSeen || hash === 'settings'} />
+            </div>
+            <Workspace />
           </div>
-          <OptimizationPage previewEnabled={settingsSeen || hash === 'settings'} />
         </section>
-        <Workspace />
       </div>
     </Announcer>
   )

@@ -4,7 +4,8 @@ import type { BuildStatus } from './types'
 export const copy = {
   deploy: {
     title: 'Deploy an agent',
-    description: 'Upload your code and OpenRuntime builds and starts it.',
+    description:
+      'Bring your agent as a zip, a GitHub repo or a published image, and OpenRuntime gets it running.',
     drop: "Drop your agent's .zip here, or",
     choose: 'Choose file',
     limit: 'up to 100 MB',
@@ -43,12 +44,11 @@ export const copy = {
     fixFirst: 'Fix the items marked ✕ first: the server would reject this zip.',
     failed: "Couldn't deploy",
     needs: 'What your zip needs',
-    needsCompact: 'Your zip needs: Dockerfile · start command · version · ≤ 100 MB',
+    needsCompact: 'Your zip needs: Dockerfile · entrypoint · version · ≤ 100 MB',
     advisory: "This zip couldn't be read here; OpenRuntime checks it when you deploy.",
     items: {
       dockerfile: 'Dockerfile in the root, with a FROM line',
-      entrypoint:
-        'A startup command: a CMD or ENTRYPOINT in your Dockerfile (or a main.py / __main__.py entrypoint)',
+      entrypoint: 'A Python entrypoint: main.py or __main__.py, at the root or in src/',
       version: 'A version (x.y.z) in AgentCard.json or pyproject.toml, or set below',
       size: 'Under 100 MB, 1,000 files and 200 MB unzipped',
     },
@@ -62,6 +62,11 @@ export const copy = {
     upload: 'Upload a zip',
     github: 'From GitHub',
     registry: 'From a registry',
+  },
+  methodHints: {
+    upload: "Your agent's folder as a .zip",
+    github: 'Pick a repo; OpenRuntime clones and builds it',
+    registry: 'Import a published agent image',
   },
   github: {
     notConfigured: 'GitHub isn’t set up on this OpenRuntime server.',
@@ -190,13 +195,9 @@ export const copy = {
     started: (ago: string) => `started ${ago}`,
     finishedIn: (d: string) => `finished in ${d}`,
     uploaded: (file: string) => `Uploaded ${file}`,
-    leave: 'You can leave this page — the build keeps going.',
-    details: 'Details',
-    source: 'Source',
+    leave: 'You can leave this page. The build keeps going.',
     version: 'Version',
-    agent: 'Agent',
-    logs: 'Build logs',
-    logsUnavailable: 'need a newer OpenRuntime server',
+    logsUnavailable: 'Build logs need a newer OpenRuntime server.',
     stepsLabel: 'Build progress',
     running: (name: string) => `${name} is running`,
     notRunning: 'Built, but not running',
@@ -209,7 +210,6 @@ export const copy = {
     slow: (timeout: string) => `Taking longer than usual · builds time out after ${timeout}`,
     usual: 'usually 1–3 min',
     inProgress: 'in progress',
-    stepOf: (n: number, total: number) => `step ${n} of ${total}`,
     pending: 'pending',
     done: 'done',
   },
@@ -246,8 +246,8 @@ export const copy = {
       fix: 'Start the Dockerfile with a FROM instruction.',
     },
     noEntrypoint: {
-      problem: 'No startup command.',
-      fix: 'Add a CMD or ENTRYPOINT to your Dockerfile, or a main.py / __main__.py entrypoint.',
+      problem: 'No Python entrypoint.',
+      fix: 'Add main.py, src/main.py, __main__.py or src/__main__.py.',
     },
     tooLarge: {
       problem: 'The zip is over 100 MB.',

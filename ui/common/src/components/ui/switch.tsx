@@ -2,8 +2,6 @@
  * shadcn `switch` (new-york-v4), with local edits to re-apply after any `shadcn add switch`:
  * - focus is the one app style: a 2 px `--ring` with a 2 px page-coloured offset (DESIGN.md "Focus"), not the 3 px glow.
  */
-"use client"
-
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Switch as SwitchPrimitive } from "radix-ui"

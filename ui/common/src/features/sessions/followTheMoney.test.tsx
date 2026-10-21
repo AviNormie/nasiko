@@ -43,7 +43,10 @@ describe('follow the money', () => {
           name: new RegExp(`^Mar 11 · \\d+ sessions · ${fmtMoney(dayTotal).replace('$', '\\$')}$`),
         })
         expect(header).toBeInTheDocument()
-        expect(screen.getByText('Viewing Mar 11')).toBeInTheDocument()
+        // The day is the top bar's last breadcrumb level.
+        expect(
+          within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByText('Mar 11'),
+        ).toHaveAttribute('aria-current', 'page')
         const list = await screen.findByRole('list', { name: 'Sessions' })
         const rows = within(list).getAllByRole('link')
         expect(rows[0]).toHaveAccessibleName(

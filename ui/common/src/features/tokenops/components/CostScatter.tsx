@@ -145,9 +145,11 @@ function Plot({
       </svg>
       {hover ? (
         <PointTip
+          key={hover.id}
           p={hover}
           left={MARGIN.left + x(hover.x)}
           top={MARGIN.top + y(hover.y)}
+          bottom={height}
           flip={x(hover.x) > w / 2}
         />
       ) : null}
@@ -155,21 +157,35 @@ function Plot({
   )
 }
 
+function tipTop(pointY: number, tipHeight: number, plotHeight: number) {
+  return Math.max(0, Math.min(pointY - tipHeight / 2, plotHeight - tipHeight))
+}
+
 function PointTip({
   p,
   left,
   top,
+  bottom,
   flip,
 }: {
   p: ScatterPoint
   left: number
   top: number
+  bottom: number
   flip: boolean
 }) {
+  const [tall, setTall] = useState(0)
   return (
     <div
+      ref={(el) => {
+        if (el) setTall(el.offsetHeight)
+      }}
       className="pointer-events-none absolute z-10 rounded-md border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-md"
-      style={{ left, top, transform: `translate(${flip ? 'calc(-100% - 12px)' : '12px'}, -50%)` }}
+      style={{
+        left,
+        top: tipTop(top, tall, bottom),
+        transform: `translateX(${flip ? 'calc(-100% - 12px)' : '12px'})`,
+      }}
     >
       <div className="mb-1 font-medium">{p.name}</div>
       <div className="grid grid-cols-[auto_auto] gap-x-3 tabular-nums">
