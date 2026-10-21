@@ -493,33 +493,33 @@ describe('Loading', () => {
 })
 
 describe('Savings', () => {
-  it('shows what optimisation saved plus one next step, then hands off to TokenOps', async () => {
+  it('shows what optimization saved plus one next step, then hands off to TokenOps', async () => {
     // Not a small TokenOps: one number and one thing to do about it. Repeating the breakdown here
     // would give the reader the same work twice and a reason to skip both.
     renderApp('/')
     const row = await screen.findByTestId('overview-savings')
     expect(row).toHaveAttribute('data-state', 'saving')
-    expect(row).toHaveTextContent(/Token optimisation/)
+    expect(row).toHaveTextContent(/Token optimization/)
     expect(row).toHaveTextContent(/fewer tokens/)
     // The insight names the agent worth switching on, not the layer that happened to win.
     expect(row).toHaveTextContent(/biggest win left|Mostly from/)
     // Deep-links to the section, not the top of a page with four other panels above it.
     expect(within(row).getByRole('link', { name: /See the breakdown/ })).toHaveAttribute(
       'href',
-      '/tokenops?open=optimise',
+      '/tokenops?open=optimize',
     )
   })
 
-  it('the breakdown link lands on the optimisation section', async () => {
+  it('the breakdown link lands on the optimization section', async () => {
     const user = userEvent.setup()
     const { router } = renderApp('/')
     const row = await screen.findByTestId('overview-savings')
     await user.click(within(row).getByRole('link', { name: /See the breakdown/ }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tokenops'))
     // TokenOps has no expanders: `open=optimise` scrolls to the section, which is always on the page.
-    expect(router.state.location.search).toMatchObject({ open: 'optimise' })
+    expect(router.state.location.search).toMatchObject({ open: 'optimize' })
     expect(
-      await screen.findByRole('heading', { name: 'Token optimisation savings' }),
+      await screen.findByRole('heading', { name: 'Token optimization savings' }),
     ).toBeInTheDocument()
   })
 

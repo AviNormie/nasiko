@@ -120,7 +120,7 @@ export function Savings({
           // on, so by default it scrolls a new page to the top *after* render — undoing the
           // section scroll. TokenOps' own "See the breakdown" button never hit this because it
           // does not navigate, which is exactly why the two behaved differently.
-          <Link to="/tokenops" search={{ open: 'optimise' }} resetScroll={false}>
+          <Link to="/tokenops" search={{ open: 'optimize' }} resetScroll={false}>
             {copy.detail} <ArrowRight aria-hidden className="size-4" />
           </Link>
         ) : (

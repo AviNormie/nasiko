@@ -1,11 +1,11 @@
 /**
  * What's optimizing your tokens (plans/feat-optimization-page.md §11, ledger B12): every mechanism that cuts tokens,
  * what it trims, where it is set and its state now, so nobody has to know that PACMS is a personal setting while
- * caveman and ponytail are per-agent switches. Programs carry their internal names in brackets (B12), from the savings
- * data's own `label` and `program` where it answers.
+ * caveman and ponytail are per-agent switches. Program names come from the savings data's own
+ * `label` where it answers.
  *
  * - History selection: your own setting, on this page (Your settings); tier sizes are a superuser setting.
- * - Smaller prompts (Caveman), Less code written (Ponytail), Prompt comments: switches on each agent's Settings tab
+ * - Smaller prompts, Less code written, Prompt comments: switches on each agent's Settings tab
  *   (P5: this block links there, it never edits them). Counts (workspace-wide) and savings come from `/finops/savings`
  *   (main's real endpoint, synced from nasiko-cloud-rs `c8052fed` `savings.rs`); a server without it keeps the rows and links (R2B) and says what will show.
  */
@@ -16,7 +16,6 @@ import { Panel } from '@/components/shared/panel'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSavings } from '@/features/tokenops/api'
-import { programName } from '@/features/tokenops/optimisation'
 import type { ResolvedWindow } from '@/features/tokenops/window'
 import { isEndpointAbsent } from '@/lib/api/detect'
 import { budgetQuery, strategyQuery } from '../api'
@@ -63,7 +62,7 @@ export function Mechanisms({
   const programRow = (id: 'caveman' | 'ponytail', fallback: string) => {
     const p = program(id)
     return {
-      name: p ? programName(p.label, p.program) : fallback,
+      name: p ? p.label : fallback,
       saved:
         p && p.saved_tokens > 0
           ? m.saved(tokensShort(p.saved_tokens), p.basis !== 'measured')
@@ -117,7 +116,6 @@ export function Mechanisms({
         />
         <Row
           name={caveman.name}
-          codename="caveman"
           trims={m.cavemanTrims}
           where={<AgentsLink label={m.cavemanWhere} />}
           state={count(cov?.agents_with_compress_enabled, cov?.agents_total)}
@@ -125,7 +123,6 @@ export function Mechanisms({
         />
         <Row
           name={ponytail.name}
-          codename="ponytail"
           trims={m.ponytailTrims}
           where={<AgentsLink label={m.ponytailWhere} />}
           state={count(cov?.agents_with_minimal_code_enabled)}

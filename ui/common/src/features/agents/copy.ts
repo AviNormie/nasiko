@@ -225,7 +225,7 @@ export const copy = {
     'Lets the agent record, prune, and maintain workspace instructions with rationale annotations. Workspaces can opt out with',
   promptCommentsOptOut: '<!-- @prompt-comments disabled -->',
   codingBehavior: 'Coding agent behavior',
-  minimalCode: 'Minimal-code mode (Ponytail)',
+  minimalCode: 'Minimal-code mode',
   minimalCodeHint:
     'Checks for existing code, the standard library, or an installed dependency before writing new code. Applies immediately, no restart needed.',
   selfReview: 'Self-review',
@@ -235,7 +235,7 @@ export const copy = {
   // plans/feat-context-optimization.md eng E1 (D3), E2 (D4): the switch does three things; the label says so. One switch
   // (TokenOptimization.tsx); main's second copy in the feature flags was folded into it at the integration (2026-10-05).
   // Named with the program it turns on (plans/feat-optimization-page.md B12).
-  tokenOptimization: 'Token optimization (Caveman)',
+  tokenOptimization: 'Token optimization',
   tokenOptimizationIntro:
     'One switch over the whole stack: shrinks large tool results (JSON, logs and diffs) before they reach the model, trims the reply instruction, and compresses what the Orchestrator keeps between turns. Errors and structure are kept, and a counted note is left wherever something was removed. Turning it off stops every part of it.',
   /** The switch's own label, so the section title isn't printed twice (review: design). */

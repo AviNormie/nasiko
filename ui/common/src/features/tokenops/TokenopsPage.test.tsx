@@ -30,8 +30,8 @@ describe('TokenOps page', () => {
   })
 
   it('shows savings per category and per agent, with both reduction percentages', async () => {
-    renderApp('/tokenops?open=optimise')
-    const panel = await section('Token optimisation savings')
+    renderApp('/tokenops?open=optimize')
+    const panel = await section('Token optimization savings')
 
     // Both percentages, always together: the gap between them is real (savings are input-side,
     // input is the cheap side) and showing only one invites the reader to assume they match.
@@ -47,9 +47,9 @@ describe('TokenOps page', () => {
       within(panel).getByText(/^The cost cut is smaller than the token cut/),
     ).toBeInTheDocument()
 
-    // The category split — "what did Caveman save vs Ponytail" — answered directly.
-    expect(within(panel).getByText('Smaller prompts (Caveman)')).toBeInTheDocument()
-    expect(within(panel).getByText('Less code written (Ponytail)')).toBeInTheDocument()
+    // The category split — "what did each program save" — answered directly.
+    expect(within(panel).getByText('Smaller prompts')).toBeInTheDocument()
+    expect(within(panel).getByText('Less code written')).toBeInTheDocument()
 
     // A zero category stays visible and says why, so it reads as "nobody turned it on" rather
     // than "this feature does nothing".
@@ -61,12 +61,12 @@ describe('TokenOps page', () => {
     )
   })
 
-  it('lists the sessions the optimiser helped most', async () => {
+  it('lists the sessions the optimizer helped most', async () => {
     // Savings recur per turn, so a long session compounds them in a way the per-call view
     // understates. This table is where that shows, and it links back to the conversation.
     const user = userEvent.setup()
-    renderApp('/tokenops?open=optimise')
-    const panel = await section('Token optimisation savings')
+    renderApp('/tokenops?open=optimize')
+    const panel = await section('Token optimization savings')
     await user.click(within(panel).getByRole('tab', { name: 'By session' }))
     const link = await within(panel).findByRole('link', { name: /ctx-9f3ad21b/ })
     expect(link).toHaveAttribute('href', '/sessions/ctx-9f3ad21b0c74')
@@ -74,10 +74,10 @@ describe('TokenOps page', () => {
   })
 
   it('names the layers underneath a category that has more than one', async () => {
-    // "Caveman saved this much" is the product question; which injection point carried it is the
+    // "Smaller prompts saved this much" is the product question; which injection point carried it is the
     // engineering one, and both belong on the same row.
-    renderApp('/tokenops?open=optimise')
-    const panel = await section('Token optimisation savings')
+    renderApp('/tokenops?open=optimize')
+    const panel = await section('Token optimization savings')
     // Named for what got shorter, not for the injection point the ledger stores. Scoped to the
     // row, because the panel's own intro also talks about tool output in plain words.
     const row = within(panel).getByRole('rowheader', { name: /Smaller prompts/ })
@@ -89,8 +89,8 @@ describe('TokenOps page', () => {
   it('marks a figure that is estimated rather than measured', async () => {
     // The minimal-code row has no observable counterfactual, so its number is a factor applied to
     // counted traffic. That has to be visible rather than blended into the measured total.
-    renderApp('/tokenops?open=optimise')
-    const panel = await section('Token optimisation savings')
+    renderApp('/tokenops?open=optimize')
+    const panel = await section('Token optimization savings')
     expect(within(panel).getAllByLabelText('Estimated').length).toBeGreaterThan(0)
     expect(within(panel).getByText('Measured + estimated')).toBeInTheDocument()
   })

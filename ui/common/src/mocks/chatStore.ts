@@ -519,7 +519,7 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
       ...turn(
         2,
         'Summarise the diff.',
-        'Three functions extracted; behaviour unchanged except clearer 4xx errors.',
+        'Three functions extracted; behavior unchanged except clearer 4xx errors.',
         [
           // A value the CLI already cut (CLI integration/report.rs canonical_event, cb3aaf0c): a string where JSON was expected, longer than the UI cap.
           {

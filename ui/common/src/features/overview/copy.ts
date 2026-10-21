@@ -40,8 +40,8 @@ export const copy = {
   },
   // Overview's token-optimisation band. One figure, one next step, then hand off to TokenOps.
   savings: {
-    eyebrow: 'Token optimisation',
-    eyebrowOff: 'Token optimisation — not switched on',
+    eyebrow: 'Token optimization',
+    eyebrowOff: 'Token optimization — not switched on',
     savedSuffix: 'saved',
     neverSent: (tokens: string) => `${tokens} tokens never sent.`,
     couldSave: (agent: string, spend: string) =>
@@ -52,7 +52,7 @@ export const copy = {
     // Money on the table, not "$0 saved": one is a reason to act, the other reads as a broken feature.
     idleSuffix: 'spent that could be trimmed',
     idleLine:
-      'Your agents re-send tool output and chat history the model does not need. Turning optimisation on for one agent shows what it would save.',
+      'Your agents re-send tool output and chat history the model does not need. Turning optimization on for one agent shows what it would save.',
     idleCta: 'Choose an agent',
   },
   kpi: {

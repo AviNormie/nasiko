@@ -1,5 +1,5 @@
 /**
- * A mechanism's name with a hover (and focus) tooltip that introduces its team name: PACMS, Caveman, Ponytail (user
+ * A mechanism's name with a hover (and focus) tooltip that introduces its team name (PACMS) (user
  * decision 2026-10-05, plans/feat-optimization-page.md B12). Built like `Without` (the 2A tooltip).
  */
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'

@@ -14,7 +14,7 @@ export type SortKey = (typeof SORTS)[number]
  * Section ids the `open` param names (links from other pages: the page scrolls to that section on arrival). The page
  * has no expanders any more; `perf`, `month` and `metrics` are kept so older links still parse.
  */
-export const DISCLOSURES = ['spend', 'optimise', 'drivers', 'perf', 'month', 'metrics'] as const
+export const DISCLOSURES = ['spend', 'optimize', 'drivers', 'perf', 'month', 'metrics'] as const
 export type Disclosure = (typeof DISCLOSURES)[number]
 
 /** Normalise `open` to a canonical CSV (kept a string so the URL stays `open=spend,drivers`). */

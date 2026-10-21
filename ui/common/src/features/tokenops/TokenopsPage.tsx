@@ -350,7 +350,7 @@ export function TokenopsPage({
   const sections = [
     { id: 'spend', label: 'Spend', hint: win.label },
     { id: 'drivers', label: 'Drivers' },
-    { id: 'optimise', label: 'Optimisation', hint: optimisation ? optimiseHint : undefined },
+    { id: 'optimize', label: 'Optimization', hint: optimisation ? optimiseHint : undefined },
   ]
 
   const time = {
@@ -490,7 +490,7 @@ export function TokenopsPage({
             error={dash.error}
             onRetry={() => void dash.refetch()}
           >
-            <SavingsHighlight data={optimisation} onSeeDetail={() => scrollToSection('optimise')} />
+            <SavingsHighlight data={optimisation} onSeeDetail={() => scrollToSection('optimize')} />
           </SummaryHero>
 
           <SectionNav sections={sections} />
@@ -636,7 +636,7 @@ export function TokenopsPage({
               </div>
             </PageSection>
 
-            <PageSection id="optimise" title="Optimisation" hint={optimiseHint}>
+            <PageSection id="optimize" title="Optimization" hint={optimiseHint}>
               {savings.isError ? (
                 <StateCard
                   tone="warning"
@@ -706,7 +706,7 @@ const MOBILE_PANELS = [
 
 /** Which section an `?open=` link means; the retired ids map onto the section that now holds them. */
 function arrivalSection(open: Set<DisclosureId>): string | undefined {
-  if (open.has('optimise')) return 'optimise'
+  if (open.has('optimize')) return 'optimize'
   if (open.has('drivers') || open.has('perf')) return 'drivers'
   if (open.has('month') || open.has('spend')) return 'spend'
   return undefined
