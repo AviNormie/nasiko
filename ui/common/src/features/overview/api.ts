@@ -324,6 +324,8 @@ export interface Spend {
   driversError: unknown
   /** Some calls in the range had no price: totals are a floor. */
   unpriced: boolean
+  /** Fleet p95 latency over the range and its change, from the same dashboard; null while it loads or failed. */
+  latency: { p95: number; changePct: number | null } | null
   retry(): void
 }
 
@@ -440,6 +442,12 @@ export function useSpend(now: Date, range: Range, enabled = true): Spend {
     other,
     driversError: cur.error,
     unpriced: (cur.data?.summary.unpriced_calls ?? 0) > 0,
+    latency: cur.data
+      ? {
+          p95: cur.data.kpis.latency_p95_ms.current,
+          changePct: cur.data.kpis.latency_p95_ms.change_pct,
+        }
+      : null,
     retry: () => {
       void calThis.refetch()
       void calLast.refetch()

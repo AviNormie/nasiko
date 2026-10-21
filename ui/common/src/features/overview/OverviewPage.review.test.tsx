@@ -213,6 +213,7 @@ describe('components', () => {
       other: null,
       driversError: null,
       unpriced: false,
+      latency: null,
       retry: vi.fn(),
     })
     const { unmount } = renderInRouter(<Spend spend={spend('2026-09-15')} now={at} />)
