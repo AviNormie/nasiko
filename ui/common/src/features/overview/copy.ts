@@ -76,7 +76,7 @@ export const copy = {
     },
     allRunning: 'All running',
     noAgents: 'No agents yet',
-    harnesses: 'Harnesses used',
+    harnesses: 'Coding harnesses used',
     connected: 'connected',
     est: 'est.',
     connectedCount: (n: number) => `${n} connected`,
@@ -181,7 +181,7 @@ export const copy = {
   },
   harnesses: {
     title: 'Coding harnesses',
-    link: 'Harnesses',
+    link: 'Coding harnesses',
     what: 'harness usage',
     ownOnly: 'Your own usage (this server has no org view).',
     notVisible: 'No harness usage is visible to you.',
@@ -191,7 +191,7 @@ export const copy = {
     connected: (n: number) => `${n} coding harness${n === 1 ? '' : 'es'} connected`,
     lineCost: (cost: string, days: number) =>
       `${cost} est. cost (API list price), last ${days} days`,
-    open: 'Open Harnesses',
+    open: 'Open Coding harnesses',
     unpriced: 'unpriced',
     costNote: (days: number) => `Est. cost (API list price), last ${days} days`,
   },
