@@ -9,10 +9,10 @@ import { renderApp } from '@/test/renderApp'
 
 setupPinnedSeed()
 
-describe('Session optimisation line (ISSUE-003)', () => {
+describe('Session optimization line (ISSUE-003)', () => {
   it('renders without block elements inside a paragraph', async () => {
     renderApp(`/sessions/${SHOWCASE_SESSION}`)
-    const label = await screen.findByText('Context optimisation', {}, { timeout: 12_000 })
+    const label = await screen.findByText('Context optimization', {}, { timeout: 12_000 })
     const p = label.closest('p')
     // When it sits in the header paragraph, nothing between the paragraph and the label may be a div.
     if (p) {

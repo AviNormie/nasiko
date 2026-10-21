@@ -19,7 +19,7 @@ describe('TokenOps summary', () => {
       'Token mix',
       'Who is driving cost',
       'Cost vs performance',
-      'Token optimisation savings',
+      'Token optimization savings',
     ])
       expect(
         await screen.findByRole('heading', { name: new RegExp(`^${heading}`) }),
@@ -32,7 +32,7 @@ describe('TokenOps summary', () => {
     )
   })
 
-  it('lands on the optimisation section when opened by link, not at the top of the page', async () => {
+  it('lands on the optimization section when opened by link, not at the top of the page', async () => {
     // The regression this guards: the scroll ran before the sections had painted (they sit behind the page loader)
     // and nothing made it try again.
     //
@@ -44,9 +44,9 @@ describe('TokenOps summary', () => {
       scrolled.push(this.id)
     }
     try {
-      renderApp('/tokenops?open=optimise')
-      await screen.findByRole('heading', { name: 'Token optimisation savings' })
-      await waitFor(() => expect(scrolled).toContain('tokenops-section-optimise'))
+      renderApp('/tokenops?open=optimize')
+      await screen.findByRole('heading', { name: 'Token optimization savings' })
+      await waitFor(() => expect(scrolled).toContain('tokenops-section-optimize'))
     } finally {
       Element.prototype.scrollIntoView = original
     }
@@ -60,9 +60,9 @@ describe('TokenOps summary', () => {
     }
     try {
       renderApp('/tokenops')
-      const banner = await screen.findByRole('region', { name: /Optimisation saved you/ })
+      const banner = await screen.findByRole('region', { name: /Optimization saved you/ })
       await userEvent.click(within(banner).getByRole('button', { name: /See the breakdown/ }))
-      const target = scrolled.find((e) => e.id === 'tokenops-section-optimise')
+      const target = scrolled.find((e) => e.id === 'tokenops-section-optimize')
       expect(target).toBeDefined()
       // A scroll margin under the section nav (the root's scroll-padding clears the top bar).
       expect(target!.className).toMatch(/scroll-mt-\d+/)
@@ -73,7 +73,7 @@ describe('TokenOps summary', () => {
 
   it('puts the savings headline above the fold', async () => {
     renderApp('/tokenops')
-    const banner = await screen.findByRole('region', { name: /Optimisation saved you/ })
+    const banner = await screen.findByRole('region', { name: /Optimization saved you/ })
     expect(banner).toHaveTextContent(/fewer tokens/)
     expect(within(banner).getByRole('button', { name: /See the breakdown/ })).toBeInTheDocument()
   })

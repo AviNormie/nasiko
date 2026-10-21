@@ -32,7 +32,7 @@ export const copy = {
     mode: 'Mode',
     modeHint: 'System follows your device’s light or dark setting.',
     theme: 'Theme',
-    themeHint: 'The colour of buttons, links and the current page. Sign in always uses Carbon.',
+    themeHint: 'The color of buttons, links and the current page. Sign in always uses Carbon.',
   },
 
   // Settings → Workspace → Optimization tiers (/settings/optimization-tiers): its words are in features/optimization.
@@ -136,7 +136,7 @@ export const copy = {
   },
 
   sections: {
-    general: { label: 'General', sub: 'Routing defaults and platform behaviour.' },
+    general: { label: 'General', sub: 'Routing defaults and platform behavior.' },
     limits: { label: 'Flow limits', sub: 'Cascade guards applied to every inter-agent call.' },
     registry: { label: 'Registry', sub: 'External OCI registry used for agent images.' },
   },

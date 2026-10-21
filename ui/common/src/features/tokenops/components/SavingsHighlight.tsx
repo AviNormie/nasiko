@@ -42,7 +42,7 @@ export function SavingsHighlight({
         </span>
         <div className="min-w-0">
           <h3 id="savings-highlight-title" className="text-sm font-medium">
-            Optimisation saved you {fmtMoney(data.costSaved)}
+            Optimization saved you {fmtMoney(data.costSaved)}
             {pct ? <> · {pct} fewer tokens</> : null}
           </h3>
           <p className="text-xs text-muted-foreground">
@@ -59,7 +59,7 @@ export function SavingsHighlight({
   )
 }
 
-/** Lower-cases only the first letter, so a team name keeps its capital mid-sentence: "smaller prompts (Caveman)". */
+/** Lower-cases only the first letter, so a proper name keeps its capital mid-sentence. */
 function inSentence(label: string) {
   return label.charAt(0).toLowerCase() + label.slice(1)
 }

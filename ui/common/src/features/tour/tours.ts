@@ -54,7 +54,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'nav-tokenops',
       side: 'right',
       title: 'Spend',
-      body: 'Monitor shows what it cost. Optimise shows how to spend less.',
+      body: 'Monitor shows what it cost. Optimize shows how to spend less.',
     },
     {
       target: 'nav-connect',
@@ -699,7 +699,7 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       target: 'appearance-theme',
       side: 'top',
       title: 'Theme',
-      body: 'The colour theme. The account menu has a quick switch too.',
+      body: 'The color theme. The account menu has a quick switch too.',
     },
     {
       target: 'password-form',

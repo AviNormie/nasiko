@@ -2,7 +2,7 @@
  * Token optimisation: what each layer saved, over the selected window.
  *
  * Three readings, in the order someone needs them: the fleet total, the per-category split
- * ("Caveman saved this much, Ponytail saved this much"), and the per-agent table that answers
+ * ("smaller prompts saved this much, less code written saved this much"), and the per-agent table that answers
  * which agent to turn it on for next.
  *
  * Both reduction percentages are always shown together. The gap between them is real and expected
@@ -73,9 +73,9 @@ export function OptimisationPanel({
   const current = tabs.some((t) => t.value === tab) ? tab : 'category'
   return (
     <Panel
-      title="Token optimisation savings"
+      title="Token optimization savings"
       subtitle="Text we strip out before a call reaches the model — bulky tool output, old chat history, long answers. Everything here is what you did not have to pay for."
-      labelledBy="optimisation-title"
+      labelledBy="optimization-title"
       actions={
         <span className="flex items-center gap-1.5">
           <BetaBadge />
@@ -100,7 +100,7 @@ export function OptimisationPanel({
                   {t.label}
                   {t.value === current ? (
                     <m.span
-                      layoutId="optimisation-tab"
+                      layoutId="optimization-tab"
                       transition={transitions.morph}
                       aria-hidden
                       className="absolute inset-x-1 -bottom-1.5 h-0.5 rounded-full bg-foreground"
@@ -126,7 +126,7 @@ export function OptimisationPanel({
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md bg-muted px-3 py-2.5 text-sm">
           <p>
             {fmtInt(data.unoptimisedCount)}{' '}
-            {data.unoptimisedCount === 1 ? "agent doesn't" : "agents don't"} have optimisation on.
+            {data.unoptimisedCount === 1 ? "agent doesn't" : "agents don't"} have optimization on.
             They made <strong>{fmtMoney(data.unoptimisedSpend)}</strong> (
             {Math.round(data.unoptimisedSharePct)}%) of fleet spend.
             {data.topUnoptimised ? (
@@ -254,7 +254,7 @@ function CompareBar({
 function Coverage({ data }: { data: OptimisationView }) {
   const meters = [
     {
-      label: 'Agents optimised',
+      label: 'Agents optimized',
       on: data.optimisedCount,
       of: data.totalAgents,
     },
@@ -288,11 +288,11 @@ function Coverage({ data }: { data: OptimisationView }) {
   )
 }
 
-/** The per-category split: the question "what did Caveman save vs Ponytail" answered directly. */
+/** The per-category split: the question "what did each program save" answered directly. */
 function CategoryTable({ data }: { data: OptimisationView }) {
   return (
     <ChartTable className="max-h-none">
-      <caption className="sr-only">Savings per optimisation category</caption>
+      <caption className="sr-only">Savings per optimization category</caption>
       <TableHeader className={STICKY_HEAD}>
         <TableRow className="hover:bg-transparent">
           <TableHead scope="col" className={HEAD}>
@@ -363,7 +363,7 @@ function AgentTable({ data }: { data: OptimisationView }) {
   if (data.rows.length === 0) return null
   return (
     <ChartTable className="max-h-none">
-      <caption className="sr-only">Savings per optimised agent</caption>
+      <caption className="sr-only">Savings per optimized agent</caption>
       <TableHeader className={STICKY_HEAD}>
         <TableRow className="hover:bg-transparent">
           <TableHead scope="col" className={HEAD}>
@@ -536,9 +536,9 @@ function BasisBadge({
 function EmptyState({ total }: { total: number }) {
   return (
     <div className="rounded-md border border-dashed px-4 py-6 text-center">
-      <p className="text-sm font-medium">No optimisation is switched on yet</p>
+      <p className="text-sm font-medium">No optimization is switched on yet</p>
       <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-        None of your {fmtInt(total)} {total === 1 ? 'agent has' : 'agents have'} token optimisation
+        None of your {fmtInt(total)} {total === 1 ? 'agent has' : 'agents have'} token optimization
         enabled, so there is nothing to measure. Turn it on for one agent and savings appear here as
         soon as it handles traffic.
       </p>
