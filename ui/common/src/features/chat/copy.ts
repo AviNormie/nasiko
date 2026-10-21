@@ -210,7 +210,7 @@ export const copy = {
   targetNotRunningAction: 'Open the agent',
   agentRemoved: "This chat's agent was removed.",
   recordedReadOnly: 'Recorded from a coding harness.',
-  viewInHarnesses: 'View in Harnesses →',
+  viewInHarnesses: 'View in Coding harnesses →',
   loadingChat: 'Loading chat…',
   historyMissing: "This chat was deleted or isn't yours.",
   historyFailed: "Couldn't load this chat.",

@@ -284,7 +284,7 @@ describe('Trend', () => {
 })
 
 describe('HarnessPanels', () => {
-  const region = () => within(screen.getByRole('region', { name: 'Harnesses' }))
+  const region = () => within(screen.getByRole('region', { name: 'Coding harnesses' }))
 
   it('mostly unpriced reads "unpriced" with "—" ratios; a priced one shows its unpriced count', () => {
     wrap(
@@ -327,7 +327,7 @@ describe('HarnessPanels', () => {
         items={[{ harness: 'claude', totals: T() }]}
       />,
     )
-    const style = screen.getByRole('region', { name: 'Harnesses' }).getAttribute('style')!
+    const style = screen.getByRole('region', { name: 'Coding harnesses' }).getAttribute('style')!
     expect(style).toContain('--lg-cols: 3')
     expect(style).toContain('--xl-cols: 3')
   })

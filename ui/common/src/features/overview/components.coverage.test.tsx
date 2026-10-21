@@ -400,7 +400,7 @@ describe('Spend chart', () => {
   })
 })
 
-describe('Harnesses', () => {
+describe('Coding harnesses', () => {
   const data = (over: Partial<HarnessSummary>): HarnessSummary => ({
     isPending: false,
     error: null,

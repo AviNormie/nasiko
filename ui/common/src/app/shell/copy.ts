@@ -34,7 +34,7 @@ export const copy = {
     tokenops: 'TokenOps',
     monitor: 'Monitor',
     optimise: 'Optimize',
-    harnesses: 'Harnesses',
+    harnesses: 'Coding harnesses',
     settings: 'Settings',
   },
   routeError: {
