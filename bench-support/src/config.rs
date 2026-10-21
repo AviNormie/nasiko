@@ -115,6 +115,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         seed_image_platform: "linux/amd64".into(),
         agent_image_registry_placeholder: None,
         build_push_token: String::new(),
+        injection_proxy_token: String::new(),
         seed_agents: None,
         // Dummy but non-empty — ee build_ee_app requires Some(), and a
         // non-empty api_key is also what lets Stage 1 (VectorStore) attempt
@@ -152,11 +153,6 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         hitl_resume_lease_minutes: 2,
         hitl_resume_max_attempts: 3,
         hitl_resume_retry_delay_secs: 2,
-        hitl_lost_task_retries: 3,
-        agent_state_ttl_days: 7,
-        agent_state_max_body_bytes: 1_048_576,
-        agent_state_rate_limit_per_minute: 600,
-        agent_state_list_bytes_budget: 8 * 1024 * 1024,
         github_client_id: None,
         github_client_secret: None,
         router_shortlist_threshold: 15,

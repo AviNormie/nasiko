@@ -11,7 +11,6 @@
     ".": {
       "entry": [
         "scripts/*.ts",
-        "*/*/scripts/*.ts",
         "e2e/**/*.ts",
         ".storybook/*.{ts,tsx}",
         "*/src/main.tsx",
@@ -26,7 +25,6 @@
       ],
       "project": [
         "scripts/**/*.ts",
-        "*/*/scripts/**/*.ts",
         "e2e/**/*.ts",
         "*/src/**/*.{ts,tsx}",
         "*/*/src/**/*.{ts,tsx}"
