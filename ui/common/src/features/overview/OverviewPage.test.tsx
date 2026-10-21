@@ -262,12 +262,14 @@ describe('Needs you', () => {
 })
 
 describe('first run (design 7A)', () => {
-  it('leads with the Setup guide card instead of the deploy card, and it reopens the guide', async () => {
+  it('puts the Setup guide in the hero beside Deploy, and it reopens the guide', async () => {
     server.use(http.get('*/api/agents', () => HttpResponse.json([])))
     const user = userEvent.setup()
     renderApp('/')
     const guideCard = await screen.findByTestId('overview-setup-guide')
-    expect(document.querySelector('[data-testid="overview-first-run"]')).toBeNull()
+    // The guide fills the hero's right half (redesign 2026-10-21), not a card of its own; no range with nothing to range.
+    expect(card('overview-first-run')).toContainElement(guideCard)
+    expect(screen.queryByRole('group', { name: copy.range.label })).toBeNull()
     // One next action: Deploy beside the headline; the header's Setup guide and Quick actions' Deploy step aside.
     expect(screen.getAllByRole('link', { name: deployCopy.entry.label })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: copy.setup.button })).toBeNull()
