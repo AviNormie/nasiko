@@ -30,6 +30,15 @@ export const copy = {
   },
   greeting: (hour: number, name: string, days: number) =>
     `${hello(hour, name)} Here is your workspace for the last ${days} days.`,
+  /** The header's view switch: the cards, or the estate's canvas in either of its views. */
+  views: {
+    label: 'View',
+    overview: 'Overview',
+    village: 'Village',
+    map: 'Map',
+    loading: (view: 'village' | 'map') =>
+      view === 'map' ? 'Loading the map' : 'Loading the village',
+  },
   range: {
     label: 'Range',
     item: (days: number) => `Last ${days} days`,

@@ -62,6 +62,7 @@ import {
   type MockAgent,
 } from './agents'
 import { CHAT_SCENARIOS, type ChatScenario } from './chat'
+import { overviewHandlers, resetOverviewMock } from './overview'
 import {
   buildRouterState,
   createConfig,
@@ -206,10 +207,12 @@ export const BUDGETS_PAGE_VARIANTS = [
   'alerts-failing',
 ] as const
 /** Page variants combine (read through hasVariant) instead of taking the single degraded-state slot. */
+// The village's paid plan combines with any state (`?mock=village-unlimited,overview-quiet`).
 const PAGE_VARIANTS: readonly string[] = [
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
   ...BUDGETS_PAGE_VARIANTS,
+  'village-unlimited',
 ]
 
 /**
@@ -289,6 +292,12 @@ export const MOCK_VARIANTS = [
   'ledger-no-trace',
   // The scoped home (plans/feat-agent-centric.md DX mocks): a server without budgets (bare 404 on /api/budgets).
   'home-budgets-absent',
+  // Overview (docs/requirements/overview.md OV-1..OV-3): a server without the estate, problem and pin routes (bare 404s:
+  // the page builds its smaller map), or a quiet estate with no problems (the healthy state).
+  'overview-absent',
+  'overview-quiet',
+  // The village on a paid plan (plans/feat-village-overview.md V17): every plot a district has is open.
+  'village-unlimited',
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
   ...BUDGETS_PAGE_VARIANTS,
@@ -537,6 +546,7 @@ export function resetAgentsMock() {
   onboardingRow = ONBOARDED
   resetOptimizationMock()
   resetChatMock()
+  resetOverviewMock()
   // The chat knobs tests can turn (v1c DX3).
   fixedSuperuser = null
   fixedPageVariants = new Set()
@@ -1810,6 +1820,8 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
   // and the `?mock=budgets-*` variants keep working in both editions' harnesses.
   budgets: [],
   'budgets-fill': [],
+  // Set after chatCtx below, like chat: its estate reads the other groups' state.
+  overview: [],
   chat: [],
   // Settings (plans/feat-settings.md); EE stacks /api/settings/oidc and the SCIM tokens on top.
   settings: [
@@ -2148,6 +2160,48 @@ const chatCtx: ChatMockContext = {
   superuser,
 }
 handlerGroups.chat = chatHandlers(chatCtx)
+
+// OV-1..OV-3 (proposed): the Overview's estate, problem state and pins, over the other mocks' state (mocks/overview.ts).
+handlerGroups.overview = overviewHandlers({
+  loggedIn: () => loggedIn,
+  me: () => sessionUser(),
+  now: () => nowFn(),
+  absent: () => hasVariant('overview-absent'),
+  quiet: () => hasVariant('overview-quiet'),
+  unlimited: () => hasVariant('village-unlimited'),
+  agents: () => getAgents().agents,
+  harness: harnessData,
+  seed: getSeed,
+  connectors: () =>
+    getMcp()
+      .connectors.filter((c) => c.is_active)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        display_name: c.display_name,
+        toolkit: c.provider === 'composio',
+      })),
+  toolsOf: (agentId) =>
+    [...getMcp().access.entries()]
+      .filter(([k, v]) => k.startsWith(`${agentId}:`) && v.enabled)
+      .map(([k]) => k.slice(agentId.length + 1)),
+  routers: () =>
+    getRouter()
+      .configs.filter((c) => !c.deleted)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        provider: c.provider,
+        model: c.model,
+        fallback: c.fallback_models.length,
+      })),
+  routerOf: (agent) => resolveRouting(getRouter(), agent).llm_config?.id ?? null,
+  workflows: () =>
+    getWorkflows()
+      .workflows.filter((w) => w.status === 'active')
+      .map((w) => ({ id: w.id, name: w.name, owner: w.user_id, steps: w.steps })),
+  unauthorized: () => unauthorized(),
+})
 
 /**
  * Deploy group (plans/feat-deploy.md §9). ACL as the server: a superuser sees every build and upload, anyone else only
