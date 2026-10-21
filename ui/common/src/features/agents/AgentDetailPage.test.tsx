@@ -678,12 +678,12 @@ describe('Try it (chat plan §9)', () => {
 })
 
 describe('more states (plan §10)', () => {
-  it('a coding harness shows Overview and MCP and points at Harnesses', async () => {
+  it('a coding harness shows Overview and MCP and points at Coding harnesses', async () => {
     const harness = await agentWhere((a) => !!a.tags?.includes('coding-agent'))
     renderApp(`/agents/${harness.id}`)
     await title()
     expect(tabNames()).toEqual(['Overview', 'MCP', 'Details'])
-    expect(screen.getByRole('link', { name: /See usage on Harnesses/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /See usage on Coding harnesses/ })).toHaveAttribute(
       'href',
       expect.stringContaining('/harnesses'),
     )
