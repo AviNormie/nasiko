@@ -32,7 +32,7 @@ describe('Needs attention', () => {
     expect(
       within(s).getByText(
         new RegExp(
-          `^${mine} of your agents have Token optimization \\(Caveman\\) off, so their chats aren’t optimized\\.`,
+          `^${mine} of your agents have Token optimization off, so their chats aren’t optimized\\.`,
         ),
       ),
     ).toBeInTheDocument()
@@ -57,9 +57,7 @@ describe('Needs attention', () => {
     configureMocks({ superuser: false })
     renderApp('/optimization')
     const s = await strip()
-    expect(
-      within(s).getByText(/of your agents have Token optimization \(Caveman\) off/),
-    ).toBeInTheDocument()
+    expect(within(s).getByText(/of your agents have Token optimization off/)).toBeInTheDocument()
     expect(within(s).queryByText(/other agents? in the workspace/)).toBeNull()
   })
 
@@ -89,10 +87,7 @@ describe('Needs attention', () => {
       within(dialog).getByRole('button', { name: copy.attention.confirm(ids.size) }),
     )
     await waitFor(
-      () =>
-        expect(
-          screen.queryByText(/of your agents have Token optimization \(Caveman\) off/),
-        ).toBeNull(),
+      () => expect(screen.queryByText(/of your agents have Token optimization off/)).toBeNull(),
       T,
     )
     expect(peak).toBeLessThanOrEqual(4)

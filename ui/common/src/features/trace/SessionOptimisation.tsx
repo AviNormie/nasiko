@@ -46,7 +46,7 @@ export function SessionOptimisation({ sessionId }: { sessionId: string }) {
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <Scissors className="size-3.5" aria-hidden />
-        <span className="font-medium text-foreground">Context optimisation</span>
+        <span className="font-medium text-foreground">Context optimization</span>
       </span>
 
       {strategy ? (

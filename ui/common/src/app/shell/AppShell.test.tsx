@@ -443,7 +443,7 @@ describe('footer', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/account/appearance'))
   })
 
-  it('the account menu’s Theme submenu sets mode and colour theme, and stays open between picks', async () => {
+  it('the account menu’s Theme submenu sets mode and color theme, and stays open between picks', async () => {
     renderApp('/agents')
     await openAccountMenu()
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Theme' }))

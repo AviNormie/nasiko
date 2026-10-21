@@ -26,7 +26,7 @@ export const copy = {
     now: 'now',
     failedCheck: 'Couldn’t check your agents.',
     mine: (n: number, serverOff: boolean) =>
-      `${n} of your agents ${n === 1 ? 'has' : 'have'} Token optimization (Caveman) off${serverOff ? '.' : `, so ${n === 1 ? 'its' : 'their'} chats aren’t optimized.`}`,
+      `${n} of your agents ${n === 1 ? 'has' : 'have'} Token optimization off${serverOff ? '.' : `, so ${n === 1 ? 'its' : 'their'} chats aren’t optimized.`}`,
     others: (n: number) =>
       `${n} other ${n === 1 ? 'agent' : 'agents'} in the workspace ${n === 1 ? 'has' : 'have'} it off, so ${n === 1 ? 'its' : 'their'} chats aren’t optimized.`,
     more: (n: number) => `and ${n} more`,
@@ -34,7 +34,7 @@ export const copy = {
     turnOnAll: (n: number) => (n === 1 ? 'Turn it on' : `Turn on for all ${n}`),
     progress: (done: number, total: number) => `Turning on ${done} of ${total}…`,
     confirmTitle: (n: number) =>
-      `Turn on Token optimization (Caveman) for ${n} ${n === 1 ? 'agent' : 'agents'}?`,
+      `Turn on Token optimization for ${n} ${n === 1 ? 'agent' : 'agents'}?`,
     confirmMine:
       'Turns on compression and a concise-answer instruction for these agents’ requests and replies, in every chat that uses them. Each switch affects only its own agent.',
     confirmOthers:
@@ -46,9 +46,7 @@ export const copy = {
     retryFailed: 'Retry',
     announce: (ok: number, failed: number) =>
       [
-        ok
-          ? `Turned on Token optimization (Caveman) for ${ok} ${ok === 1 ? 'agent' : 'agents'}.`
-          : null,
+        ok ? `Turned on Token optimization for ${ok} ${ok === 1 ? 'agent' : 'agents'}.` : null,
         failed ? `${failed} ${failed === 1 ? 'agent' : 'agents'} couldn’t be turned on.` : null,
       ]
         .filter(Boolean)
@@ -68,15 +66,11 @@ export const copy = {
   },
 
   // What's optimizing your tokens (plans/feat-optimization-page.md §11, B12): each mechanism, what it trims, where it's
-  // set and its state. Programs carry their internal names in brackets.
+  // set and its state.
   /** What the team names mean, in the Codename tooltip (B12; user, 2026-10-05). */
   codenames: {
     pacms:
       'PACMS keeps the earlier messages most relevant to what you just asked, plus the newest few, within your budget. Top-K keeps the closest matches; Last-K keeps the most recent.',
-    caveman:
-      'Caveman is the team’s name for Token optimization: it compresses tool output and chat history and asks for shorter answers.',
-    ponytail:
-      'Ponytail is the team’s name for Minimal-code mode: a coding agent looks for an existing solution before it writes new code.',
   },
 
   mechanisms: {
@@ -86,12 +80,12 @@ export const copy = {
     historyWhere: 'Your settings, below',
     tiersWhere: 'Optimization tiers',
     tiersNote: 'tier sizes for everyone:',
-    caveman: 'Smaller prompts (Caveman)',
+    caveman: 'Smaller prompts',
     cavemanTrims: 'Trims tool output, chat history and answer length.',
-    cavemanWhere: 'Token optimization (Caveman), on each agent’s Settings tab',
-    ponytail: 'Less code written (Ponytail)',
+    cavemanWhere: 'Token optimization, on each agent’s Settings tab',
+    ponytail: 'Less code written',
     ponytailTrims: 'Coding agents check for an existing solution before writing code.',
-    ponytailWhere: 'Minimal-code mode (Ponytail), on a coding agent’s Settings tab',
+    ponytailWhere: 'Minimal-code mode, on a coding agent’s Settings tab',
     comments: 'Prompt comments',
     commentsTrims: 'Agents record, prune and maintain their own workspace instructions.',
     commentsWhere: 'Prompt comments, on each agent’s Settings tab',
@@ -116,7 +110,7 @@ export const copy = {
     colWithout: 'Without',
     colSent: 'Sent',
     colSaved: 'Saved',
-    colSwitch: 'Token optimization (Caveman)',
+    colSwitch: 'Token optimization',
     on: 'On',
     off: 'Off',
     /** R7B, as sorted (review: design). */
@@ -143,7 +137,7 @@ export const copy = {
     otherChat: 'Another user’s chat',
     untitled: 'Untitled chat',
     row: (without: string, sent: string) => `~${without} without → ~${sent} sent`,
-    off: 'Token optimization (Caveman) off',
+    off: 'Token optimization off',
     /** The request's time, UTC like the chart's buckets. */
     at: (time: string) => `${time} UTC`,
     outline: 'The chats that send the most history will show here.',
