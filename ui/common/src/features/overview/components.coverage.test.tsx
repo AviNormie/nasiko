@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { readRailView } from '@/features/chat/rememberTarget'
 import type { HarnessSummary, NeedsYou as NeedsYouData, Spend as SpendData } from './api'
 import { Harnesses, HarnessesLine } from './components/Harnesses'
+import { HarnessCell } from './components/SetUpNow'
 import { Headline } from './components/Headline'
 import { MonthBar } from './components/MonthBar'
 import { NeedsYou } from './components/NeedsYou'
@@ -444,7 +445,7 @@ describe('Harnesses', () => {
     const rows = screen.getAllByRole('listitem')
     expect(rows[1]).toHaveTextContent(`mystery${copy.harnesses.unpriced}`)
   })
-  it('keeps the first run line to one sentence per state, with only priced cost', async () => {
+  it('keeps the one-line Harnesses (Weave’s view) to one sentence per state, with only priced cost', async () => {
     const { unmount } = renderInRouter(<HarnessesLine data={data({})} days={30} />)
     const line = await screen.findByTestId('overview-harnesses')
     expect(line).toHaveTextContent(`${copy.harnesses.noneYet}·${copy.harnesses.connect}.`)
@@ -468,6 +469,34 @@ describe('Harnesses', () => {
     second.unmount()
     const retry = vi.fn()
     renderInRouter(<HarnessesLine data={data({ error: new Error('x'), retry })} days={30} />)
+    await userEvent.click(await screen.findByRole('button', { name: copy.retry }))
+    expect(retry).toHaveBeenCalled()
+  })
+  it('gives the first run harness cell one status per state, with only priced cost', async () => {
+    const { unmount } = renderInRouter(<HarnessCell data={data({})} days={30} />)
+    const cell = await screen.findByTestId('overview-harnesses')
+    expect(cell).toHaveTextContent(`${copy.harnesses.title}${copy.setUpNow.noHarnesses}`)
+    expect(within(cell).getByRole('link')).toHaveAttribute('href', '/harnesses')
+    unmount()
+    const second = renderInRouter(
+      <HarnessCell
+        data={data({
+          connected: 2,
+          ownOnly: true,
+          harnesses: [
+            { id: 'claude-code', cost: 12, unpriced: false },
+            { id: 'mystery', cost: 3, unpriced: true },
+          ],
+        })}
+        days={30}
+      />,
+    )
+    expect(await screen.findByTestId('overview-harnesses')).toHaveTextContent(
+      `${copy.harnesses.connected(2)} (${copy.kpi.yourUsage}) · ${copy.harnesses.lineCost('$12.00', 30)}`,
+    )
+    second.unmount()
+    const retry = vi.fn()
+    renderInRouter(<HarnessCell data={data({ error: new Error('x'), retry })} days={30} />)
     await userEvent.click(await screen.findByRole('button', { name: copy.retry }))
     expect(retry).toHaveBeenCalled()
   })

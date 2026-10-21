@@ -4,6 +4,7 @@
  */
 import { BookOpen, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import { useAgentsDirectory } from '@/features/agents/api'
 import { useConfigs } from '@/features/router/api'
 import { cn } from '@/lib/utils'
@@ -42,9 +43,20 @@ export function GuideSteps({ buttonClassName }: { buttonClassName?: string }) {
   const t = useTicks()
   // "Resume" only once a step is done: before that there is nothing to resume.
   const started = t.role || t.model || t.agent
+  const done = ROWS.filter(([id]) => t[id]).length
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">{copy.card.intro}</p>
+      <div className="flex max-w-xl items-center gap-3">
+        <Progress
+          value={(done / ROWS.length) * 100}
+          aria-label={copy.card.progress(done, ROWS.length)}
+          className="h-1.5"
+        />
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          {copy.card.progress(done, ROWS.length)}
+        </span>
+      </div>
       {/* Each row opens the guide at its own step; the button below opens it at the first one not done. */}
       <ul className="-mx-2 flex max-w-xl flex-col">
         {ROWS.map(([id, s]) => (
