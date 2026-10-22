@@ -5,7 +5,8 @@
  * VITE_NASIKO_ALLOW_MOCK_BUILD  true           let a production build honour mock mode (deliberate demo builds only)
  * VITE_NASIKO_MOCK              comma list     in live mode, endpoints MSW still mocks (e.g. "top-traces")
  * VITE_NASIKO_LEGACY_UI_URL     http(s) URL    where trace links open (the existing nasiko UI)
- * VITE_NASIKO_WAITLIST_URL      http(s) URL    the Nasiko waitlist page the OSS app links to (default https://nasiko-waitlist.vercel.app)
+ * VITE_NASIKO_WAITLIST_URL      http(s) URL    the Nasiko waitlist page the OSS app links to (default https://nasiko-waitlist.vercel.app);
+ *                                              `off` (any non-URL) hides every waitlist link, as the desktop app's build does
  * NASIKO_API_URL                (vite.config.ts) proxy target for /api — server-side only
  */
 type ApiMode = 'mock' | 'live'

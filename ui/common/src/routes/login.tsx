@@ -18,6 +18,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { useSlots } from '@/app/edition-context'
 import { copy } from '@/app/shell/copy'
+import { ForgotPasswordLink } from '@/app/shell/ForgotPassword'
 import { LoginGlow, LoginShowcase } from '@/app/shell/LoginShowcase'
 import { NasikoLockup } from '@/app/shell/NasikoMark'
 import { WaitlistLoginLink } from '@/app/shell/WaitlistCta'
@@ -265,6 +266,7 @@ function LoginPage() {
                 </Button>
               </FieldGroup>
             </form>
+            <ForgotPasswordLink />
             {LoginMethods ? (
               <LoginMethods
                 returnTo={returnTo}

@@ -13,7 +13,8 @@ describe('env', () => {
     )
     expect(url({ PROD: true })).toBe('https://nasiko-waitlist.vercel.app/?ref=oss-app')
     expect(url({ DEV: true })).toBe('https://nasiko-waitlist.vercel.app/?ref=oss-app')
-    for (const bad of ['javascript:alert(1)', '//example.com', 'example.com', 'https://'])
+    // `off` is how the desktop app's build hides the links (ui/desktop-tauri/web-build.env).
+    for (const bad of ['off', 'javascript:alert(1)', '//example.com', 'example.com', 'https://'])
       expect(url({ VITE_NASIKO_WAITLIST_URL: bad, DEV: true }), bad).toBeNull()
   })
 
