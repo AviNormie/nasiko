@@ -4,23 +4,39 @@
 //! `nasiko agents install <id>` goes further: it registers that agent in
 //! the control plane and installs a hook that durably queues completed turns
 //! for delivery to the cluster active when they were captured.
+//! `nasiko agents setup` installs every detected agent and imports the sessions
+//! they kept from before (`import`), newest first, reporting its progress to
+//! the server (`onboarding`).
 
 mod agents;
+mod background;
+mod backlog;
 mod catalog;
 mod control_plane;
+mod courier;
+mod import;
 mod launcher;
+mod ledger;
 mod model;
+mod onboarding;
+mod pace;
 mod queue;
 mod report;
+mod sanitize;
+mod setup;
 mod state;
 mod sync;
+mod windows;
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 use agents::Agent;
 use catalog::Support;
+use onboarding::AgentReport;
 use state::{AgentState, InstallationBinding, IntegrationState};
+
+pub use setup::SetupOptions;
 
 /// Options accepted by `nasiko agents install`.
 pub struct InstallOptions<'a> {
@@ -133,8 +149,46 @@ pub fn report(agent_id: &str) -> Result<()> {
     report::run(resolve(agent_id)?)
 }
 
-pub fn sync() -> Result<()> {
-    sync::run()
+/// `nasiko agents sync` — see [`setup::sync`].
+pub fn sync(retry_rejected: bool) -> Result<()> {
+    setup::sync(retry_rejected)
+}
+
+/// `nasiko agents setup` — see [`setup`].
+pub fn setup(options: SetupOptions) -> Result<()> {
+    setup::setup(options)
+}
+
+/// `nasiko agents import` — see [`setup`].
+pub fn import() -> Result<()> {
+    setup::import()
+}
+
+/// `nasiko agents status` — see [`setup::status`].
+pub fn import_status() -> Result<()> {
+    setup::status()
+}
+
+/// `nasiko agents import-worker`, which `nasiko agents setup` starts in the background — see
+/// [`setup::import_worker`].
+pub fn import_worker() -> Result<()> {
+    setup::import_worker()
+}
+
+/// Every catalogued agent as a sync-report row: on this computer, and connected, as they stand now.
+fn agent_rows() -> Vec<AgentReport> {
+    let settings = IntegrationState::load().unwrap_or_default();
+    Agent::ALL
+        .iter()
+        .copied()
+        .map(|agent| {
+            onboarding::agent_row(
+                agent,
+                detect(agent).is_present(),
+                agent.is_instrumented() && settings.get(agent.spec().id).is_some(),
+            )
+        })
+        .collect()
 }
 
 /// Discover and install every supported local coding agent after a successful
@@ -199,11 +253,8 @@ pub fn auto_install_if_authenticated() {
         );
         return;
     }
-    if let Err(error) = auto_install_detected() {
-        eprintln!(
-            "warning: automatic coding-agent discovery failed: {error:#}\n  Retry with: nasiko agents discover"
-        );
-    }
+    // Nothing touches the user's coding agents until they run `nasiko agents setup` themselves.
+    setup::print_setup_hint();
 }
 
 // ─── Detection ───────────────────────────────────────────────────────────────

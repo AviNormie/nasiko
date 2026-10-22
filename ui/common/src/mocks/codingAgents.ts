@@ -1,0 +1,557 @@
+/**
+ * Coding-agent onboarding mock (contract v3, oss/server/src/coding_agent_onboarding.rs and the desktop app's
+ * `/__nasiko/coding-agents/*`).
+ *
+ * - The server's sync runs (`/api/me/coding-agents/sync`, bare JSON, plain-text errors): what the browser shows.
+ *   `?mock=agents-importing|sending|rejected` run a scripted client, so the history windows fill newest first, the
+ *   queued turns drain (phase `sending`) and the import finishes while you watch; OpenCode ends with refused turns, and
+ *   Retry (`POST …/sync/{device_id}/retry`, 404 for a device with no run) makes the client resend them.
+ *   `agents-none` has no run yet, `agents-done` a finished one, `agents-absent` a server without the routes. Every
+ *   variant but `agents-absent` is a viewer with no registered harness yet (handlers.ts `onboardingSeed`).
+ * - The desktop app (`/__nasiko/coding-agents/state|start|decline|retry`): a 404 by default, as a browser gets.
+ *   `?mock=desktop-unasked|running|failed|rejected` answer as the desktop app, with its local consent and run.
+ *
+ * Tests start with no runs and no desktop, so the card stays hidden on every page test whose viewer has harnesses.
+ */
+import { http, HttpResponse, type HttpHandler } from 'msw'
+
+type Consent = 'unasked' | 'granted' | 'declined'
+type Phase =
+  'awaiting_consent' | 'discovering' | 'connecting' | 'importing' | 'sending' | 'done' | 'failed'
+type ImportStatus = 'waiting' | 'running' | 'done' | 'failed' | 'skipped'
+
+export type MockSyncWindow = {
+  label: string
+  status: 'waiting' | 'running' | 'done'
+  sessions: number
+  turns: number
+}
+
+export type MockSyncAgent = {
+  id: string
+  name: string
+  detected: boolean
+  connected: boolean
+  import: {
+    status: ImportStatus
+    done: number
+    total: number
+    sessions: number
+    turns: number
+    failed: number
+    error: string | null
+    pending: number
+    rejected: number
+    rejected_reasons: { reason: string; count: number }[]
+  }
+}
+
+export type MockSyncRun = {
+  device_id: string
+  device_name: string
+  client: 'desktop' | 'cli'
+  phase: Phase
+  agents: MockSyncAgent[]
+  error: string | null
+  started_at: string | null
+  updated_at: string
+  windows: MockSyncWindow[]
+  retry_requested_at: string | null
+}
+
+/** The desktop app's local side: its consent, and its run (scripted, or a fixed one). */
+export interface DesktopMockState {
+  consent: Consent
+  signedIn: boolean
+  /** When the scripted client started (ms), or null. */
+  scriptStart: number | null
+  retryAt: number | null
+  /** A fixed run in place of the script (the failed one). */
+  run: MockLocalRun | null
+  /** The next N starts answer 500, as a desktop that couldn't start. */
+  failStarts: number
+}
+
+export type MockLocalRun = Omit<
+  MockSyncRun,
+  'device_id' | 'device_name' | 'client' | 'retry_requested_at'
+>
+
+export interface CodingAgentsState {
+  runs: MockSyncRun[]
+  /** A server without the routes: every read and write is a bare 404. */
+  absent: boolean
+  /** Browser demo: when the scripted client started (ms), or null. */
+  scriptStart: number | null
+  /** When a Retry was asked of the scripted client (ms), or null. */
+  retryAt: number | null
+  /** The desktop app, or null in a browser (its routes are a 404). */
+  desktop: DesktopMockState | null
+}
+
+/** `?mock=` states (page variants: they combine with the others). Mirrored by the Harnesses route's mock list. */
+export const AGENTS_ONBOARDING_VARIANTS = [
+  'agents-none',
+  'agents-importing',
+  'agents-sending',
+  'agents-rejected',
+  'agents-done',
+  'agents-absent',
+  'desktop-unasked',
+  'desktop-running',
+  'desktop-failed',
+  'desktop-rejected',
+] as const
+export type AgentsOnboardingVariant = (typeof AGENTS_ONBOARDING_VARIANTS)[number]
+
+const DEVICE_ID = '5eed0017000000000000000000000001'
+const DEVICE_NAME = 'Example MacBook'
+const DAY_MS = 86_400_000
+const STARTED_AGO_MS = 60_000
+
+const agent = (
+  id: string,
+  name: string,
+  detected: boolean,
+  imp: Partial<MockSyncAgent['import']> = {},
+): MockSyncAgent => ({
+  id,
+  name,
+  detected,
+  connected: detected,
+  import: {
+    status: detected ? 'waiting' : 'skipped',
+    done: 0,
+    total: 0,
+    sessions: 0,
+    turns: 0,
+    failed: 0,
+    error: null,
+    pending: 0,
+    rejected: 0,
+    rejected_reasons: [],
+    ...imp,
+  },
+})
+
+/** One run, built from its phase and agents (the device and timestamps are the mock's). */
+export function mockRun(
+  phase: Phase,
+  agents: MockSyncAgent[],
+  now: number,
+  extra: Partial<MockSyncRun> = {},
+): MockSyncRun {
+  return {
+    device_id: DEVICE_ID,
+    device_name: DEVICE_NAME,
+    client: 'desktop',
+    phase,
+    agents,
+    error: null,
+    started_at: phase === 'awaiting_consent' ? null : new Date(now - STARTED_AGO_MS).toISOString(),
+    updated_at: new Date(now).toISOString(),
+    windows: [],
+    retry_requested_at: null,
+    ...extra,
+  }
+}
+
+/** The four agents mid-import: Claude Code importing, Codex done, OpenCode waiting, Cursor not on this computer. */
+export function importingAgents(): MockSyncAgent[] {
+  return [
+    agent('claude', 'Claude Code', true, { status: 'running', done: 40, total: 123 }),
+    agent('codex', 'Codex', true, {
+      status: 'done',
+      done: 12,
+      total: 12,
+      sessions: 12,
+      turns: 58,
+    }),
+    agent('opencode', 'OpenCode', true, { status: 'waiting', total: 7 }),
+    agent('cursor', 'Cursor', false),
+  ]
+}
+
+/** The same agents once the import finished (one Claude Code session unreadable). */
+export function doneAgents(): MockSyncAgent[] {
+  return [
+    agent('claude', 'Claude Code', true, {
+      status: 'done',
+      done: 123,
+      total: 123,
+      sessions: 98,
+      turns: 753,
+      failed: 1,
+    }),
+    agent('codex', 'Codex', true, {
+      status: 'done',
+      done: 12,
+      total: 12,
+      sessions: 12,
+      turns: 58,
+    }),
+    agent('opencode', 'OpenCode', true, {
+      status: 'done',
+      done: 7,
+      total: 7,
+      sessions: 5,
+      turns: 31,
+    }),
+    agent('cursor', 'Cursor', false),
+  ]
+}
+
+/** OpenCode's refused turns: two reasons, as a client reports them. */
+export const REJECTED_REASONS = [
+  { reason: 'turn larger than 1 MB', count: 2 },
+  { reason: 'missing timestamp', count: 1 },
+]
+const REJECTED_TOTAL = REJECTED_REASONS.reduce((n, r) => n + r.count, 0)
+
+/** The finished agents with OpenCode's refused turns (and those turns not counted as imported). */
+export function rejectedAgents(): MockSyncAgent[] {
+  return doneAgents().map((a) =>
+    a.id === 'opencode'
+      ? {
+          ...a,
+          import: {
+            ...a.import,
+            turns: a.import.turns - REJECTED_TOTAL,
+            rejected: REJECTED_TOTAL,
+            rejected_reasons: REJECTED_REASONS,
+          },
+        }
+      : a,
+  )
+}
+
+/** The history a client reads, newest first: two recent windows, one per earlier day of the last month, then the rest.
+ *  `done` windows are finished; the next one is running unless `running` is false; the rest wait. */
+export function mockWindows(now: number, done: number, running = true): MockSyncWindow[] {
+  const day = (k: number) =>
+    new Date(now - k * DAY_MS).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    })
+  const labels = [
+    'Last 8 hours',
+    'Last 24 hours',
+    ...Array.from({ length: MONTH_DAYS - 2 }, (_, i) => day(i + 2)),
+    'Older',
+  ]
+  return labels.map((label, i) => {
+    const sessions = i === 0 ? 12 : i === 1 ? 9 : label === 'Older' ? 30 : (i % 3) + 1
+    return {
+      label,
+      status: i < done ? 'done' : i === done && running ? 'running' : 'waiting',
+      sessions,
+      turns: sessions * 6,
+    }
+  })
+}
+const MONTH_DAYS = 30
+/** Windows in `mockWindows`: the last month's, plus "Older". */
+const WINDOW_COUNT = MONTH_DAYS + 1
+
+// The scripted client (browser demo): seconds after it starts. The last month takes the first 70% of the sessions,
+// "Older" the rest; then the queued turns drain, `sendPerSecond` at a time; a Retry resends in `resend` seconds.
+const SCRIPT = {
+  discover: 3,
+  connect: 5,
+  import: 7,
+  perSecond: 12,
+  sendTotal: 48,
+  sendPerSecond: 12,
+  resend: 3,
+} as const
+const MONTH_SHARE = 0.7
+const SCRIPT_TOTALS = { claude: 123, codex: 12, opencode: 7 } as const
+const SCRIPT_SESSIONS = Object.values(SCRIPT_TOTALS).reduce((n, t) => n + t, 0)
+const IMPORT_SECONDS = SCRIPT_SESSIONS / SCRIPT.perSecond
+const SEND_SECONDS = SCRIPT.sendTotal / SCRIPT.sendPerSecond
+/** An agent's import before it starts. */
+const EMPTY = { status: 'waiting', done: 0, sessions: 0, turns: 0, failed: 0 } as const
+
+/** Windows finished once `share` of the sessions are read. */
+function windowsAt(share: number, now: number): MockSyncWindow[] {
+  const month = Math.min(MONTH_DAYS, Math.floor((share / MONTH_SHARE) * MONTH_DAYS))
+  return mockWindows(now, share >= 1 ? WINDOW_COUNT - 1 : month)
+}
+
+function importingRun(s: number, now: number): MockSyncRun {
+  // Sessions are imported one agent after another, in catalog order.
+  const read = Math.floor((s - SCRIPT.import) * SCRIPT.perSecond)
+  let budget = read
+  const agents = doneAgents().map((a): MockSyncAgent => {
+    const total = SCRIPT_TOTALS[a.id as keyof typeof SCRIPT_TOTALS]
+    if (total === undefined) return a
+    const done = Math.min(total, budget)
+    budget -= done
+    if (done === total) return a
+    const share = done / total
+    return {
+      ...a,
+      import: {
+        ...a.import,
+        status: done ? 'running' : 'waiting',
+        done,
+        sessions: Math.floor(a.import.sessions * share),
+        turns: Math.floor(a.import.turns * share),
+        failed: 0,
+      },
+    }
+  })
+  return mockRun('importing', agents, now, {
+    windows: windowsAt(Math.min(1, read / SCRIPT_SESSIONS), now),
+  })
+}
+
+/** Every window read: the queued turns drain (Claude Code's), then the run is done with OpenCode's turns refused. */
+function deliveringRun(s: number, now: number, retryAt: number | null): MockSyncRun {
+  const sent = Math.floor((s - SCRIPT.import - IMPORT_SECONDS) * SCRIPT.sendPerSecond)
+  const pending = Math.max(0, SCRIPT.sendTotal - sent)
+  const retried = retryAt !== null
+  const resending = retried && now - retryAt < SCRIPT.resend * 1000
+  const agents = rejectedAgents().map((a): MockSyncAgent => {
+    if (a.id === 'claude') return { ...a, import: { ...a.import, pending } }
+    if (a.id !== 'opencode' || !retried) return a
+    // A Retry re-queues the refused turns; they go through this time.
+    const turns = a.import.turns + (resending ? 0 : REJECTED_TOTAL)
+    return {
+      ...a,
+      import: {
+        ...a.import,
+        turns,
+        pending: resending ? REJECTED_TOTAL : 0,
+        rejected: 0,
+        rejected_reasons: [],
+      },
+    }
+  })
+  const sending = agents.some((a) => a.import.pending > 0)
+  return mockRun(sending ? 'sending' : 'done', agents, now, {
+    windows: mockWindows(now, sending ? WINDOW_COUNT - 1 : WINDOW_COUNT),
+    retry_requested_at: retried ? new Date(retryAt).toISOString() : null,
+  })
+}
+
+function scriptedRun(elapsedMs: number, now: number, retryAt: number | null): MockSyncRun | null {
+  const s = elapsedMs / 1000
+  if (s < SCRIPT.discover) return null
+  const before = (a: MockSyncAgent) => (a.detected ? { ...a.import, ...EMPTY } : a.import)
+  if (s < SCRIPT.connect)
+    return mockRun(
+      'discovering',
+      doneAgents().map((a) => ({ ...a, connected: false, import: before(a) })),
+      now,
+    )
+  if (s < SCRIPT.import)
+    return mockRun(
+      'connecting',
+      doneAgents().map((a) => ({ ...a, import: before(a) })),
+      now,
+    )
+  if (s < SCRIPT.import + IMPORT_SECONDS) return importingRun(s, now)
+  return deliveringRun(s, now, retryAt)
+}
+
+/** Seconds into the script for the `agents-sending` and `agents-rejected` states. */
+const SENDING_AT = SCRIPT.import + IMPORT_SECONDS + 1
+const REJECTED_AT = SCRIPT.import + IMPORT_SECONDS + SEND_SECONDS + 1
+
+/** The script just past discovery's start, so a desktop start answers with a run at once. */
+const DISCOVERING_AT = SCRIPT.discover
+
+const desktopBase = (over: Partial<DesktopMockState> = {}): DesktopMockState => ({
+  consent: 'granted',
+  signedIn: true,
+  scriptStart: null,
+  retryAt: null,
+  run: null,
+  failStarts: 0,
+  ...over,
+})
+
+/** A desktop run that stopped: the user signed out mid-import. */
+function failedLocalRun(now: number): MockLocalRun {
+  const {
+    device_id: _d,
+    device_name: _n,
+    client: _c,
+    retry_requested_at: _r,
+    ...run
+  } = mockRun('failed', importingAgents(), now, {
+    error: 'signed out of Nasiko',
+    windows: mockWindows(now, 4, false),
+  })
+  return run
+}
+
+/** The state for a `?mock=` variant (null: the tests' default). */
+export function buildCodingAgentsState(
+  variant: AgentsOnboardingVariant | null,
+  now: number,
+): CodingAgentsState {
+  const base: CodingAgentsState = {
+    runs: [],
+    absent: false,
+    scriptStart: null,
+    retryAt: null,
+    desktop: null,
+  }
+  switch (variant) {
+    case 'agents-importing':
+      return { ...base, scriptStart: now - (SCRIPT.import + 2) * 1000 }
+    case 'agents-sending':
+      return { ...base, scriptStart: now - SENDING_AT * 1000 }
+    case 'agents-rejected':
+      return { ...base, scriptStart: now - REJECTED_AT * 1000 }
+    case 'agents-done':
+      return {
+        ...base,
+        runs: [mockRun('done', doneAgents(), now, { windows: mockWindows(now, WINDOW_COUNT) })],
+      }
+    case 'agents-absent':
+      return { ...base, absent: true }
+    case 'desktop-unasked':
+      return { ...base, desktop: desktopBase({ consent: 'unasked' }) }
+    case 'desktop-running':
+      return {
+        ...base,
+        desktop: desktopBase({ scriptStart: now - (SCRIPT.import + 2) * 1000 }),
+      }
+    case 'desktop-failed':
+      return { ...base, desktop: desktopBase({ run: failedLocalRun(now) }) }
+    case 'desktop-rejected':
+      return { ...base, desktop: desktopBase({ scriptStart: now - REJECTED_AT * 1000 }) }
+    default:
+      return base
+  }
+}
+
+interface Ctx {
+  state: () => CodingAgentsState
+  now: () => number
+  loggedIn: () => boolean
+  unauthorized: () => Response
+  text: (body: string, status: number) => Response
+}
+
+function scriptedOf(st: CodingAgentsState, now: number): MockSyncRun | null {
+  return st.scriptStart === null ? null : scriptedRun(now - st.scriptStart, now, st.retryAt)
+}
+
+function runsOf(st: CodingAgentsState, now: number): MockSyncRun[] {
+  const scripted = scriptedOf(st, now)
+  const runs = scripted
+    ? [scripted, ...st.runs.filter((r) => r.device_id !== scripted.device_id)]
+    : st.runs
+  // The caller's rows updated in the last 24 h, newest first.
+  return [...runs]
+    .filter((r) => now - Date.parse(r.updated_at) <= DAY_MS)
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+}
+
+/** POST …/sync/{device_id}/retry: the scripted client resends on its own; a stored run just records the ask. */
+function requestRetry(st: CodingAgentsState, deviceId: string, now: number): MockSyncRun | null {
+  const stamp = new Date(now).toISOString()
+  const scripted = scriptedOf(st, now)
+  if (scripted?.device_id === deviceId) {
+    st.retryAt = now
+    return scriptedOf(st, now)
+  }
+  const stored = st.runs.find((r) => r.device_id === deviceId)
+  if (!stored) return null
+  const next = { ...stored, retry_requested_at: stamp, updated_at: stamp }
+  st.runs = st.runs.map((r) => (r === stored ? next : r))
+  return next
+}
+
+// ─── The desktop app ────────────────────────────────────────────────────────────────────────────────────────────────
+
+function localRun(d: DesktopMockState, now: number): MockLocalRun | null {
+  if (d.run) return d.run
+  const run = d.scriptStart === null ? null : scriptedRun(now - d.scriptStart, now, d.retryAt)
+  if (!run) return null
+  const { device_id: _d, device_name: _n, client: _c, retry_requested_at: _r, ...local } = run
+  return local
+}
+
+const desktopState = (d: DesktopMockState, now: number) => ({
+  desktop: true,
+  consent: d.consent,
+  signed_in: d.signedIn,
+  run: localRun(d, now),
+})
+
+/** Start (or start again): consent granted, and the scripted client begins at discovery, unless a run is active. */
+function startDesktop(d: DesktopMockState, now: number) {
+  d.consent = 'granted'
+  const run = localRun(d, now)
+  if (run && run.phase !== 'done' && run.phase !== 'failed') return
+  d.run = null
+  d.retryAt = null
+  d.scriptStart = now - DISCOVERING_AT * 1000
+}
+
+function desktopHandlers(ctx: Ctx): HttpHandler[] {
+  const BASE = '/__nasiko/coding-agents'
+  // No desktop: the server's 404, as a browser gets for this path.
+  const desktop = () => ctx.state().desktop
+  const absent = () => new HttpResponse('Not Found', { status: 404 })
+  return [
+    http.get(`${BASE}/state`, () => {
+      const d = desktop()
+      return d ? HttpResponse.json(desktopState(d, ctx.now())) : absent()
+    }),
+    http.post(`${BASE}/start`, () => {
+      const d = desktop()
+      if (!d) return absent()
+      if (!d.signedIn) return ctx.text('sign in to Nasiko first', 409)
+      if (d.failStarts > 0) {
+        d.failStarts -= 1
+        return ctx.text('the desktop app could not start the import', 500)
+      }
+      startDesktop(d, ctx.now())
+      return HttpResponse.json(desktopState(d, ctx.now()), { status: 202 })
+    }),
+    http.post(`${BASE}/decline`, () => {
+      const d = desktop()
+      if (!d) return absent()
+      d.consent = 'declined'
+      return HttpResponse.json(desktopState(d, ctx.now()))
+    }),
+    http.post(`${BASE}/retry`, () => {
+      const d = desktop()
+      if (!d) return absent()
+      const now = ctx.now()
+      // A failed run restarts; otherwise the refused turns are re-queued.
+      if (localRun(d, now)?.phase === 'failed') startDesktop(d, now)
+      else d.retryAt = now
+      return HttpResponse.json(desktopState(d, now), { status: 202 })
+    }),
+  ]
+}
+
+export function codingAgentsHandlers(ctx: Ctx): HttpHandler[] {
+  const gate = () => {
+    if (!ctx.loggedIn()) return ctx.unauthorized()
+    if (ctx.state().absent) return new HttpResponse(null, { status: 404 })
+    return null
+  }
+  return [
+    ...desktopHandlers(ctx),
+    http.get('/api/me/coding-agents/sync', () => {
+      const stop = gate()
+      if (stop) return stop
+      return HttpResponse.json({ runs: runsOf(ctx.state(), ctx.now()) })
+    }),
+    http.post('/api/me/coding-agents/sync/:deviceId/retry', ({ params }) => {
+      const stop = gate()
+      if (stop) return stop
+      const run = requestRetry(ctx.state(), String(params.deviceId), ctx.now())
+      return run ? HttpResponse.json(run) : ctx.text('no sync run for that device', 404)
+    }),
+  ]
+}

@@ -32,3 +32,18 @@ export const HARNESSES = [
   { id: 'opencode', name: 'OpenCode', color: 'var(--chart-3)', edge: 'var(--chart-3-edge)' },
   { id: 'cursor', name: 'Cursor', color: 'var(--chart-4)', edge: 'var(--chart-4-edge)' },
 ] as const
+
+/** Coding-agent onboarding: how often the card re-reads the server's sync runs while one reads history. */
+export const SYNC_POLL_MS = 2_000
+/** While runs only deliver turns already read (phase `sending`) or wait for a requested Retry, the card re-reads less
+ *  often: nothing on screen moves faster than the client's own retry backoff. */
+export const SYNC_SENDING_POLL_MS = 10_000
+/** With no run yet, the card (while it and the page are visible) looks for one this often: someone may run the
+ *  command at any moment. */
+export const SYNC_IDLE_POLL_MS = 10_000
+/** In the desktop app, the local state is re-read this often while a run is active (no network involved). */
+export const DESKTOP_STATE_POLL_MS = 1_000
+/** The import timeline shows this many finished windows before "Show all". */
+export const SYNC_DONE_WINDOWS_SHOWN = 3
+/** The label local clients give the window of history older than the last 30 days (the contract's v2 `windows`). */
+export const OLDER_WINDOW_LABEL = 'Older'

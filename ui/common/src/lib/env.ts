@@ -38,9 +38,13 @@ export const MOCKABLE = [
   'mcp',
   'workflows',
   'onboarding',
+  // Coding-agent sync progress and the desktop app's local routes (the Harnesses onboarding card).
+  'coding-agents',
   'optimization',
   // The proposed agent event log (plans/feat-agent-centric.md PR1a): change markers on the agent hub.
   'events',
+  // The Overview's proposed estate, problem state and pins (docs/requirements/overview.md OV-1..OV-3).
+  'overview',
 ] as const
 export type Mockable = (typeof MOCKABLE)[number]
 

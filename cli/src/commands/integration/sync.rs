@@ -1,63 +1,158 @@
 //! Destination-bound delivery for queued coding-agent telemetry.
+//!
+//! A failed delivery is retried, never dropped, unless retrying can't help:
+//!
+//! | Failure | What happens to the batch's turns |
+//! | --- | --- |
+//! | HTTP 429 or 503 with `Retry-After` (the server is pacing its clients) | Every turn for that server waits exactly as long as it asked (plus a little jitter), no attempt counted |
+//! | HTTP 413 (the batch is too large) | Sent again at once in halves, down to one turn; a single turn still too large is set aside |
+//! | Network (connect, DNS, timeout), HTTP 5xx, 408, 429, or a reply that isn't one result per event | Retried after 1 min, then 2, 4 … up to 1 h, as often as it takes; set aside only once 30 days old |
+//! | HTTP 401, 403, or this computer's sign-in no longer matches the turn's destination | Kept, no attempt counted, until the user signs in again |
+//! | The server rejects an event, or any other HTTP 4xx for the batch | Set aside with the server's reason |
+//!
+//! Set-aside turns go to `rejected/`, from where `nasiko agents sync --retry-rejected` brings them back.
+//!
+//! One batch is in flight per computer at a time: every delivery (a hook's, an import's courier, a
+//! `nasiko agents sync`) holds the queue's sync lock while it sends, one batch after another, at the
+//! size [`Pace`] allows.
 
 use anyhow::Result;
-use nasiko_types::{
-    CODING_AGENT_BATCH_MAX_EVENTS, CodingAgentEventBatchRequest, CodingAgentEventStatus,
-};
+use chrono::{DateTime, Utc};
+use nasiko_types::{CodingAgentEventBatchRequest, CodingAgentEventStatus};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use super::pace;
+pub use super::pace::Pace;
 use super::queue::{self, DeliveryState, QueueDestination, QueueRecord};
+use crate::api::Attempt;
 use crate::config::{ClusterEntry, Config};
 
-const MAX_DELIVERY_ATTEMPTS: u32 = 5;
+/// How long a delivery waits for another one (a hook's) to finish before leaving the turns to it.
+const LOCK_WAIT: Duration = Duration::from_millis(250);
+/// Bytes of events one batch may carry: under the server's 8 MiB request limit with room for the
+/// request envelope.
+const BATCH_BYTE_BUDGET: usize = 6 * 1024 * 1024;
+/// Bounds each batch request.
+const BATCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// The first retry after a transient failure; each further failure doubles it, up to [`MAX_RETRY_SECS`].
+const FIRST_RETRY_SECS: i64 = 60;
+const MAX_RETRY_SECS: i64 = 60 * 60;
+/// A turn still undelivered this long after it was queued is set aside.
+const MAX_UNDELIVERED_DAYS: i64 = 30;
+const EXPIRED_REASON: &str = "expired after 30 days undelivered";
+/// A run waits for this many empty scans in a row before it stops, so turns a hook is writing as it
+/// starts are delivered too.
+const QUIET_SCANS: u32 = 2;
+const QUIET_SCAN_INTERVAL: Duration = Duration::from_millis(100);
 
+/// What one delivery did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pass {
+    /// Turns the server took (accepted, or already had).
+    pub delivered: usize,
+    /// Turns set aside.
+    pub set_aside: usize,
+    /// Why the turns that are left can't be delivered until the user acts (signed out, or signed in as
+    /// someone else); `None` when they are only waiting for a retry.
+    pub blocked: Option<String>,
+}
+
+impl Pass {
+    fn progressed(&self) -> bool {
+        self.delivered + self.set_aside > 0
+    }
+
+    fn absorb(&mut self, other: Pass) {
+        self.delivered += other.delivered;
+        self.set_aside += other.set_aside;
+        self.blocked = other.blocked.or(self.blocked.take());
+    }
+}
+
+/// How a failed delivery is treated; see the module docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Failure {
+    Transient(String),
+    Unauthorized(String),
+    Permanent(String),
+}
+
+/// What sending one batch came to.
+#[derive(Debug)]
+enum Sent {
+    /// Answered (or failed in a way [`fail_all`] has dealt with).
+    Done(Pass),
+    /// Refused as too large: nothing was recorded, the batch can be sent again smaller.
+    TooLarge(String),
+    /// The server is pacing its clients: nothing was recorded, the destination waits this long.
+    Paced(chrono::Duration),
+}
+
+/// `nasiko agents sync` as a hook starts it: delivers what is due until the queue holds nothing more
+/// to send now, then stops. Turns waiting on a retry are left for a later run.
 pub fn run() -> Result<()> {
-    let _lock = queue::acquire_sync_lock(Duration::from_millis(250))?;
-    let started = std::time::Instant::now();
-    let mut quiescent_scans = 0;
-    loop {
-        let config = crate::config::load()?;
-        let records = queue::records()?;
-        if records.is_empty() {
-            if queue::has_pending_records()? && started.elapsed() < Duration::from_secs(300) {
-                std::thread::sleep(Duration::from_secs(1));
-                continue;
-            }
-            quiescent_scans += 1;
-            if quiescent_scans >= 2 {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-            continue;
+    let mut pace = Pace::default();
+    let mut quiet = 0;
+    while quiet < QUIET_SCANS {
+        if deliver_paced(&mut pace)?.progressed() {
+            quiet = 0;
+        } else {
+            quiet += 1;
+            std::thread::sleep(QUIET_SCAN_INTERVAL);
         }
-        quiescent_scans = 0;
-        let retry = sync_records(&config, records)?;
-        if !retry || started.elapsed() >= Duration::from_secs(300) {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(1));
     }
     Ok(())
 }
 
-fn sync_records(config: &Config, records: Vec<(PathBuf, QueueRecord)>) -> Result<bool> {
-    let mut retry = false;
-    let mut attempted_delivery = false;
+/// Delivers every queued turn that is due, batch by batch, until none is left that this attempt could
+/// send. Fails if another delivery holds the queue (it sends these too). Batches are as large as
+/// `pace` allows, which adapts as the server answers; one pace kept across passes (an import's
+/// courier) carries what it learned from one pass to the next.
+pub fn deliver_paced(pace: &mut Pace) -> Result<Pass> {
+    deliver_at(&super::state::integrations_dir(), crate::config::load, pace)
+}
+
+/// [`deliver_paced`] for the queue under `root`, with the sign-ins `load_config` reads.
+pub(super) fn deliver_at(
+    root: &Path,
+    load_config: impl Fn() -> Result<Config>,
+    pace: &mut Pace,
+) -> Result<Pass> {
+    let _lock = queue::acquire_sync_lock_at(root, LOCK_WAIT)?;
+    let mut total = Pass::default();
+    loop {
+        let config = load_config()?;
+        let records = queue::records_at(root)?;
+        if records.is_empty() {
+            break;
+        }
+        let pass = sync_records(&config, records, pace)?;
+        let progressed = pass.progressed();
+        total.absorb(pass);
+        if !progressed {
+            break;
+        }
+    }
+    Ok(total)
+}
+
+fn sync_records(
+    config: &Config,
+    records: Vec<(PathBuf, QueueRecord)>,
+    pace: &mut Pace,
+) -> Result<Pass> {
+    let mut pass = Pass::default();
     let mut groups: BTreeMap<(String, String, Uuid), Vec<(PathBuf, QueueRecord)>> = BTreeMap::new();
     for record in records {
         if record.1.delivery_state == DeliveryState::Rejected {
             queue::quarantine(&record.0, &record.1)?;
+            pass.set_aside += 1;
             continue;
         }
-        if record
-            .1
-            .next_attempt_at
-            .is_some_and(|at| at > chrono::Utc::now())
-        {
-            retry = true;
+        if record.1.next_attempt_at.is_some_and(|at| at > Utc::now()) {
             continue;
         }
         let destination = &record.1.destination;
@@ -80,22 +175,73 @@ fn sync_records(config: &Config, records: Vec<(PathBuf, QueueRecord)>) -> Result
             Ok(cluster) => cluster,
             Err(error) => {
                 defer_blocked_all(&records, &error)?;
+                pass.blocked = Some(error);
                 continue;
             }
         };
-        let client = crate::api::Client::from_cluster_entry_with_timeout(
-            cluster,
-            Some(Duration::from_secs(10)),
-        );
-        attempted_delivery = true;
-        for batch in records.chunks(CODING_AGENT_BATCH_MAX_EVENTS) {
-            retry |= deliver_batch(&client, batch)?;
-        }
+        let client =
+            crate::api::Client::from_cluster_entry_with_timeout(cluster, Some(BATCH_TIMEOUT));
+        pass.absorb(deliver_destination(&client, &records, pace)?);
     }
-    Ok(retry || attempted_delivery)
+    Ok(pass)
 }
 
-fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]) -> Result<bool> {
+/// Sends one destination's due turns, one batch at a time at the size `pace` allows: a batch refused
+/// as too large is sent again at once in halves, and a server that asks to be left alone holds back
+/// every turn for it (see [`queue::pause`]) until it said to come back.
+fn deliver_destination(
+    client: &crate::api::Client,
+    records: &[(PathBuf, QueueRecord)],
+    pace: &mut Pace,
+) -> Result<Pass> {
+    let mut pass = Pass::default();
+    let mut rest = records;
+    while !rest.is_empty() {
+        let (batch, after) = rest.split_at(batch_len(rest, pace.batch_size()));
+        let started = Instant::now();
+        match deliver_batch(client, batch)? {
+            Sent::Done(done) => {
+                pace.answered_in(started.elapsed());
+                pass.absorb(done);
+            }
+            Sent::TooLarge(_) if batch.len() > 1 => {
+                pace.too_large(batch.len());
+                continue;
+            }
+            Sent::TooLarge(reason) => {
+                let (path, record) = &batch[0];
+                reject(path, record, format!("permanently rejected: {reason}"))?;
+                pass.set_aside += 1;
+            }
+            Sent::Paced(wait) => {
+                let destination_dir = batch[0].0.parent().unwrap_or(Path::new("."));
+                queue::pause(destination_dir, pace::resume_at(wait, Utc::now()))?;
+                return Ok(pass);
+            }
+        }
+        rest = after;
+    }
+    Ok(pass)
+}
+
+/// How many of `records` the next batch takes: at most `max` turns and at most [`BATCH_BYTE_BUDGET`]
+/// bytes of events, but always at least one. A server over its body limit closes the connection
+/// before reading the body, so the client sees a broken pipe rather than the `413` — the batch has to
+/// fit before it is sent.
+fn batch_len(records: &[(PathBuf, QueueRecord)], max: usize) -> usize {
+    let mut bytes = 0usize;
+    let mut len = 0usize;
+    for (_, record) in records.iter().take(max.max(1)) {
+        bytes += serde_json::to_vec(&record.event).map_or(0, |event| event.len());
+        if len > 0 && bytes > BATCH_BYTE_BUDGET {
+            break;
+        }
+        len += 1;
+    }
+    len.max(1)
+}
+
+fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]) -> Result<Sent> {
     let request = CodingAgentEventBatchRequest {
         events: records
             .iter()
@@ -103,9 +249,23 @@ fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]
             .collect(),
     };
     let response = match client.post_coding_agent_batch(&request) {
-        Ok(response) => response,
+        Ok(Attempt::Ok(response)) => response,
+        Ok(Attempt::Rejected(failure)) => {
+            let server_wait = failure
+                .retry_after()
+                .and_then(|value| pace::server_wait(value, Utc::now()));
+            if let Some(sent) = server_directed(failure.status, failure.message(), server_wait) {
+                return Ok(sent);
+            }
+            return fail_all(records, classify_status(failure.status, failure.message()))
+                .map(Sent::Done);
+        }
         Err(error) => {
-            return defer_delivery_all(records, &format!("delivery failed: {error:#}"));
+            return fail_all(
+                records,
+                Failure::Transient(format!("delivery failed: {error:#}")),
+            )
+            .map(Sent::Done);
         }
     };
     let response_matches = response.results.len() == records.len()
@@ -115,76 +275,138 @@ fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]
             .zip(records)
             .all(|(result, (_, record))| result.event_id == record.event.event_id);
     if !response_matches {
-        return defer_delivery_all(
+        return fail_all(
             records,
-            "server response did not contain one ordered result per event",
-        );
+            Failure::Transient(
+                "server response did not contain one ordered result per event".into(),
+            ),
+        )
+        .map(Sent::Done);
     }
+    let mut pass = Pass::default();
     for (result, (path, record)) in response.results.into_iter().zip(records) {
         match result.status {
             CodingAgentEventStatus::Accepted | CodingAgentEventStatus::Duplicate => {
                 queue::remove(path)?;
+                pass.delivered += 1;
             }
             CodingAgentEventStatus::Rejected => {
                 let reason = result
                     .error
                     .unwrap_or_else(|| "server rejected event".into());
                 reject(path, record, format!("permanently rejected: {reason}"))?;
+                pass.set_aside += 1;
             }
         }
     }
-    Ok(false)
+    Ok(Sent::Done(pass))
 }
 
+/// An HTTP error that says how to send again rather than what became of the turns: a `429` or `503`
+/// with a `Retry-After` that could be read (`server_wait`), or a `413`. Nothing is recorded for these.
+fn server_directed(
+    status: u16,
+    message: &str,
+    server_wait: Option<chrono::Duration>,
+) -> Option<Sent> {
+    match (status, server_wait) {
+        (429 | 503, Some(wait)) => Some(Sent::Paced(wait)),
+        (413, _) => Some(Sent::TooLarge(format!("HTTP 413: {message}"))),
+        _ => None,
+    }
+}
+
+/// What an HTTP error for a whole batch means for its turns.
+fn classify_status(status: u16, message: &str) -> Failure {
+    let reason = format!("HTTP {status}: {message}");
+    match status {
+        401 | 403 => Failure::Unauthorized(reason),
+        408 | 429 | 500..=599 => Failure::Transient(reason),
+        _ => Failure::Permanent(reason),
+    }
+}
+
+fn fail_all(records: &[(PathBuf, QueueRecord)], failure: Failure) -> Result<Pass> {
+    let mut pass = Pass::default();
+    for (path, record) in records {
+        match &failure {
+            Failure::Transient(reason) => {
+                if retry_later(path, record, reason.clone(), Utc::now())? {
+                    pass.set_aside += 1;
+                }
+            }
+            Failure::Permanent(reason) => {
+                reject(path, record, format!("permanently rejected: {reason}"))?;
+                pass.set_aside += 1;
+            }
+            Failure::Unauthorized(reason) => {
+                defer_unauthorized(path, record, reason)?;
+                pass.blocked = Some(reason.clone());
+            }
+        }
+    }
+    Ok(pass)
+}
+
+/// Turns whose destination isn't usable from here wait, uncounted, for the next delivery after the
+/// user fixes it.
 fn defer_blocked_all(records: &[(PathBuf, QueueRecord)], error: &str) -> Result<()> {
     for (path, record) in records {
         let mut record = record.clone();
         record.delivery_state = DeliveryState::Deferred;
         record.last_error = Some(error.to_string());
-        record.updated_at = chrono::Utc::now();
+        record.updated_at = Utc::now();
         record.next_attempt_at = None;
         queue::update(path, &record)?;
     }
     Ok(())
 }
 
-fn defer_delivery_all(records: &[(PathBuf, QueueRecord)], error: &str) -> Result<bool> {
-    let mut retry = false;
-    for (path, record) in records {
-        retry |= defer_delivery(path, record, error.to_string())?;
-    }
-    Ok(retry)
+/// The server refused the sign-in: not the turn's fault, so no attempt is counted, but it waits the
+/// first retry interval rather than asking again at once.
+fn defer_unauthorized(path: &Path, record: &QueueRecord, error: &str) -> Result<()> {
+    let mut record = record.clone();
+    record.delivery_state = DeliveryState::Deferred;
+    record.last_error = Some(error.to_string());
+    record.updated_at = Utc::now();
+    record.next_attempt_at = Some(record.updated_at + chrono::Duration::seconds(FIRST_RETRY_SECS));
+    queue::update(path, &record)
 }
 
-fn defer_delivery(path: &std::path::Path, record: &QueueRecord, error: String) -> Result<bool> {
+/// Schedules another attempt after a transient failure, or sets the turn aside once it has waited
+/// [`MAX_UNDELIVERED_DAYS`]. Returns whether it was set aside.
+fn retry_later(
+    path: &Path,
+    record: &QueueRecord,
+    error: String,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    if now - record.created_at > chrono::Duration::days(MAX_UNDELIVERED_DAYS) {
+        reject(path, record, format!("{EXPIRED_REASON}: {error}"))?;
+        return Ok(true);
+    }
     let mut record = record.clone();
     record.delivery_state = DeliveryState::Deferred;
     record.last_error = Some(error);
-    record.updated_at = chrono::Utc::now();
+    record.updated_at = now;
     record.attempts = record.attempts.saturating_add(1);
-    if record.attempts >= MAX_DELIVERY_ATTEMPTS {
-        reject(
-            path,
-            &record,
-            format!(
-                "permanently rejected after {} delivery attempts: {}",
-                record.attempts,
-                record.last_error.as_deref().unwrap_or("delivery failed")
-            ),
-        )?;
-        return Ok(false);
-    }
-    let delay = 1_i64 << record.attempts.clamp(1, 6).saturating_sub(1);
-    record.next_attempt_at = Some(record.updated_at + chrono::Duration::seconds(delay));
+    record.next_attempt_at = Some(now + retry_delay(record.attempts));
     queue::update(path, &record)?;
-    Ok(true)
+    Ok(false)
 }
 
-fn reject(path: &std::path::Path, record: &QueueRecord, error: String) -> Result<()> {
+/// How long to wait after the `attempts`-th failure: 1 min, doubling, at most 1 h.
+fn retry_delay(attempts: u32) -> chrono::Duration {
+    let doublings = attempts.saturating_sub(1).min(i64::BITS - 2);
+    let seconds = FIRST_RETRY_SECS.saturating_mul(1_i64 << doublings);
+    chrono::Duration::seconds(seconds.min(MAX_RETRY_SECS))
+}
+
+fn reject(path: &Path, record: &QueueRecord, error: String) -> Result<()> {
     let mut record = record.clone();
     record.delivery_state = DeliveryState::Rejected;
     record.last_error = Some(error);
-    record.updated_at = chrono::Utc::now();
+    record.updated_at = Utc::now();
     queue::update(path, &record)?;
     queue::quarantine(path, &record).map(|_| ())
 }
@@ -272,6 +494,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn batches_stay_under_the_byte_budget_however_many_turns_are_allowed() {
+        let big = |turn: &str| {
+            let mut record = record("bound", "https://bound.example", "s", turn);
+            record.event.turn.prompt = Some("x".repeat(1_400_000));
+            (PathBuf::from(turn), record)
+        };
+        let records: Vec<_> = (0..10).map(|i| big(&format!("t{i}"))).collect();
+        // 1.4 MB turns: four fit in 6 MiB, the fifth would not.
+        assert_eq!(batch_len(&records, 100), 4);
+        assert_eq!(batch_len(&records, 2), 2);
+        // A single turn always goes, even alone over the budget.
+        let mut huge = big("solo");
+        huge.1.event.turn.prompt = Some("x".repeat(7_000_000));
+        assert_eq!(batch_len(std::slice::from_ref(&huge), 100), 1);
+    }
+
     fn record(name: &str, url: &str, session: &str, turn: &str) -> QueueRecord {
         let at = Utc.timestamp_opt(1, 0).unwrap();
         QueueRecord::new(
@@ -292,6 +531,7 @@ mod tests {
                     id: coding_agent_session_id("claude", session),
                     source_id: session.into(),
                     title: None,
+                    parent: None,
                 },
                 turn: CodingAgentTurn {
                     id: turn.into(),
@@ -363,14 +603,15 @@ mod tests {
             &dir,
             record("original", "https://old.example", "s", "url-change"),
         );
-        let retry = sync_records(
+        let pass = sync_records(
             &config("original", "https://new.example", Some(&token(Uuid::nil()))),
             vec![queued.clone()],
+            &mut Pace::default(),
         )
         .unwrap();
         assert!(
-            !retry,
-            "configuration mismatches wait for a later sync trigger"
+            pass.blocked.unwrap().contains("refusing to reroute"),
+            "configuration mismatches wait for the user"
         );
         let retained = queue::load(&queued.0).unwrap();
         assert_eq!(retained.delivery_state, DeliveryState::Deferred);
@@ -456,7 +697,16 @@ mod tests {
             registry_url: None,
         };
 
-        assert!(sync_records(&config, vec![first.clone(), second.clone()]).unwrap());
+        assert_eq!(
+            sync_records(
+                &config,
+                vec![first.clone(), second.clone()],
+                &mut Pace::default()
+            )
+            .unwrap()
+            .delivered,
+            2
+        );
         delivery.assert();
         assert!(!first.0.exists());
         assert!(!second.0.exists());
@@ -480,6 +730,7 @@ mod tests {
         sync_records(
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             vec![queued.clone()],
+            &mut Pace::default(),
         )
         .unwrap();
         assert!(!queued.0.exists());
@@ -502,6 +753,7 @@ mod tests {
         sync_records(
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             vec![queued.clone()],
+            &mut Pace::default(),
         )
         .unwrap();
         let retained = queue::load(&queued.0).unwrap();
@@ -509,31 +761,304 @@ mod tests {
         assert!(retained.last_error.unwrap().contains("one ordered result"));
     }
 
-    #[test]
-    fn fifth_delivery_failure_is_quarantined() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut record = record("bound", "https://bound.example", "s", "retry-cap");
-        record.attempts = MAX_DELIVERY_ATTEMPTS - 1;
-        let queued = queued(&dir, record);
+    fn only(dir: &Path) -> QueueRecord {
+        let files = queue::record_files(dir).unwrap();
+        assert_eq!(files.len(), 1, "one record in {}", dir.display());
+        queue::load(&files[0]).unwrap()
+    }
 
-        assert!(!defer_delivery(&queued.0, &queued.1, "offline".into()).unwrap());
-        assert!(!queued.0.exists());
-        let rejected = dir.path().join("rejected");
-        assert!(rejected.exists());
-        let rejected_group = std::fs::read_dir(rejected)
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        let rejected_path = std::fs::read_dir(rejected_group)
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        let rejected_record = queue::load(&rejected_path).unwrap();
-        assert_eq!(rejected_record.delivery_state, DeliveryState::Rejected);
-        assert_eq!(rejected_record.attempts, MAX_DELIVERY_ATTEMPTS);
+    fn batch_failing_with(status: usize) -> (mockito::ServerGuard, tempfile::TempDir, Pass) {
+        let mut server = mockito::Server::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = queue::enqueue_at(
+            dir.path(),
+            &record("bound", &server.url(), "s", &format!("http-{status}")),
+        )
+        .unwrap();
+        let record = queue::load(&path).unwrap();
+        server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .with_status(status)
+            .with_body(r#"{"message":"nope"}"#)
+            .create();
+        let pass = sync_records(
+            &config("bound", &server.url(), Some(&token(Uuid::nil()))),
+            vec![(path, record)],
+            &mut Pace::default(),
+        )
+        .unwrap();
+        (server, dir, pass)
+    }
+
+    #[test]
+    fn http_failures_are_classified_as_transient_unauthorized_or_permanent() {
+        let table = [
+            (408, "transient"),
+            (429, "transient"),
+            (500, "transient"),
+            (502, "transient"),
+            (503, "transient"),
+            (599, "transient"),
+            (401, "unauthorized"),
+            (403, "unauthorized"),
+            (400, "permanent"),
+            (404, "permanent"),
+            (422, "permanent"),
+        ];
+        for (status, expected) in table {
+            let kind = match classify_status(status, "m") {
+                Failure::Transient(_) => "transient",
+                Failure::Unauthorized(_) => "unauthorized",
+                Failure::Permanent(reason) => {
+                    assert_eq!(reason, format!("HTTP {status}: m"));
+                    "permanent"
+                }
+            };
+            assert_eq!(kind, expected, "HTTP {status}");
+        }
+    }
+
+    #[test]
+    fn a_server_error_keeps_the_batch_queued_for_a_retry_in_a_minute() {
+        let (_server, dir, pass) = batch_failing_with(503);
+
+        assert_eq!(pass, Pass::default());
+        let kept = only(&dir.path().join("queue"));
+        assert_eq!(kept.attempts, 1);
+        assert!(kept.last_error.unwrap().contains("HTTP 503"));
+        let wait = kept.next_attempt_at.unwrap() - kept.updated_at;
+        assert_eq!(wait, chrono::Duration::seconds(FIRST_RETRY_SECS));
+    }
+
+    #[test]
+    fn an_unreachable_server_is_transient() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing listens on port 9 of localhost.
+        let url = "http://127.0.0.1:9";
+        let path = queue::enqueue_at(dir.path(), &record("bound", url, "s", "down")).unwrap();
+        let record = queue::load(&path).unwrap();
+
+        let pass = sync_records(
+            &config("bound", url, Some(&token(Uuid::nil()))),
+            vec![(path, record)],
+            &mut Pace::default(),
+        )
+        .unwrap();
+
+        assert_eq!(pass, Pass::default());
+        assert_eq!(only(&dir.path().join("queue")).attempts, 1);
+    }
+
+    #[test]
+    fn a_client_error_sets_the_batch_aside_with_the_reason() {
+        let (_server, dir, pass) = batch_failing_with(422);
+
+        assert_eq!(pass.set_aside, 1);
+        assert!(queue::queued_ids_at(dir.path()).unwrap().is_empty());
+        let set_aside = only(&dir.path().join("rejected"));
+        assert_eq!(set_aside.delivery_state, DeliveryState::Rejected);
+        assert_eq!(
+            set_aside.last_error.as_deref(),
+            Some("permanently rejected: HTTP 422: nope")
+        );
+    }
+
+    #[test]
+    fn a_refused_sign_in_blocks_without_counting_an_attempt() {
+        let (_server, dir, pass) = batch_failing_with(401);
+
+        assert!(pass.blocked.unwrap().contains("HTTP 401"));
+        let kept = only(&dir.path().join("queue"));
+        assert_eq!(kept.attempts, 0);
+        assert!(kept.next_attempt_at.is_some());
+    }
+
+    #[test]
+    fn retries_back_off_from_a_minute_doubling_to_an_hour() {
+        let minutes: Vec<i64> = (1..=9)
+            .map(|attempts| retry_delay(attempts).num_minutes())
+            .collect();
+        assert_eq!(minutes, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+        assert_eq!(retry_delay(u32::MAX).num_minutes(), 60);
+    }
+
+    #[test]
+    fn transient_failures_never_set_a_young_turn_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = record("bound", "https://bound.example", "s", "patient");
+        record.created_at = Utc::now() - chrono::Duration::days(MAX_UNDELIVERED_DAYS - 1);
+        let path = queue::enqueue_at(dir.path(), &record).unwrap();
+
+        for _ in 0..100 {
+            let current = queue::load(&path).unwrap();
+            assert!(!retry_later(&path, &current, "offline".into(), Utc::now()).unwrap());
+        }
+
+        let kept = queue::load(&path).unwrap();
+        assert_eq!(kept.attempts, 100);
+        assert_eq!(kept.delivery_state, DeliveryState::Deferred);
+        assert!(!dir.path().join("rejected").exists());
+    }
+
+    #[test]
+    fn a_turn_undelivered_for_30_days_is_set_aside_as_expired() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut record = record("bound", "https://bound.example", "s", "stale");
+        record.created_at = Utc::now() - chrono::Duration::days(MAX_UNDELIVERED_DAYS + 1);
+        let path = queue::enqueue_at(dir.path(), &record).unwrap();
+
+        assert!(retry_later(&path, &record, "offline".into(), Utc::now()).unwrap());
+
+        assert!(!path.exists());
+        let expired = only(&dir.path().join("rejected"));
+        assert_eq!(expired.delivery_state, DeliveryState::Rejected);
+        assert!(expired.last_error.unwrap().starts_with(EXPIRED_REASON));
+    }
+
+    /// The event ids in a batch request's body.
+    fn requested_ids(request: &mockito::Request) -> Vec<String> {
+        let body: serde_json::Value =
+            serde_json::from_slice(request.body().expect("request body")).expect("JSON body");
+        body["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .map(|event| event["event_id"].as_str().expect("event id").to_string())
+            .collect()
+    }
+
+    /// The batch response a server that accepts every event in `request` sends.
+    fn accepted(request: &mockito::Request) -> Vec<u8> {
+        let results: Vec<serde_json::Value> = requested_ids(request)
+            .into_iter()
+            .map(|id| serde_json::json!({"event_id": id, "status": "accepted"}))
+            .collect();
+        serde_json::json!({"data": {"results": results}, "status_code": 200, "message": "ok"})
+            .to_string()
+            .into_bytes()
+    }
+
+    /// `turns` turns queued under `root` for the server at `url`.
+    fn enqueue_turns(root: &Path, url: &str, turns: usize) -> Vec<(PathBuf, QueueRecord)> {
+        (0..turns)
+            .map(|turn| {
+                let path = queue::enqueue_at(root, &record("bound", url, "s", &format!("t{turn}")))
+                    .unwrap();
+                let record = queue::load(&path).unwrap();
+                (path, record)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pacing_server_is_left_alone_exactly_as_long_as_it_asked() {
+        for (status, retry_after) in [
+            (429, "120".to_string()),
+            (
+                503,
+                (Utc::now() + chrono::Duration::seconds(121))
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string(),
+            ),
+        ] {
+            let mut server = mockito::Server::new();
+            let dir = tempfile::tempdir().unwrap();
+            let records = enqueue_turns(dir.path(), &server.url(), 3);
+            let paced = server
+                .mock("POST", "/api/telemetry/coding-agent/events/batch")
+                .with_status(status)
+                .with_header("retry-after", &retry_after)
+                .with_body("slow down")
+                .expect(1)
+                .create();
+            let config = config("bound", &server.url(), Some(&token(Uuid::nil())));
+            let before = Utc::now();
+
+            let pass = sync_records(&config, records.clone(), &mut Pace::default()).unwrap();
+            let again =
+                deliver_at(dir.path(), || Ok(config.clone()), &mut Pace::default()).unwrap();
+
+            paced.assert();
+            assert_eq!(pass, Pass::default(), "HTTP {status}");
+            assert_eq!(again, Pass::default(), "nothing is sent while paused");
+            let destination_dir = records[0].0.parent().unwrap();
+            let until = queue::paused_until(destination_dir, before).expect("paused");
+            assert!(
+                until >= before + chrono::Duration::seconds(119),
+                "HTTP {status}"
+            );
+            assert!(
+                until <= Utc::now() + chrono::Duration::seconds(121 + 13),
+                "HTTP {status}"
+            );
+            for (path, _) in &records {
+                let kept = queue::load(path).unwrap();
+                assert_eq!(kept.attempts, 0, "pacing is no failure of the turn's");
+                assert_eq!(kept.next_attempt_at, None);
+            }
+            let backlog = super::super::backlog::backlog_at(dir.path()).unwrap();
+            assert_eq!((backlog.pending(), backlog.due), (3, 0));
+            assert_eq!(backlog.next_attempt_at, Some(until));
+        }
+    }
+
+    #[test]
+    fn a_pacing_answer_without_retry_after_is_an_ordinary_transient_failure() {
+        let (_server, dir, pass) = batch_failing_with(429);
+
+        assert_eq!(pass, Pass::default());
+        assert_eq!(only(&dir.path().join("queue")).attempts, 1);
+    }
+
+    #[test]
+    fn a_batch_too_large_is_sent_again_at_once_in_halves() {
+        let mut server = mockito::Server::new();
+        let dir = tempfile::tempdir().unwrap();
+        let records = enqueue_turns(dir.path(), &server.url(), 3);
+        let too_large = server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .match_request(|request| requested_ids(request).len() > 1)
+            .with_status(413)
+            .with_body("too many events")
+            .expect(1)
+            .create();
+        let single = server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .match_request(|request| requested_ids(request).len() == 1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(accepted)
+            .expect(3)
+            .create();
+        let mut pace = Pace::default();
+
+        let pass = sync_records(
+            &config("bound", &server.url(), Some(&token(Uuid::nil()))),
+            records,
+            &mut pace,
+        )
+        .unwrap();
+
+        too_large.assert();
+        single.assert();
+        assert_eq!(pass.delivered, 3);
+        assert_eq!(
+            pace.batch_size(),
+            2,
+            "halved to one, then doubled by three fast answers in a row"
+        );
+        assert!(queue::queued_ids_at(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_single_turn_too_large_is_set_aside_with_the_reason() {
+        let (_server, dir, pass) = batch_failing_with(413);
+
+        assert_eq!(pass.set_aside, 1);
+        let set_aside = only(&dir.path().join("rejected"));
+        assert_eq!(
+            set_aside.last_error.as_deref(),
+            Some("permanently rejected: HTTP 413: nope")
+        );
     }
 }
