@@ -13,7 +13,7 @@ import type { Slots } from '@/app/edition'
 import { useSlots } from '@/app/edition-context'
 import { Link } from '@tanstack/react-router'
 import { Download, ListTree } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { DataTable, type DataTableColumn } from '@/components/shared/data-table'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
@@ -27,9 +27,11 @@ import { isHarness } from '@/features/agents/status'
 import { sessionRows, useChatSessions } from '@/features/chat/api'
 import { useSessionLookup } from '@/features/chat/sessionLookup'
 import { isMetadataOnly, type RecordedStep } from '@/features/chat/recorded'
+import { copy as obsCopy } from '@/features/observability/copy'
+import { detailSubagents, type SubagentRun } from '@/features/observability/sessions'
 import { ErrorState } from '@/features/observability/StateCard'
 import { useSessionDetail } from '@/features/sessions/api'
-import type { TraceSearch } from '@/features/sessions/search'
+import type { SessionsSearch, TraceSearch } from '@/features/sessions/search'
 import { downloadCsv } from '@/features/tokenops/csv'
 import { Crumbs } from '@/features/trace/Crumbs'
 import { isPreview } from '@/lib/env'
@@ -45,7 +47,19 @@ const LINK =
 const pct = (v: number) =>
   v > 0 && v < 0.1 ? '<0.1%' : `${v < 1 && v > 0 ? v.toFixed(1) : Math.round(v)}%`
 
-export function LedgerPage({ sessionId, search }: { sessionId: string; search: TraceSearch }) {
+/** A spawning tool call's id → the subagent session it started (R15). */
+type Spawned = ReadonlyMap<string, SubagentRun>
+
+export function LedgerPage({
+  sessionId,
+  search,
+  lineage,
+}: {
+  sessionId: string
+  search: TraceSearch
+  /** The parent link and the Subagents panel (R15), from the route; drawn under the header. */
+  lineage?: ReactNode
+}) {
   // Budgets are Enterprise only: an OSS build has no session budget here, and no per-turn budget column.
   const { LedgerSection: LedgerBudget, useLedgerBudgets } = useSlots().budgets
   const { query, ledger, complete, notOwner, refreshFailed } = useLedgerHistory(sessionId)
@@ -83,6 +97,12 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
     status: search.status,
     live: search.live,
   }
+  // Best effort: a subagent whose spawning call is one of this ledger's recorded calls marks that call.
+  const spawned: Spawned = new Map(
+    (session.data ? detailSubagents(session.data).subagents : []).flatMap((r) =>
+      r.spawnToolCallId ? [[r.spawnToolCallId, r] as const] : [],
+    ),
+  )
   const title = row?.title || session.data?.title || sessionId
   const firstAt = ledger?.turns[0]?.at ?? session.data?.traces[0]?.root_span.start_time
 
@@ -132,6 +152,8 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
         }
       />
 
+      {lineage}
+
       {notOwner ? (
         <NotOwner session={session} />
       ) : query.isPending ? (
@@ -154,6 +176,8 @@ export function LedgerPage({ sessionId, search }: { sessionId: string; search: T
           refreshFailed={refreshFailed}
           onRefresh={() => void query.refetch()}
           agentId={agent?.id ?? row?.agent_id ?? null}
+          spawned={spawned}
+          back={back}
         />
       ) : null}
       {/* The session's own budget (plans/feat-budget-burn.md F9, B5): its burn on its turns and its limit. */}
@@ -175,6 +199,8 @@ function LedgerBody({
   refreshFailed,
   onRefresh,
   agentId,
+  spawned,
+  back,
 }: {
   ledger: Ledger
   costHeader: string
@@ -186,6 +212,8 @@ function LedgerBody({
   refreshFailed: boolean
   onRefresh: () => void
   agentId: string | null
+  spawned: Spawned
+  back: Partial<SessionsSearch>
 }) {
   const preview = isPreview('chat')
   // When the last older page lands, Load older turns unmounts: focus moves to the turns instead of the page body.
@@ -245,7 +273,7 @@ function LedgerBody({
       >
         <DataTable
           label={c.label}
-          columns={columns(costHeader, preview, shares, days.size > 1)}
+          columns={columns(costHeader, preview, shares, days.size > 1, { spawned, back })}
           data={ledger.turns}
           getRowId={(r) => r.key}
           className="w-max min-w-full"
@@ -275,7 +303,9 @@ function LedgerBody({
         </div>
       ) : null}
 
-      {ledger.unplaced.length ? <Unplaced steps={ledger.unplaced} /> : null}
+      {ledger.unplaced.length ? (
+        <Unplaced steps={ledger.unplaced} links={{ spawned, back }} />
+      ) : null}
 
       {budgetPanel}
 
@@ -289,6 +319,7 @@ function columns(
   preview: boolean,
   shares: Map<string, number> | null,
   dated: boolean,
+  links: SpawnLinks,
 ): DataTableColumn<LedgerTurn>[] {
   const cols: DataTableColumn<LedgerTurn>[] = [
     {
@@ -331,7 +362,7 @@ function columns(
       header: c.tools,
       // Badges wrap inside a capped column, so the numbers stay in view on most screens.
       meta: { cellClassName: 'min-w-56 max-w-96 whitespace-normal' },
-      cell: ({ row }) => <Tools steps={row.original.tools} />,
+      cell: ({ row }) => <Tools steps={row.original.tools} links={links} />,
     },
     {
       id: 'tokens',
@@ -416,18 +447,42 @@ function totalText(t: Total, turns: number, fmt: (v: number) => string): string 
 
 const notReported = () => <span className="text-muted-foreground">{copy.notReported}</span>
 
-function Tools({ steps }: { steps: RecordedStep[] }) {
+interface SpawnLinks {
+  spawned: Spawned
+  back: Partial<SessionsSearch>
+}
+
+/** A ledger step's key is `<message id>:<call id>` (ledger.ts `buildLedger`); message ids are UUIDs, without colons. */
+const callIdOf = (key: string) => key.slice(key.indexOf(':') + 1)
+
+function Tools({ steps, links }: { steps: RecordedStep[]; links: SpawnLinks }) {
   if (!steps.length) return <span className="text-muted-foreground">{c.noTools}</span>
   return (
     <ul className="m-0 flex list-none flex-wrap gap-1 p-0">
-      {steps.map((s) => (
-        <li key={s.key}>
-          <Badge variant={s.status === 'error' ? 'destructive' : 'outline'}>
-            {s.name}
-            {s.statusWord ? ` · ${s.statusWord}` : ''}
-          </Badge>
-        </li>
-      ))}
+      {steps.map((s) => {
+        const child = links.spawned.get(callIdOf(s.key))
+        return (
+          <li key={s.key} className="inline-flex flex-wrap items-center gap-1">
+            <Badge variant={s.status === 'error' ? 'destructive' : 'outline'}>
+              {s.name}
+              {s.statusWord ? ` · ${s.statusWord}` : ''}
+            </Badge>
+            {child ? (
+              <Link
+                to="/sessions/$sessionId"
+                params={{ sessionId: child.sessionId }}
+                search={links.back}
+                aria-label={obsCopy.subagents.spawnedStepLabel(
+                  child.type ?? obsCopy.subagents.untyped,
+                )}
+                className="text-xs text-primary-text underline-offset-4 hover:underline"
+              >
+                {obsCopy.subagents.spawnedStep}
+              </Link>
+            ) : null}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -447,10 +502,10 @@ function Controls({ turn }: { turn: LedgerTurn }) {
   )
 }
 
-function Unplaced({ steps }: { steps: RecordedStep[] }) {
+function Unplaced({ steps, links }: { steps: RecordedStep[]; links: SpawnLinks }) {
   return (
     <Panel title={c.turnNotRecorded} subtitle={c.unplacedNote(steps.length)}>
-      <Tools steps={steps} />
+      <Tools steps={steps} links={links} />
     </Panel>
   )
 }

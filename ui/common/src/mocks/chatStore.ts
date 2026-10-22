@@ -12,6 +12,7 @@ import {
   TRUNCATION_MARKER,
 } from '@/features/chat/serverContract'
 import { SHOWCASE_SESSION } from './observability'
+import { SPAWN_CALLS } from './subagents'
 import {
   AGENT_1,
   AGENT_2,
@@ -222,6 +223,8 @@ function flowSteps(frames: readonly MockFrame[]): FlowStep[] {
 
 /** Read-only view for other mock groups and tests. */
 export const chatMockRows = (): ChatSessionRow[] => [...chats.values()].map((c) => c.row)
+/** The rows as the chat list answers them, with their message counts. */
+export const chatMockListRows = (): ChatSessionRow[] => [...chats.values()].map(listRow)
 
 /**
  * What the agent proxy saves for a chat turn sent to an agent with a `contextId` (EE Weave, d6b216fc1: "the proxy
@@ -530,6 +533,24 @@ function seedRecorded(ctx: ChatMockContext, now: number) {
             ms: 60,
           },
           { name: 'telemetry', status: 'unknown', association: 'unknown' },
+          // Two subagents (R15, mocks/subagents.ts): each call's id is its child session's spawn_tool_call_id.
+          {
+            id: SPAWN_CALLS.explore,
+            name: 'Task',
+            status: 'succeeded',
+            args: { subagent_type: 'Explore', description: 'Find every caller of the webhook' },
+            ms: 95_000,
+          },
+          {
+            id: SPAWN_CALLS.review,
+            name: 'Task',
+            status: 'succeeded',
+            args: {
+              subagent_type: 'general-purpose',
+              description: 'Review the extracted functions',
+            },
+            ms: 48_000,
+          },
         ],
         {
           context: ctxReport(44, 27_300, 15, 18_000),
@@ -727,13 +748,16 @@ interface ToolCallSeed {
   ms?: number
   association?: 'exact' | 'turn' | 'unknown'
   quality?: 'exact' | 'inferred' | 'receipt' | 'unknown'
+  /** A fixed id, for a call something else names (a subagent's `spawn_tool_call_id`); generated otherwise. */
+  id?: string
 }
 
 /** A stored tool call (`types/src/coding_agent.rs` ToolCall, cb3aaf0c): Option fields left out when absent. */
 function toolCall(c: ToolCallSeed, at: number): Record<string, unknown> {
   const quality = c.quality ?? 'exact'
   return {
-    id: id('t'),
+    // A fixed id takes no number from the counter, so every generated id stays as it was.
+    id: c.id ?? id('t'),
     name: c.name,
     kind: c.name === 'bash' ? 'shell' : 'tool',
     status: c.status,

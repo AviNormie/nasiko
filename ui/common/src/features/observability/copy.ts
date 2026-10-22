@@ -22,6 +22,12 @@ export const STATUS_LABEL: Record<Status, string> = {
 }
 
 export const copy = {
+  // A session row's detail: a coding harness's session counts turns (one recorded turn per trace), others traces.
+  tokensAnd: (harness: boolean) => (harness ? 'Tokens · turns' : 'Tokens · traces'),
+  countOf: (n: number, harness: boolean) => {
+    const noun = harness ? 'turn' : 'trace'
+    return `${n.toLocaleString('en-US')} ${n === 1 ? noun : `${noun}s`}`
+  },
   // Sessions → Open chat (Chat v1c §5.10; never "session" for a chat, ND-12).
   openChat: 'Open chat',
   probeFailed: "Couldn't check chat availability",
@@ -123,4 +129,33 @@ export const copy = {
   copySpanId: 'Copy span ID',
   filteredOut: 'filtered out',
   resumeLive: 'Resume live updates',
+
+  // Subagents (coding-agent import plan R15): a subagent run is its own session, counted once, on itself.
+  subagents: {
+    chip: (n: number) => `${n.toLocaleString('en-US')} subagent${n === 1 ? '' : 's'}`,
+    /** The parent's own cost stays the main figure; this is own + subagents, said so. */
+    inclCost: (money: string) => `incl. subagents: ${money}`,
+    /** The session's own cost isn't known: only the subagents' is shown, never added to "—". */
+    onlyCost: (money: string) => `subagents: ${money}`,
+    title: 'Subagents',
+    note: "Each subagent's turns, tokens and cost count once, on its own session.",
+    listLabel: (n: number) => `Subagents (${n})`,
+    loading: 'Loading subagents…',
+    error: "Couldn't load this session's subagents.",
+    retry: 'Retry',
+    // A parent can list a child the server hasn't received yet.
+    empty: 'No subagent sessions have arrived yet.',
+    untyped: 'Subagent',
+    type: 'Type',
+    turns: 'Turns',
+    tokens: 'Tokens',
+    cost: 'Cost',
+    started: 'Started',
+    duration: 'Duration',
+    spawnedBy: 'Spawned by',
+    spawnedAs: (type: string) => `as ${type}`,
+    parentFallback: (id: string) => `session ${id.slice(0, 8)}…`,
+    spawnedStep: 'spawned subagent →',
+    spawnedStepLabel: (type: string) => `Open the ${type} subagent this call spawned`,
+  },
 } as const

@@ -1,7 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { traceSearchSchema, type TraceSearch } from '@/features/sessions/search'
 import { prefetchChat } from '@/features/chat/api'
+import { pickShared } from '@/app/shell/context'
 import { prefetchSessionDetail } from '@/features/sessions/api'
+import { SessionLineage } from '@/features/sessions/Subagents'
 import { LedgerPage } from '@/features/hub/components/LedgerPage'
 import { SessionTracePage } from '@/features/trace/SessionTracePage'
 import { useSetSearch } from '@/lib/search'
@@ -26,7 +28,30 @@ function TraceRoute() {
   const { sessionId } = Route.useParams()
   const search = Route.useSearch()
   const setSearch = useSetSearch<TraceSearch>(Route.fullPath, true)
+  // Subagents (R15): both session pages show the parent link and the subagents. Composed here, as the route is the one
+  // place that sees both pages and the sessions feature.
+  const lineage = (
+    <SessionLineage
+      sessionId={sessionId}
+      linkSearch={{
+        ...pickShared(search),
+        day: search.day,
+        sort: search.sort,
+        lane: search.lane,
+        status: search.status,
+        live: search.live,
+      }}
+    />
+  )
   // The ledger is its own page, outside the trace page's success branch (plans/feat-agent-centric.md eng "Ledger").
-  if (search.view === 'ledger') return <LedgerPage sessionId={sessionId} search={search} />
-  return <SessionTracePage sessionId={sessionId} search={search} setSearch={setSearch} />
+  if (search.view === 'ledger')
+    return <LedgerPage sessionId={sessionId} search={search} lineage={lineage} />
+  return (
+    <SessionTracePage
+      sessionId={sessionId}
+      search={search}
+      setSearch={setSearch}
+      lineage={lineage}
+    />
+  )
 }

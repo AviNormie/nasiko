@@ -38,6 +38,8 @@ export const MOCKABLE = [
   'mcp',
   'workflows',
   'onboarding',
+  // Coding-agent sync progress and the desktop app's local routes (the Harnesses onboarding card).
+  'coding-agents',
   'optimization',
   // The proposed agent event log (plans/feat-agent-centric.md PR1a): change markers on the agent hub.
   'events',
