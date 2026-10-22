@@ -29,8 +29,6 @@ const PUBLIC = {
     'components/Markdown',
     'components/RequestCard',
     'api',
-    // The Overview's canvas chat box hands its question to a new routed chat as that chat's draft.
-    'drafts',
     'identity',
     'rememberTarget',
     'types',

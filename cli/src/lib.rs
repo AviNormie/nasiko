@@ -343,7 +343,7 @@ pub enum AgentOpsCommands {
     #[command(name = "llm-config")]
     LlmConfig {
         #[command(subcommand)]
-        command: LlmConfigCommands,
+        command: Box<LlmConfigCommands>,
     },
     /// View or set the platform tier→model registry the smart router resolves against
     #[command(name = "model-registry")]
@@ -410,6 +410,15 @@ pub enum LlmConfigCommands {
         /// Model to pin to (defaults to --model when --pin is set)
         #[arg(long = "pinned-model")]
         pinned_model: Option<String>,
+        /// Model for the HIGH tier, complex queries (tier1_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        high: Option<String>,
+        /// Model for the MID tier (tier2_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        mid: Option<String>,
+        /// Model for the LOW tier, simple queries (tier3_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        low: Option<String>,
         /// Mark this as your default config
         #[arg(long)]
         default: bool,
@@ -455,6 +464,15 @@ pub enum LlmConfigCommands {
         /// Reset the pinned model to null (pin falls back to the config's model)
         #[arg(long = "clear-pinned-model")]
         clear_pinned_model: bool,
+        /// Model for the HIGH tier, complex queries (tier1_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        high: Option<String>,
+        /// Model for the MID tier (tier2_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        mid: Option<String>,
+        /// Model for the LOW tier, simple queries (tier3_model); used when not pinned
+        #[arg(long, value_name = "MODEL")]
+        low: Option<String>,
         #[command(flatten)]
         embedding: EmbeddingArgs,
         /// Unset the embedding provider and model (embedding calls fall through to the
@@ -717,30 +735,7 @@ pub enum AgentsCommands {
         agent: String,
     },
     /// Validate and deliver queued coding-agent events
-    Sync {
-        /// Queue the turns that were set aside again, then deliver them
-        #[arg(long)]
-        retry_rejected: bool,
-    },
-    /// Connect every coding agent on this computer and import its past sessions, newest first
-    Setup {
-        /// No longer needed (setup doesn't ask); accepted for older scripts
-        #[arg(long, short = 'y', hide = true)]
-        yes: bool,
-        /// Connect the agents but don't import their past sessions
-        #[arg(long)]
-        no_import: bool,
-        /// Import in this terminal and return when done, instead of in the background
-        #[arg(long)]
-        wait: bool,
-    },
-    /// Import the past sessions of the coding agents already connected
-    Import,
-    /// Show how the coding-agent import is going and what is still waiting to send
-    Status,
-    /// Run the import `agents setup` starts in the background.
-    #[command(hide = true)]
-    ImportWorker,
+    Sync,
     /// Export one session's new turns. Invoked by installed hooks.
     #[command(hide = true)]
     Report {
@@ -1259,19 +1254,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 })
             }
             AgentsCommands::Uninstall { agent } => commands::integration::uninstall(&agent),
-            AgentsCommands::Sync { retry_rejected } => commands::integration::sync(retry_rejected),
-            AgentsCommands::Setup {
-                yes,
-                no_import,
-                wait,
-            } => commands::integration::setup(commands::integration::SetupOptions {
-                yes,
-                no_import,
-                wait,
-            }),
-            AgentsCommands::Import => commands::integration::import(),
-            AgentsCommands::Status => commands::integration::import_status(),
-            AgentsCommands::ImportWorker => commands::integration::import_worker(),
+            AgentsCommands::Sync => commands::integration::sync(),
             AgentsCommands::Report { agent } => commands::integration::report(&agent),
             AgentsCommands::Ls => commands::agents::cmd_ls(),
             AgentsCommands::Get {
@@ -1345,7 +1328,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
             SecretsCommands::Ls { agent } => commands::secrets::ls(agent.as_deref()),
             SecretsCommands::Rm { key, agent } => commands::secrets::rm(&key, agent.as_deref()),
         },
-        AgentOpsCommands::LlmConfig { command } => match command {
+        AgentOpsCommands::LlmConfig { command } => match *command {
             LlmConfigCommands::Create {
                 name,
                 provider,
@@ -1357,6 +1340,9 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 secret_value,
                 pin,
                 pinned_model,
+                high,
+                mid,
+                low,
                 default,
                 embedding,
             } => commands::llm_config::create(
@@ -1370,6 +1356,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 secret_value,
                 pin,
                 pinned_model,
+                commands::llm_config::TierModels { high, mid, low },
                 default,
                 embedding,
             ),
@@ -1388,6 +1375,9 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
+                high,
+                mid,
+                low,
                 embedding,
                 clear_embedding_model,
                 yes,
@@ -1406,6 +1396,7 @@ pub fn dispatch_agent_ops(cmd: AgentOpsCommands) -> Result<()> {
                 no_pin,
                 pinned_model,
                 clear_pinned_model,
+                commands::llm_config::TierModels { high, mid, low },
                 commands::llm_config::EmbeddingUpdate {
                     args: embedding,
                     clear: clear_embedding_model,
@@ -1576,7 +1567,7 @@ pub fn dispatch_integration(cmd: IntegrationSubCommands) -> Result<()> {
         }
         IntegrationSubCommands::Uninstall { agent } => commands::integration::uninstall(&agent),
         IntegrationSubCommands::Report { agent } => commands::integration::report(&agent),
-        IntegrationSubCommands::Sync => commands::integration::sync(false),
+        IntegrationSubCommands::Sync => commands::integration::sync(),
     }
 }
 

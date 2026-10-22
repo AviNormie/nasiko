@@ -269,11 +269,6 @@ export interface BudgetsSurface {
     /** The session is one of the viewer's own chats. */
     ownSession: boolean
   }> | null
-  /**
-   * The Overview's first run (no agents yet): a full-width strip under the hero about the viewer's spending limit, set
-   * before anything runs. The layer renders nothing on a server without budgets.
-   */
-  FirstRunStrip: ComponentType | null
   /** Whether the LLM router page lists a Budgets tab (the layer's own availability probe). */
   useRouterTab: () => boolean
   /** The Budgets tab's content, rendered inside the router page's `TabsContent`. */
@@ -311,7 +306,6 @@ export const NO_BUDGETS: BudgetsSurface = {
   useLedgerBudgets: () => NO_LEDGER_BUDGETS,
   useRouterTab: () => false,
   RouterTab: null,
-  FirstRunStrip: null,
 }
 
 /** Every slot has an OSS fallback in the core; a slot is added in the PR whose layer first fills it. */
