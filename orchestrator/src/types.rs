@@ -43,7 +43,7 @@ impl FilePart {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RouteRequest {
     pub query: String,
     pub session_id: String,
