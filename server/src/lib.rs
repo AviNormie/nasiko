@@ -15,8 +15,14 @@ pub mod build;
 pub mod capabilities;
 pub mod catalog;
 pub mod chat;
+pub mod coding_agent_backlog;
+pub mod coding_agent_ingest_guard;
+pub mod coding_agent_onboarding;
 pub mod coding_agent_otlp;
+pub mod coding_agent_subagents;
 pub mod coding_agent_telemetry;
+pub mod coding_agent_turn_summary_backfill;
+mod coding_agent_usage;
 pub mod context_selection;
 pub mod embedding_change;
 pub mod flows;
@@ -190,11 +196,6 @@ where
             std::sync::Arc::new(state.flow_guard.clone()),
             llm_config,
             state.hitl_store.clone(),
-            // The worker outlives every request, so it gets the shared cell to ask rather than a
-            // value captured now — see `PromptContextOutbound`.
-            std::sync::Arc::new(crate::prompt_context::PromptContextOutbound::new(
-                state.prompt_context.clone(),
-            )),
         );
     } else {
         tracing::warn!(
@@ -313,7 +314,8 @@ where
         .merge(context_selection::router())
         .merge(onboarding::router())
         .merge(overview::router())
-        .merge(coding_agent_telemetry::router())
+        .merge(coding_agent_onboarding::router())
+        .merge(coding_agent_telemetry::router(state.clone()))
         .merge(maf::router(maf_run_limiter, maf_read_limiter))
         .merge(secrets::router())
         .merge(llm_configs::router())

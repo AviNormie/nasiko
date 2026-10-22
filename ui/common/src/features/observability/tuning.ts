@@ -18,6 +18,8 @@ export const SCAN_MAX_PAGES = 6
 
 /** Fleet mode loads this many rows per page ("Load more" fetches the next). */
 export const FLEET_PAGE_SIZE = 100
+/** One session's subagents (`session/list?parent=`) in one read: the server's page cap. */
+export const SUBAGENT_PAGE_SIZE = 100
 /** A past window pages forward (newest first) at most this far to reach its first row. */
 export const FLEET_SEEK_PAGES = 10
 /** Fleet mode's "now" stays fixed this long, so Back from a trace reuses the same window and cache. */

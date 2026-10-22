@@ -24,7 +24,11 @@ storage:
     backend: local
     wal:
       path: /var/tempo/wal
-      ingestion_time_range_slack: 360h   # allow backfilled traces up to 15 days old
+      # Allow backfilled traces up to 15 days old. The control plane skips the
+      # Tempo export of any coding-agent turn older than CODING_AGENT_TEMPO_MAX_AGE_SECS
+      # (default 15 days, `nasiko_config::CodingAgentIngestConfig`): the two must
+      # agree, or old turns are exported only to be dropped here.
+      ingestion_time_range_slack: 360h
     local:
       path: /var/tempo/blocks
 

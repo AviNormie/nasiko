@@ -16,7 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { relTime } from '@/features/agents/format'
-import { sessionCost, type Status } from '@/features/observability/sessions'
+import { serverStatus, sessionCost, type Status } from '@/features/observability/sessions'
 import { fmtMoney } from '@/lib/format'
 import { ApiError } from '@/lib/api/client'
 import type { NeedsYou } from '../api'
@@ -30,11 +30,6 @@ const MARK: Partial<Record<Status, { Icon: typeof CircleCheck; tone: string; lab
   running: { Icon: CircleDashed, tone: 'text-muted-foreground', label: copy.sessions.running },
 }
 const TRACE_STORE = new Set([500, 502, 503])
-
-/** `session/list.status` narrowed to what the UI draws. */
-const SERVER_STATUS = new Set<Status>(['failed', 'ok', 'running'])
-const serverStatus = (raw: string | null | undefined): Status =>
-  raw && SERVER_STATUS.has(raw as Status) ? (raw as Status) : 'unchecked'
 
 export function RecentSessions({
   sessions,
@@ -109,7 +104,7 @@ export function RecentSessions({
               // The server's own status. `null` means it has no recorded request
               // to judge by — "unchecked", never "ok" — and an unrecognised
               // value is treated the same rather than rendered raw.
-              const st = serverStatus(s.status)
+              const st = serverStatus(s.status) ?? 'unchecked'
               const mark = MARK[st] ?? {
                 Icon: CircleDashed,
                 tone: 'text-muted-foreground',

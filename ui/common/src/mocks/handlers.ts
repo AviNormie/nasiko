@@ -35,6 +35,14 @@ import {
   traceDetail,
 } from './observability'
 import { generateSeed, SEED_MODELS, type Seed } from './seed'
+import {
+  isSubagentSession,
+  SUBAGENT_PARENT,
+  subagentDetailFields,
+  subagentRows,
+  subagentTitle,
+  withSubagentTotals,
+} from './subagents'
 import { contextSavings, contextSavingsAgents, topRequests } from './contextSavings'
 import { hash as hashString } from './spanBuilder'
 import {
@@ -88,6 +96,7 @@ import {
 import {
   chatHandlers,
   chatMockMessages,
+  chatMockListRows,
   chatMockRows,
   ensureChatSeed,
   resetChatMock,
@@ -112,6 +121,12 @@ import { optimizationHandlers, resetOptimizationMock } from './optimization'
 import { buildWorkflowsState, workflowHandlers, type WorkflowsState } from './workflows'
 import { buildFlowsState, flowHandlers, type FlowsState } from './flows'
 import { eventHandlers } from './events'
+import {
+  AGENTS_ONBOARDING_VARIANTS,
+  buildCodingAgentsState,
+  codingAgentsHandlers,
+  type CodingAgentsState,
+} from './codingAgents'
 import { checkZip, MAX_ZIP_BYTES } from '@/features/deploy/zipcheck'
 import { nameProblem } from '@/features/deploy/name'
 import { parseVersion } from '@/features/deploy/version'
@@ -212,6 +227,7 @@ const PAGE_VARIANTS: readonly string[] = [
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
   ...BUDGETS_PAGE_VARIANTS,
+  ...AGENTS_ONBOARDING_VARIANTS,
   'village-unlimited',
 ]
 
@@ -301,6 +317,8 @@ export const MOCK_VARIANTS = [
   ...CHAT_PAGE_VARIANTS,
   ...ROUTER_PAGE_VARIANTS,
   ...BUDGETS_PAGE_VARIANTS,
+  // Coding-agent onboarding on Harnesses (mocks/codingAgents.ts): server runs, a server without them, or the desktop app's states.
+  ...AGENTS_ONBOARDING_VARIANTS,
 ] as const
 export type MockVariant = (typeof MOCK_VARIANTS)[number]
 let fixedVariant: MockVariant | null = null
@@ -381,10 +399,26 @@ function sessionUser(): SessionUser {
   }
 }
 
+/** The onboarding card's states (`?mock=agents-*`, but not `agents-absent`) are a viewer with no registered harness
+ *  yet: their usage counts none (their activity stays, as for a deleted registration). Memoised per viewer. */
+let onboardingSeedMemo: { base: HarnessSeed; viewer: string; seed: HarnessSeed } | null = null
+function onboardingSeed(base: HarnessSeed): HarnessSeed {
+  const v = agentsVariant()
+  if (!v || v === 'agents-absent') return base
+  const id = viewer().id
+  if (onboardingSeedMemo?.base !== base || onboardingSeedMemo.viewer !== id)
+    onboardingSeedMemo = {
+      base,
+      viewer: id,
+      seed: { ...base, agents: base.agents.filter((a) => a.owner_id !== id) },
+    }
+  return onboardingSeedMemo.seed
+}
+
 /** Seed variants that change the data itself (memoised per variant). */
 const variantSeeds = new Map<string, HarnessSeed>()
 function harnessData(): HarnessSeed {
-  const base = getHarnessSeed()
+  const base = onboardingSeed(getHarnessSeed())
   const v = variant()
   if (v !== 'all-unpriced' && v !== 'no-activity') return base
   const hit = variantSeeds.get(v)
@@ -497,7 +531,7 @@ const SETTINGS_DEFAULTS = {
   catalog_tabs: null,
 }
 // Budgets are Enterprise only (docs/requirements/budgets.md): their whole mock — the engine, the world, the golden
-// scenario and every route — lives in the Enterprise layer and registers through `editionHandlers`.
+// scenario and every route — lives in `ee/web/src/mocks/budgetMocks.ts` and registers through `editionHandlers`.
 // What stays here is only what the harness itself owns: the `?mock=` variant names and the `budgets` group key.
 /** Partial-live mode: the live user's id, learned from their `owner=` agent list (the mock has no session). */
 let liveOwner: string | null = null
@@ -513,6 +547,21 @@ function getRouter(): RouterState {
   }
   return routerState
 }
+
+// Coding-agent onboarding (mocks/codingAgents.ts): sync runs and the desktop app, rebuilt when its `?mock=` state changes.
+let codingAgentsState: CodingAgentsState | null = null
+let codingAgentsKey = ''
+const agentsVariant = () => AGENTS_ONBOARDING_VARIANTS.find((v) => hasVariant(v)) ?? null
+function getCodingAgents(): CodingAgentsState {
+  const v = agentsVariant()
+  if (!codingAgentsState || codingAgentsKey !== String(v)) {
+    codingAgentsState = buildCodingAgentsState(v, nowFn())
+    codingAgentsKey = String(v)
+  }
+  return codingAgentsState
+}
+/** The coding-agent onboarding mock's live state, for tests that set the runs or the desktop under the page. */
+export const codingAgentsMockState = (): CodingAgentsState => getCodingAgents()
 
 /** The router mock's live state, for tests that change it under the page (plan §8 ordering test). */
 export const routerMockState = (): RouterState => getRouter()
@@ -544,6 +593,7 @@ export function resetAgentsMock() {
   secretValues = new Map()
   mockPassword = null
   onboardingRow = ONBOARDED
+  codingAgentsState = null
   resetOptimizationMock()
   resetChatMock()
   resetOverviewMock()
@@ -665,19 +715,22 @@ const unauthorized = () => authRejection('missing or invalid token')
 
 /** A recorded chat as a `session/list` row: the DB-only fallback (no harness traces in the mock), raw agent name. */
 function recordedSessionRow(r: ChatSessionRow, agentName: string): SessionSummary {
+  // A coding-agent session is judged by its stored turns (the server fills `status`, `num_traces` = turns and the
+  // duration from them): one turn per user + assistant message pair; none recorded leaves it unknown.
+  const turns = Math.ceil((r.message_count ?? 0) / 2)
+  const end = r.updated_at ?? r.created_at
   return {
     id: r.session_id,
     session_id: r.session_id,
     agent_id: agentName,
     session_annotations: [],
     session_annotation_summaries: [],
-    num_traces: null,
-    // No requests recorded in the DB-only fallback: nothing failed, nothing says it succeeded.
-    status: null,
+    num_traces: turns || null,
+    status: turns ? 'ok' : null,
     failed_flows: 0,
     start_time: r.created_at,
-    end_time: r.updated_at ?? r.created_at,
-    duration_ms: null,
+    end_time: end,
+    duration_ms: turns ? Date.parse(end) - Date.parse(r.created_at) : null,
     first_input: null,
     last_output: null,
     token_usage: { total: null },
@@ -820,6 +873,15 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       }),
     ),
   ]),
+  // Coding-agent sync progress (`coding_agent_onboarding.rs`: bare JSON, plain-text errors) and the desktop app's
+  // own `/__nasiko/coding-agents/*` (a 404 unless a desktop variant is on).
+  'coding-agents': codingAgentsHandlers({
+    state: () => getCodingAgents(),
+    now: () => nowFn(),
+    loggedIn: () => loggedIn,
+    unauthorized: () => unauthorized(),
+    text: (body, status) => text(body, status),
+  }),
   // nasiko-cloud-rs 41f776ae `onboarding.rs`: bare JSON; a persona outside the enum is Axum's 422 Json rejection.
   onboarding: [
     http.get('/api/me/onboarding', () => {
@@ -1396,10 +1458,27 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       // or everyone's for a superuser. Without harness traces in the mock it is the DB-only row.
       ensureChatSeed(chatCtx)
       const names = new Map(getAgents().agents.map((a) => [a.id, a.name]))
-      const recorded = chatMockRows()
+      const recorded = chatMockListRows()
         .filter((r) => r.is_coding_agent && (superuser() || r.user_id === ADMIN_ID))
         .map((r) => recordedSessionRow(r, (r.agent_id && names.get(r.agent_id)) || ''))
+      // `?parent=` lists one visible session's subagents (R15), outside the window; the default list stays top-level.
+      if (p.parent) {
+        const parent = recorded.find((r) => r.session_id === p.parent)
+        const children = parent
+          ? subagentRows(parent.session_id, Date.parse(parent.start_time ?? ''), parent.agent_id)
+          : []
+        return HttpResponse.json({
+          data: {
+            sessions: children,
+            total_agents: getSeed().agents.filter((a) => !a.deleted).length,
+            successful_agents: children.length,
+            matching_count: children.length,
+            pagination: { end_cursor: null, has_next_page: false },
+          },
+        })
+      }
       const body = sessionList(getSeed(), p, nowFn(), v === 'tempo-down', recorded)
+      body.data = { ...body.data, sessions: body.data.sessions.map(withSubagentTotals) }
       if (v === 'empty')
         body.data = {
           ...body.data,
@@ -1419,23 +1498,32 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
         const data = observabilityData(getSeed())
         // A chat from the chat mock is a session too (live, a chat's id IS its session id): answer
         // with the seeded showcase session, re-keyed, so View session / Open full trace resolve.
-        const chat = chatMockRows().find((r) => r.session_id === id && r.user_id === ADMIN_ID)
+        // A subagent session (R15) answers like its parent's chat: the showcase, re-keyed, under the parent's agent.
+        const parentChat = isSubagentSession(id)
+          ? chatMockRows().find((r) => r.session_id === SUBAGENT_PARENT && r.user_id === ADMIN_ID)
+          : undefined
+        const chat =
+          chatMockRows().find((r) => r.session_id === id && r.user_id === ADMIN_ID) ?? parentChat
         const showcase = chat ? data.sessions.find((x) => x.showcase) : undefined
         const s =
           data.byId.get(id) ??
-          (showcase ? { ...showcase, session_id: id, title: chat!.title } : undefined)
+          (showcase
+            ? { ...showcase, session_id: id, title: subagentTitle(id) ?? chat!.title }
+            : undefined)
         // The server answers 404 for unknown AND inaccessible sessions (reveal no existence).
         // A recorded harness chat names its own (harness) agent, not the showcase's.
         const harness =
           chat?.is_coding_agent && chat.agent_id
             ? getAgents().agents.find((a) => a.id === chat.agent_id)?.name
             : undefined
+        const subagents = chat ? subagentDetailFields(id, Date.parse(chat.created_at)) : null
         return s
           ? HttpResponse.json({
               data: {
                 session: {
                   ...sessionDetail(getSeed(), s),
                   ...(harness ? { agent_name: harness } : {}),
+                  ...(subagents ?? {}),
                 },
               },
             })
@@ -1816,7 +1904,7 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     state: getWorkflows,
   }),
   // Budgets are Enterprise only (docs/requirements/budgets.md): both groups are empty here and EE fills them
-  // through `editionHandlers`. The keys stay so `VITE_NASIKO_MOCK=budgets`
+  // through `editionHandlers` (`ee/web/src/mocks/budgetMocks.ts`). The keys stay so `VITE_NASIKO_MOCK=budgets`
   // and the `?mock=budgets-*` variants keep working in both editions' harnesses.
   budgets: [],
   'budgets-fill': [],
@@ -2236,7 +2324,7 @@ function deployHandlers(): HttpHandler[] {
       }
       if (check.items.entrypoint.state === 'fail')
         return text(
-          'no startup command found — add a CMD or ENTRYPOINT to your Dockerfile, or include a Python entrypoint (main.py, src/main.py, __main__.py, or src/__main__.py)',
+          'no Python entrypoint found (main.py, src/main.py, __main__.py, or src/__main__.py)',
           400,
         )
       const version = String(fd?.get('version_tag') ?? '') || check.version || ''
