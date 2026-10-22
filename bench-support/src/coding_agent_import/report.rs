@@ -179,6 +179,10 @@ pub fn render(outcome: &Outcome, delays: &(Vec<f64>, Vec<f64>)) -> (String, bool
         ),
         ("413 (too large)", sum(|s| s.status_413).to_string()),
         (
+            "batches cut by the 6 MiB byte budget",
+            sum(|s| s.byte_capped).to_string(),
+        ),
+        (
             "timeouts / transport errors / other 5xx",
             format!(
                 "{} / {} / {}",
@@ -343,8 +347,12 @@ fn latency_table(outcome: &Outcome) -> (String, bool) {
             (false, false) => "neither bound",
         };
         ok &= within_multiple || under_ceiling;
+        // The idle phase after the import holds the same data the load phase
+        // ended with: load vs after isolates contention from data volume.
+        let after = p95[2].map_or("-".into(), |v| format!("{v:.0}"));
         verdicts.push(format!(
-            "- {name}: p95 {load:.0} ms under load vs {base:.0} ms baseline → {held}"
+            "- {name}: p95 {load:.0} ms under load vs {base:.0} ms baseline \
+             ({after} ms idle with the imported data) → {held}"
         ));
     }
     out.push_str("\nBound: p95 under load ≤ 3× idle baseline OR ≤ 500 ms.\n\n");

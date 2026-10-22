@@ -29,6 +29,7 @@ import {
   type SyncRun,
   type SyncRuns,
 } from './runs'
+import { waitingTurns } from './syncStatus'
 
 const SYNC = '/api/me/coding-agents/sync'
 
@@ -212,6 +213,8 @@ export interface AgentsOnboarding {
   retry: RetryControl
   /** Desktop only: its POSTs. */
   desktop: DesktopControl | null
+  /** Desktop only: turns waiting in its whole queue (the sync bar's number); null in a browser (each run's own). */
+  waiting: number | null
 }
 
 /**
@@ -295,5 +298,6 @@ export function useAgentsOnboarding({
           error: action.error instanceof ApiError ? action.error.serverMessage : null,
         }
       : null,
+    waiting: desktopState ? waitingTurns(desktopState) : null,
   }
 }

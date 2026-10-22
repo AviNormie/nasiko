@@ -148,4 +148,17 @@ export const copy = {
       failed: (device: string) => `${device}: import failed.`,
     },
   },
+  // The desktop app's sync bar, on every page while coding-agent data syncs (components/SyncBar.tsx).
+  syncBar: {
+    title: 'Syncing coding agents',
+    label: 'Coding agent sync progress',
+    discovering: 'Looking for agents',
+    connecting: 'Connecting',
+    sent: (turns: number) => `${plural(turns, 'turn')} sent`,
+    waiting: (turns: number) => `${turns.toLocaleString('en-US')} waiting`,
+    details: 'Details',
+    detailsLabel: 'Coding agent sync details',
+    started: 'Syncing coding agents.',
+    finished: 'Coding agents synced.',
+  },
 } as const

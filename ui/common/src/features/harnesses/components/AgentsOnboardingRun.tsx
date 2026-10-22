@@ -29,14 +29,23 @@ const agentName = (a: Pick<SyncAgent, 'id' | 'name'>) => {
 }
 
 /** One device's run: its name and client, the overall bar, the history timeline, then the steps and one row per
- *  agent, what is still waiting to be sent, and the turns the server refused with their Retry. */
-export function RunBlock({ run, retry }: { run: SyncRun; retry: RetryControl }) {
-  const value = runProgress(run)
+ *  agent, what is still waiting to be sent, and the turns the server refused with their Retry. `waiting` is the whole
+ *  queue's count when the desktop app reports it, so the card and the app's sync bar show the same numbers. */
+export function RunBlock({
+  run,
+  retry,
+  waiting = null,
+}: {
+  run: SyncRun
+  retry: RetryControl
+  waiting?: number | null
+}) {
+  const pending = waiting ?? pendingTurns(run)
+  const value = runProgress(run, pending)
   const phase = shownPhase(run)
   const detected = run.agents.filter((a) => a.detected)
   const pastDiscovery = phase !== 'discovering'
   const connected = phase !== 'discovering' && phase !== 'connecting'
-  const pending = pendingTurns(run)
   return (
     <div className="flex flex-col gap-2" data-testid="agents-onboarding-run">
       <div className="flex flex-wrap items-center gap-2 text-sm">
