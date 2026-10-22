@@ -49,3 +49,6 @@ export const DESKTOP_IDLE_POLL_MS = 10_000
 export const SYNC_DONE_WINDOWS_SHOWN = 3
 /** The label local clients give the window of history older than the last 30 days (the contract's v2 `windows`). */
 export const OLDER_WINDOW_LABEL = 'Older'
+/** Desktop LLM routing: how long a connect or disconnect may take. A Codex connect makes one real provider turn (the
+ *  desktop's preflight allows it 30 s) on top of its control-plane calls. */
+export const ROUTING_CHANGE_TIMEOUT_MS = 90_000

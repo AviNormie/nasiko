@@ -26,6 +26,7 @@ import type { HarnessesSearch } from '../search'
 import type { HarnessTotals, UsageResponse } from '../types'
 import { useAgentsOnboarding } from '../onboarding'
 import { AgentsOnboardingCard } from './AgentsOnboardingCard'
+import { RoutingCard } from './RoutingCard'
 import { Crumbs, type Crumb } from './Crumbs'
 import { HarnessPanels, type PanelItem } from './HarnessPanels'
 import { ActivityStrip, ConnectPanel, SessionsList, TopModels } from './IndividualView'
@@ -326,6 +327,7 @@ export function LiveFallbackLevel({
     <div className="flex flex-col gap-4">
       {header}
       {onboarding.visible ? <AgentsOnboardingCard onboarding={onboarding} /> : null}
+      <RoutingCard />
       {live.error ? (
         <StateCard
           tone="error"
@@ -413,6 +415,8 @@ export function UserLevel({
   return (
     <>
       {onboarding.visible ? <AgentsOnboardingCard onboarding={onboarding} /> : null}
+      {/* Routing is the viewer's own computer: only their own level shows it. */}
+      {self ? <RoutingCard /> : null}
       <SummaryCard
         windowLabel={win.label}
         compare={compare}

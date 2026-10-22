@@ -12,6 +12,8 @@
  *   `?mock=desktop-unasked|running|failed|rejected` answer as the desktop app, with its local consent and run;
  *   `desktop-sending` is a finished import while the app delivers turns its hooks queued (the `backlog`, which every
  *   desktop state carries: the run's waiting and refused turns plus `queued`), so the app-wide sync bar shows.
+ *   Every desktop state also routes LLM calls (`/__nasiko/coding-agents/routing[/connect|/disconnect]`, `mockRouting`):
+ *   a connect attaches its config to the viewer's harness row through the router mock, so the routing read follows.
  *
  * Tests start with no runs and no desktop, so the card stays hidden on every page test whose viewer has harnesses.
  */
@@ -76,6 +78,50 @@ export interface DesktopMockState {
   queued: number
   /** A background delivery pass is going now. */
   sending: boolean
+  /** The routable harnesses (`/__nasiko/coding-agents/routing`, `coding_agents_api.rs` `RoutingStatus`). */
+  routing: MockRoutedHarness[]
+}
+
+export type MockRoutedHarness = {
+  id: string
+  name: string
+  detected: boolean
+  connected_by: 'desktop' | 'cli' | null
+  agent_id: string | null
+  agent_name: string | null
+  server_url: string | null
+  mcp: boolean
+  changed: boolean
+}
+
+/** Claude Code here and unrouted, Codex routed by the CLI, OpenCode not on this computer. */
+export const mockRouting = (): MockRoutedHarness[] => {
+  const row = (id: string, name: string, detected: boolean): MockRoutedHarness => ({
+    id,
+    name,
+    detected,
+    connected_by: null,
+    agent_id: null,
+    agent_name: null,
+    server_url: null,
+    mcp: false,
+    changed: false,
+  })
+  return [
+    row('claude', 'Claude Code', true),
+    { ...row('codex', 'Codex', true), connected_by: 'cli', server_url: MOCK_SERVER_URL, mcp: true },
+    row('opencode', 'OpenCode', false),
+  ]
+}
+
+const MOCK_SERVER_URL = 'http://localhost:8080'
+
+/** What attaching an LLM config to a harness's row did (handlers.ts, through the router mock). */
+export interface MockRoutingAttach {
+  agentId: string | null
+  agentName: string | null
+  provider: string | null
+  model: string | null
 }
 
 export type MockLocalRun = Omit<
@@ -379,6 +425,7 @@ const desktopBase = (over: Partial<DesktopMockState> = {}): DesktopMockState => 
   failStarts: 0,
   queued: 0,
   sending: false,
+  routing: mockRouting(),
   ...over,
 })
 
@@ -454,6 +501,9 @@ interface Ctx {
   loggedIn: () => boolean
   unauthorized: () => Response
   text: (body: string, status: number) => Response
+  /** Attaches `config` (null: detach) to the viewer's `harness` row, as the desktop's connect does; throws the
+   *  router's refusal. */
+  attachRouting: (harness: string, config: string | null) => MockRoutingAttach
 }
 
 function scriptedOf(st: CodingAgentsState, now: number): MockSyncRun | null {
@@ -579,8 +629,75 @@ function desktopHandlers(ctx: Ctx): HttpHandler[] {
       else d.retryAt = now
       return HttpResponse.json(desktopState(d, now), { status: 202 })
     }),
+    // LLM routing (`coding_agents_api.rs`): 409 plain text without a sign-in, 400/422 `{message}` refusals.
+    http.get(`${BASE}/routing`, () => {
+      const d = desktop()
+      return d ? HttpResponse.json({ harnesses: d.routing }) : absent()
+    }),
+    http.post(`${BASE}/routing/connect`, async ({ request }) => {
+      const d = desktop()
+      if (!d) return absent()
+      if (!d.signedIn) return ctx.text('Sign in to a Nasiko server in this window first.', 409)
+      const body = (await request.json().catch(() => ({}))) as { agent?: string; config?: string }
+      const row = d.routing.find((r) => r.id === body.agent)
+      if (!row)
+        return refuse(400, `'${body.agent}' is not a coding agent whose LLM calls can be routed`)
+      if (!row.detected) return refuse(422, `${row.name} was not found on this computer`)
+      let attached: MockRoutingAttach
+      try {
+        attached = ctx.attachRouting(row.id, body.config ?? null)
+      } catch (e) {
+        return refuse(422, e instanceof Error ? e.message : String(e))
+      }
+      const tookOver = row.connected_by === 'cli'
+      Object.assign(row, {
+        connected_by: 'desktop',
+        agent_id: attached.agentId,
+        agent_name: attached.agentName,
+        server_url: MOCK_SERVER_URL,
+        mcp: true,
+        changed: false,
+      })
+      const notes = [
+        ...(tookOver
+          ? [
+              `Took over ${row.name} from the Nasiko CLI; \`nasiko status ${row.id}\` now reports it disconnected.`,
+            ]
+          : []),
+        `Restart ${row.name} so it picks up the change.`,
+      ]
+      return HttpResponse.json({
+        harness: row,
+        provider: attached.provider,
+        model: attached.model,
+        notes,
+      })
+    }),
+    http.post(`${BASE}/routing/disconnect`, async ({ request }) => {
+      const d = desktop()
+      if (!d) return absent()
+      const body = (await request.json().catch(() => ({}))) as { agent?: string }
+      const row = d.routing.find((r) => r.id === body.agent)
+      if (!row)
+        return refuse(400, `'${body.agent}' is not a coding agent whose LLM calls can be routed`)
+      const was = row.connected_by
+      Object.assign(row, {
+        connected_by: null,
+        agent_id: null,
+        agent_name: null,
+        server_url: null,
+        mcp: false,
+        changed: false,
+      })
+      return HttpResponse.json({
+        harness: row,
+        notes: was ? [`Restart ${row.name} so it picks up the change.`] : [],
+      })
+    }),
   ]
 }
+
+const refuse = (status: number, message: string) => HttpResponse.json({ message }, { status })
 
 export function codingAgentsHandlers(ctx: Ctx): HttpHandler[] {
   const gate = () => {

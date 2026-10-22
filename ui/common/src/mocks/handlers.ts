@@ -881,6 +881,25 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     loggedIn: () => loggedIn,
     unauthorized: () => unauthorized(),
     text: (body, status) => text(body, status),
+    // The desktop's connect: `POST /api/agents/coding-integrations`, then the llm-config PATCH, on the viewer's row.
+    attachRouting: (harness, config) => {
+      const agent = getAgents().agents.find(
+        (a) => !a.deleted && a.harness === harness && a.owner_id === ADMIN_ID,
+      )
+      if (!agent) return { agentId: null, agentName: null, provider: null, model: null }
+      patchRouting(getRouter(), agent, { llm_config_id: config })
+      const resolved = resolveRouting(getRouter(), agent).llm_config
+      if (!resolved)
+        throw new Error(
+          'no LLM config to route with: create one, or make one your default, on the LLM router page',
+        )
+      return {
+        agentId: agent.id,
+        agentName: agent.name,
+        provider: resolved.provider,
+        model: resolved.model,
+      }
+    },
   }),
   // nasiko-cloud-rs 41f776ae `onboarding.rs`: bare JSON; a persona outside the enum is Axum's 422 Json rejection.
   onboarding: [
