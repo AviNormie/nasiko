@@ -33,6 +33,8 @@ pub struct AppState {
     pub flow_guard: FlowGuard,
     pub flow_events: FlowEventBus,
     pub genai_metrics: GenAiMetrics,
+    /// Rate limit, concurrency cap and counters of the coding-agent ingest route.
+    pub coding_agent_ingest: crate::coding_agent_ingest_guard::IngestGuard,
     pub config: Arc<Config>,
     pub routing_engine: Arc<dyn RoutingEngine>,
     /// Where both orchestrators read the operator's policy from — the chat-path
@@ -319,6 +321,9 @@ impl AppState {
             flow_guard,
             flow_events,
             genai_metrics,
+            coding_agent_ingest: crate::coding_agent_ingest_guard::IngestGuard::new(
+                &config.coding_agent_ingest,
+            ),
             config: Arc::new(config),
             routing_engine,
             orchestrator_policy,
@@ -390,6 +395,14 @@ impl AppState {
                     state.config.hitl_resume_retry_delay_secs,
                 ),
             },
+        ));
+
+        tokio::spawn(crate::coding_agent_turn_summary_backfill::run(
+            state.db.clone(),
+        ));
+        tokio::spawn(crate::coding_agent_backlog::run(
+            state.db.clone(),
+            state.coding_agent_ingest.metrics.clone(),
         ));
 
         if let Some(endpoint) = state.config.coding_agent_otlp_endpoint.clone() {

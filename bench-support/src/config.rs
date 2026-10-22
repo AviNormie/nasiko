@@ -138,6 +138,7 @@ pub fn build_bench_config(database_url: String, mock_llm_base_url: &str) -> Conf
         otel_collector_endpoint: "http://localhost:4318".into(),
         otel_capture_content: false,
         coding_agent_otlp_endpoint: None,
+        coding_agent_ingest: Default::default(),
         tempo_url: "http://localhost:3200".into(),
         loki_url: "http://localhost:3100".into(),
         // Off for benches so they never reach out to a provider or to Portkey.
