@@ -434,10 +434,22 @@ function harnessData(): HarnessSeed {
   return next
 }
 
+/** Under the onboarding card's variants the viewer's coding harnesses were only just imported, so Token optimization is
+ *  off on them (the `compress_enabled` column default) and the card's Optimize has something to turn on. */
+function freshlyImported(state: AgentsState): AgentsState {
+  const v = agentsVariant()
+  if (!v || v === 'agents-absent') return state
+  const id = viewer().id
+  // Tagged like every harness row (`isHarness`), spoofed ones included.
+  for (const a of state.agents)
+    if (a.tags.includes('coding-agent') && a.owner_id === id) a.compress = false
+  return state
+}
+
 // Agents pages: mutable state derived from both seeds, rebuilt on reset (plan §8).
 let agentsState: AgentsState | null = null
 const getAgents = (): AgentsState => {
-  agentsState ??= buildAgentsState(getSeed(), getHarnessSeed(), nowFn())
+  agentsState ??= freshlyImported(buildAgentsState(getSeed(), getHarnessSeed(), nowFn()))
   // Uploads that finished since the last read change their agent rows (plans/feat-deploy.md §9).
   if (deployState?.pending.length) settleUploads(deployState, agentsState, nowFn())
   return agentsState
@@ -881,25 +893,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     loggedIn: () => loggedIn,
     unauthorized: () => unauthorized(),
     text: (body, status) => text(body, status),
-    // The desktop's connect: `POST /api/agents/coding-integrations`, then the llm-config PATCH, on the viewer's row.
-    attachRouting: (harness, config) => {
-      const agent = getAgents().agents.find(
-        (a) => !a.deleted && a.harness === harness && a.owner_id === ADMIN_ID,
-      )
-      if (!agent) return { agentId: null, agentName: null, provider: null, model: null }
-      patchRouting(getRouter(), agent, { llm_config_id: config })
-      const resolved = resolveRouting(getRouter(), agent).llm_config
-      if (!resolved)
-        throw new Error(
-          'no LLM config to route with: create one, or make one your default, on the LLM router page',
-        )
-      return {
-        agentId: agent.id,
-        agentName: agent.name,
-        provider: resolved.provider,
-        model: resolved.model,
-      }
-    },
   }),
   // nasiko-cloud-rs 41f776ae `onboarding.rs`: bare JSON; a persona outside the enum is Axum's 422 Json rejection.
   onboarding: [
@@ -925,8 +918,6 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     }),
   ],
   auth: [
-    // The desktop app's own "Forgot password?" probe (app/shell/ForgotPassword.tsx): the 404 a browser gets.
-    http.get('/__nasiko/local/reset/state', () => new HttpResponse('Not Found', { status: 404 })),
     http.get('/api/me', () => {
       if (!loggedIn) return unauthorized()
       // The session is the viewer: OSS gates /api/users/me behind an admin, so the Harnesses page falls back to these

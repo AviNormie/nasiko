@@ -68,6 +68,7 @@ import { OptimisationPanel } from './components/OptimisationPanel'
 import { SavingsHighlight } from './components/SavingsHighlight'
 import { summarizeOptimisation } from './optimisation'
 import { PageHeader } from '@/components/shared/page-header'
+import { ImportNotice } from '@/features/harnesses/components/ImportNotice'
 import { PanelError } from '@/components/shared/panel'
 import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
@@ -439,6 +440,8 @@ export function TokenopsPage({
         </div>
       )}
 
+      {/* Coding agents' spend is still arriving while the desktop imports them. */}
+      <ImportNotice />
       {showLoader ? <PageLoader label="Loading TokenOps" /> : null}
       {showLoader ? null : unknownAgent ? (
         <Notice tone="warning">

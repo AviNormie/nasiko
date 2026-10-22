@@ -1,7 +1,9 @@
-/** Small shared pieces for the Harnesses page: harness label, cost figure, tooltip term. */
+/** Small shared pieces for the Harnesses page: harness label, cost figure, tooltip term, the import's state icon. */
+import { CircleCheck, CircleDashed, CircleDot, CircleX, Loader2, Minus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { fmtMoney } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { copy } from '../copy'
 import { harnessStyle, type CostView } from '../rollup'
 
@@ -51,4 +53,28 @@ export function CostFigure({ view }: { view: CostView }) {
 export function Ratio({ value }: { value: number | null }) {
   if (value === null) return <span className="text-muted-foreground">—</span>
   return <span className="tabular-nums">{fmtMoney(value)}</span>
+}
+
+export type State = 'done' | 'current' | 'pending' | 'failed'
+
+/**
+ * The stepper's icon per state (deploy/components/StageList.tsx), plus `active` (a still mark for what the one spinning
+ * step is working on, so a card never spins in three places) and a dash for an agent that isn't taking part.
+ */
+export function StateIcon({ state }: { state: State | 'active' | 'none' }) {
+  const cls = 'size-4 shrink-0'
+  switch (state) {
+    case 'done':
+      return <CircleCheck aria-hidden className={cn(cls, 'text-success')} />
+    case 'current':
+      return <Loader2 aria-hidden className={cn(cls, 'text-info motion-safe:animate-spin')} />
+    case 'failed':
+      return <CircleX aria-hidden className={cn(cls, 'text-destructive')} />
+    case 'active':
+      return <CircleDot aria-hidden className={cn(cls, 'text-info')} />
+    case 'none':
+      return <Minus aria-hidden className={cn(cls, 'text-muted-foreground')} />
+    default:
+      return <CircleDashed aria-hidden className={cn(cls, 'text-muted-foreground')} />
+  }
 }

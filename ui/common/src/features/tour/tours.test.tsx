@@ -23,12 +23,19 @@ const PAGES: Record<string, readonly string[]> = {
     'nav-connect',
     'nav-org',
     'tour-button',
+    'overview-views',
     'overview-range',
     'overview-summary',
     'overview-needs',
     'overview-health',
+    'overview-spend',
+    'overview-sessions',
+    'overview-saved',
+    'overview-chats',
     'overview-actions',
   ],
+  // The village (OSS) stands where the summary does.
+  '/?view=village': ['overview-views', 'overview-range', 'overview-canvas', 'overview-needs'],
   '/chat': ['chat-rail', 'chat-target', 'chat-composer'],
   '/agents': ['section-nav', 'page-actions', 'agents-toolbar', 'agents-grid'],
   '/agents/mine': ['mine-status-tabs', 'mine-table'],
@@ -78,8 +85,8 @@ const DETAILS: [string, () => string, readonly string[]][] = [
     ['flow-narrative', 'flow-kpis', 'flow-view'],
   ],
 ]
-/** Only in states the seed doesn't open on: a list's Previous/Next, the empty fleet's setup card. */
-const CONDITIONAL = ['page-stepper', 'overview-setup-guide']
+/** Only in states the seed doesn't open on: a list's Previous/Next, the empty fleet's setup card and its CLI half. */
+const CONDITIONAL = ['page-stepper', 'overview-setup-guide', 'overview-cli']
 
 const has = (target: string) => document.querySelector(`[data-tour~="${target}"]`) !== null
 

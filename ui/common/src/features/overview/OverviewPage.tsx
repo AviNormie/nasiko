@@ -141,6 +141,7 @@ function HeaderActions({
     <>
       {onView ? (
         <ToggleGroup
+          data-tour="overview-views"
           type="single"
           variant="outline"
           size="sm"
@@ -505,7 +506,7 @@ function Overview({
           harnesses={harnesses}
         />
       ) : v ? (
-        <div className="flex flex-col gap-3">
+        <div data-tour="overview-canvas" className="flex flex-col gap-3">
           {filtered ? (
             <FilterBar v={v} search={search} me={me.sub} onChange={(patch) => setSearch(patch)} />
           ) : null}

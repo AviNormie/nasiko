@@ -1,9 +1,8 @@
 /**
- * Mounted on every signed-in page (`_app.tsx`): opens this page's tour when asked (the top bar's tour button, or `?`),
- * and on its own for a first-time user (one the onboarding endpoint called first-time in this browser) once the setup
- * guide closes, finished or skipped: first the page's tour with the app tour (the sidebar) folded in, then each
- * page's tour on the first visit. Only once the page has loaded, so its targets are there. The Overview's tour always
- * carries the app tour. A tour belongs to its page: leaving the page closes it.
+ * Mounted on every signed-in page (`_app.tsx`): opens this page's tour when asked (the top bar's tour button, or `?`;
+ * the app tour, the sidebar's, on a page without one, or from the account menu's Tour the sidebar), and on its own only on the Overview, once, for a first-time
+ * user (one the onboarding endpoint called first-time in this browser) once the setup guide closes, finished or
+ * skipped, and the page has loaded, so its targets are there. A tour belongs to its page: leaving the page closes it.
  */
 import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { useRouterState } from '@tanstack/react-router'
@@ -27,9 +26,7 @@ const OWN_KEYS =
 interface Open {
   id: string
   path: string
-  /** The app tour's steps come first. */
-  withApp: boolean
-  /** A first-time user's first tour, opened on its own: it offers No thanks. */
+  /** Opened on its own (the Overview's, for a first-time user): it offers No thanks. */
   firstRun: boolean
 }
 
@@ -49,8 +46,11 @@ export function TourHost() {
   const [answered, setAnswered] = useState(asks)
   if (asks !== answered) {
     setAnswered(asks)
-    const id = tourFor(pathname, layerTours) ?? 'app'
-    setOpen({ id, path: pathname, withApp: id === 'overview', firstRun: false })
+    setOpen({
+      id: asks.tour ?? tourFor(pathname, layerTours) ?? 'app',
+      path: pathname,
+      firstRun: false,
+    })
   }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -66,29 +66,19 @@ export function TourHost() {
   }, [])
   if (open && open.path !== pathname) setOpen(null)
 
-  // A first-time user turns automatic tours on, once: after No thanks (which marks the app tour seen) they stay off.
+  // A first-time user turns the automatic tour on, once: after No thanks or the tour itself (which mark the Overview's
+  // seen) it stays off.
   useEffect(() => {
-    if (sub && guide.due && !prefs.auto && !prefs.seen.includes('app'))
+    if (sub && guide.due && !prefs.auto && !prefs.seen.includes('overview'))
       writePrefs(sub, { ...prefs, auto: true })
   }, [sub, guide.due, prefs])
 
-  const due = sub && !guide.due && !guideOpen && !open ? dueTour(prefs, pathname, layerTours) : null
-  const dueId = due?.id
-  const dueWithApp = due?.withApp ?? false
+  const dueId = sub && !guide.due && !guideOpen && !open ? dueTour(prefs, pathname) : null
   useEffect(() => {
     if (!dueId || busy) return
-    const t = setTimeout(
-      () =>
-        setOpen({
-          id: dueId,
-          path: pathname,
-          withApp: dueWithApp || dueId === 'overview',
-          firstRun: dueWithApp,
-        }),
-      SETTLE_MS,
-    )
+    const t = setTimeout(() => setOpen({ id: dueId, path: pathname, firstRun: true }), SETTLE_MS)
     return () => clearTimeout(t)
-  }, [dueId, dueWithApp, busy, pathname])
+  }, [dueId, busy, pathname])
 
   if (!open || !sub) return null
   const end = (next: (p: TourPrefs) => TourPrefs) => {
@@ -100,11 +90,10 @@ export function TourHost() {
       key={`${open.id}:${open.path}`}
       id={open.id}
       layer={layerTours.find((t) => t.id === open.id) ?? null}
-      withApp={open.withApp}
-      // The one place to turn automatic tours off.
+      // The one place to turn the automatic tour off.
       offerOptOut={open.firstRun}
-      onEnd={() => end((p) => markSeen(open.withApp ? markSeen(p, 'app') : p, open.id))}
-      onOptOut={() => end((p) => ({ ...markSeen(p, 'app'), auto: false }))}
+      onEnd={() => end((p) => markSeen(p, open.id))}
+      onOptOut={() => end((p) => ({ ...markSeen(p, open.id), auto: false }))}
     />
   )
 }

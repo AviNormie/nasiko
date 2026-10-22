@@ -184,7 +184,7 @@ export function TourButton({ className }: { className?: string }) {
       title={`${copy.tour} (?)`}
       aria-label={copy.tour}
       aria-keyshortcuts="?"
-      onClick={askForTour}
+      onClick={() => askForTour()}
       className={cn('size-8 shrink-0 text-muted-foreground pointer-coarse:size-11', className)}
     >
       <CircleHelp aria-hidden />

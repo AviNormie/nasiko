@@ -1,6 +1,6 @@
 import { z } from 'zod/mini'
 import { sharedSearchSchema } from '@/app/shell/context'
-import { fallback, flag, isoDate, opt } from '@/lib/search'
+import { fallback, flag, isoDate, opt, text } from '@/lib/search'
 
 /**
  * Everything the TokenOps page shows is driven by these URL search params
@@ -50,6 +50,9 @@ export const tokenopsSearchSchema = z.extend(sharedSearchSchema, {
   traces: opt(flag),
   /** Sections to land on: CSV of DISCLOSURES, or `all`. Unknown ids are dropped. */
   open: opt(z.pipe(z.string(), z.transform(parseOpen))),
+  // Mock-only (read by the mock bootstrap from the URL): kept as written, as on /optimization, so a scenario such as
+  // `?mock=desktop-running` survives the router's search validation instead of being dropped.
+  mock: opt(text),
 })
 
 export type TokenopsSearch = z.infer<typeof tokenopsSearchSchema>

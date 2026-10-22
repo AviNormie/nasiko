@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { dueTour, markSeen, NO_PREFS, parsePrefs, TOUR_IDS, tourFor } from './logic'
-import { stepsFor, TOURS } from './tours'
+import { TOURS } from './tours'
 
 describe('tourFor', () => {
   it.each([
@@ -36,25 +36,18 @@ describe('tourFor', () => {
     ]
     expect(tourFor('/access/users', layers)).toBe('access')
     expect(tourFor('/agents', layers)).toBe('agents')
-    expect(dueTour({ auto: true, seen: ['app'] }, '/access', layers)).toEqual({
-      id: 'access',
-      withApp: false,
-    })
   })
 })
 
 describe('dueTour', () => {
   const on = { auto: true, seen: [] }
   it('starts nothing while tours are off', () => expect(dueTour(NO_PREFS, '/')).toBeNull())
-  it('folds the app tour into the first one, wherever the user is', () => {
-    expect(dueTour(on, '/tokenops')).toEqual({ id: 'tokenops', withApp: true })
-    expect(dueTour(on, '/weave')).toEqual({ id: 'app', withApp: true })
+  it("starts the Overview's alone, once", () => {
+    expect(dueTour(on, '/')).toBe('overview')
+    expect(dueTour(markSeen(on, 'overview'), '/')).toBeNull()
   })
-  it("then each page's own, once", () => {
-    const afterApp = markSeen(markSeen(on, 'app'), 'tokenops')
-    expect(dueTour(afterApp, '/tokenops')).toBeNull()
-    expect(dueTour(afterApp, '/sessions')).toEqual({ id: 'sessions', withApp: false })
-    expect(dueTour(afterApp, '/weave')).toBeNull()
+  it("never starts any other page's, nor the app tour", () => {
+    for (const path of ['/tokenops', '/sessions', '/weave']) expect(dueTour(on, path)).toBeNull()
   })
 })
 
@@ -79,16 +72,4 @@ describe('tours', () => {
   it.each(TOUR_IDS)('%s opens with a centred step, so it never comes out empty', (id) =>
     expect(TOURS[id][0]?.target).toBeUndefined(),
   )
-})
-
-describe('stepsFor', () => {
-  it('puts the welcome and the sidebar first, the page next and the tour button last', () => {
-    const steps = stepsFor(TOURS.overview, true)
-    expect(steps[0]).toBe(TOURS.app[0])
-    expect(steps.map((s) => s.target)).toContain('overview-needs')
-    expect(steps.at(-1)?.target).toBe('tour-button')
-    expect(steps).toHaveLength(TOURS.app.length + TOURS.overview.length)
-  })
-  it('is the page alone without the app tour', () =>
-    expect(stepsFor(TOURS.tokenops, false)).toBe(TOURS.tokenops))
 })

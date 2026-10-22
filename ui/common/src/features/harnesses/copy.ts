@@ -90,6 +90,19 @@ export const copy = {
       `Couldn't reach the Nasiko desktop app${detail ? `: ${detail}` : '.'} Try again.`,
     tryAgain: 'Try again',
     runningTitle: 'Bringing in your coding agents',
+    runningBody: 'This runs in the background. You can leave this page; it keeps going.',
+    steps: {
+      find: 'Find agents',
+      connect: 'Connect',
+      import: 'Import history',
+      send: 'Send to Nasiko',
+    },
+    stepState: { done: 'done', current: 'in progress', pending: 'not started', failed: 'failed' },
+    stepsLabel: (device: string) => `Import steps on ${device}`,
+    agentsHeading: 'Coding agents',
+    historyHeading: 'History',
+    reading: (label: string) => `Reading ${label}`,
+    sentSoFar: (turns: number) => `${plural(turns, 'turn')} sent`,
     doneTitle: 'Your coding agents are in',
     failedTitle: "Some coding agents didn't come in",
     clientLabel: (client: string) =>
@@ -100,16 +113,18 @@ export const copy = {
     noneFound: 'No coding agents found on this computer',
     connected: 'Connected',
     connecting: 'Connecting…',
-    importing: (name: string, done: number, total: number) =>
-      `Importing ${name}… ${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`,
-    imported: (name: string, sessions: number, turns: number) =>
-      `${name}: ${sessions.toLocaleString('en-US')} ${sessions === 1 ? 'session' : 'sessions'}, ${turns.toLocaleString('en-US')} ${turns === 1 ? 'turn' : 'turns'}`,
-    unreadable: (n: number) => ` (${n.toLocaleString('en-US')} couldn't be read)`,
-    waitingAgent: (name: string) => `${name}: waiting`,
-    notOnComputer: (name: string) => `${name}: not on this computer`,
-    notConnected: (name: string) => `${name}: not connected`,
-    agentFailed: (name: string, error: string | null | undefined) =>
-      `${name}: import failed${error ? ` (${error})` : ''}`,
+    // One agent's row: its name (with its colour chip), then where it is, on the right.
+    agentStatus: {
+      importing: (done: number, total: number) =>
+        `${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} sessions`,
+      imported: (sessions: number, turns: number) =>
+        `${plural(sessions, 'session')} · ${plural(turns, 'turn')}`,
+      unreadable: (n: number) => ` · ${n.toLocaleString('en-US')} couldn't be read`,
+      waiting: 'Waiting',
+      notOnComputer: 'Not on this computer',
+      notConnected: 'Not connected',
+      failed: (error: string | null | undefined) => `Import failed${error ? `: ${error}` : ''}`,
+    },
     summary: (sessions: number, turns: number, names: string[]) =>
       names.length
         ? `Imported ${sessions.toLocaleString('en-US')} ${sessions === 1 ? 'session' : 'sessions'} and ${turns.toLocaleString('en-US')} ${turns === 1 ? 'turn' : 'turns'} from ${names.join(', ')}.`
@@ -148,41 +163,21 @@ export const copy = {
       failed: (device: string) => `${device}: import failed.`,
     },
   },
-  // The desktop app's LLM routing card (components/RoutingCard.tsx): `nasiko connect <harness> [--config]`.
-  routing: {
-    title: 'LLM routing',
-    body: "Point a coding harness on this computer at Nasiko's LLM router, with the LLM config you choose. Nothing is routed until you connect it.",
-    listLabel: 'Coding harnesses on this computer',
-    configLabel: (harness: string) => `LLM config for ${harness}`,
-    yourDefault: (name: string) => `Your default (${name})`,
-    configOption: (name: string, provider: string, model: string | null) =>
-      model ? `${name} · ${provider}/${model}` : `${name} · ${provider}`,
-    noConfigs: 'Add an LLM config on the LLM router page before routing a harness.',
-    openRouter: 'Open LLM router',
-    configsFailed: "Couldn't load your LLM configs.",
-    retry: 'Retry',
-    notOnComputer: 'Not on this computer',
-    notRouted: 'Not routed through Nasiko',
-    routedVia: (config: string) => `Routed through Nasiko · ${config}`,
-    routedViaDefault: (config: string) => `Routed through Nasiko · your default (${config})`,
-    routed: 'Routed through Nasiko',
-    byCli: 'Connected with the Nasiko CLI. Connecting here takes it over.',
-    changed: 'Its settings changed since it was connected. Connect again to repair them.',
-    noMcp: 'MCP tools are not connected.',
-    connect: 'Connect',
-    apply: 'Use this config',
-    takeOver: 'Take over',
-    disconnect: 'Disconnect',
-    working: (name: string) => `Connecting ${name}…`,
-    disconnecting: (name: string) => `Disconnecting ${name}…`,
-    connected: (name: string, provider?: string | null, model?: string | null) =>
-      provider
-        ? `${name} is routed through Nasiko (${provider}${model ? `/${model}` : ''}).`
-        : `${name} is routed through Nasiko.`,
-    disconnected: (name: string) => `${name} is no longer routed through Nasiko.`,
-    failed: (name: string, detail: string | null) =>
-      `Couldn't change ${name}'s routing${detail ? `: ${detail}` : '.'}`,
-    loadFailed: "Couldn't read this computer's coding harnesses from the desktop app.",
+  // Token optimization over all of the viewer's coding harnesses (components/HarnessOptimization.tsx); the title and
+  // intro are the agent switch's own (agents/copy.ts).
+  optimization: {
+    label: 'On for your coding agents',
+    hint: 'For all your coding agents at once. On a coding harness it affects history compression, which needs it on for every agent you own.',
+    some: (on: number, total: number) => `On for ${on} of ${total}.`,
+    failed: (n: number, reason: string) =>
+      `Couldn't change Token optimization for ${n === 1 ? 'one coding agent' : `${n} coding agents`}: ${reason}`,
+  },
+  // Monitor's note while the desktop app imports coding agents (components/ImportNotice.tsx).
+  importNotice: {
+    title: 'Bringing in your coding agents',
+    body: "Their sessions are still arriving, so this page doesn't show all of their spend yet. Keep working: it fills in as the import goes, and you don't need to do anything.",
+    label: 'Coding agent import progress',
+    details: 'See progress',
   },
   // The desktop app's sync bar, on every page while coding-agent data syncs (components/SyncBar.tsx).
   syncBar: {
