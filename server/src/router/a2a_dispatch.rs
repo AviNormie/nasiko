@@ -29,6 +29,7 @@ use crate::acl::CpCallGuard;
 use crate::auth::Claims;
 use crate::orchestrator_policy::TurnKind;
 use crate::state::AppState;
+use crate::telemetry::agent_request::RequestOutcome;
 
 /// Doc-only stand-in for the real request type (`nasiko_types::a2a::JsonRpcRequest`,
 /// re-exported from the external `a2a-lf` crate, which has no `ToSchema` impl and
@@ -438,31 +439,6 @@ pub(crate) struct OrchestratorTurn<'a> {
     pub(crate) context_report: Option<&'a nasiko_orchestrator::ContextReport>,
 }
 
-/// Assembles the routed path's preamble in strict precedence order — L0 (org policy) outranks
-/// L1A (per-agent facts) outranks L2 (per-user recall) — by construction: each layer is placed
-/// ahead of the ones that follow it in the text, so nothing downstream has to re-rank them.
-/// `None` at every layer (the common case: OSS, or an EE deployment with nothing configured or
-/// recalled yet) must return `None`, not an empty string, so `OrchestratorConfig.preamble` stays
-/// exactly what it was before any of these three seams existed.
-fn build_preamble(
-    org_context: Option<&str>,
-    agent_facts: Option<&str>,
-    user_context: Option<&str>,
-) -> Option<String> {
-    let user_section = user_context.map(|user| format!("## What you know about this user\n{user}"));
-    let agent_and_user = match (agent_facts, user_section.as_deref()) {
-        (None, None) => None,
-        (Some(facts), None) => Some(facts.to_string()),
-        (None, Some(user)) => Some(user.to_string()),
-        (Some(facts), Some(user)) => Some(crate::prompt_context::prefixed(Some(facts), user)),
-    };
-    match (org_context, agent_and_user) {
-        (None, facts) => facts,
-        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
-        (Some(org), None) => Some(org.to_string()),
-    }
-}
-
 pub(crate) async fn orchestrator_stream(
     state: &AppState,
     turn: OrchestratorTurn<'_>,
@@ -583,7 +559,7 @@ pub(crate) async fn orchestrator_stream(
     // `A2aTool::call()`, a lower-level OSS crate with no path to this EE-installed context)
     // carries its own L1A separately, injected by the EE injection proxy that
     // `forwarding_endpoint()` routes every outbound forward through — see
-    // the edition's forwarding hop. The planner preamble can't move to that proxy because
+    // `ee/server/src/injection_proxy.rs`. The planner preamble can't move to that proxy because
     // it isn't an outbound forward at all; it's text folded into the LLM's own prompt before any
     // agent is chosen.
     // From `agents` (the post-endpoint-resolution roster actually rendered below), not
@@ -612,13 +588,6 @@ pub(crate) async fn orchestrator_stream(
         Some(text)
     };
 
-    // User-scoped recall — unlike `agent_facts` above, not tied to any candidate agent, so it is
-    // the one channel that reaches a **zero-leg** answer (the planner responds directly, without
-    // delegating): a minted sub-leg's own outbound call carries no path back to this trait, and a
-    // zero-leg turn never reaches one at all. `None` on OSS and on an EE deployment with nothing
-    // user-scoped to add yet — see `PromptContextProvider::context_for_user`.
-    let user_context = state.prompt_context.context_for_user(user_id, query).await;
-
     // Organization-wide context, resolved once for the whole turn. It reaches the routed path
     // TWICE, and both are needed: the planner's own preamble, because a zero-leg turn is answered
     // by the planner and never reaches an agent at all; and `outbound_prefix`, because a minted
@@ -631,11 +600,11 @@ pub(crate) async fn orchestrator_stream(
     // observability.
     let org_applied = org_context.is_some();
     let org_policy_chars = org_context.as_deref().map(str::len).unwrap_or(0);
-    let preamble = build_preamble(
-        org_context.as_deref(),
-        agent_facts.as_deref(),
-        user_context.as_deref(),
-    );
+    let preamble = match (org_context.as_deref(), agent_facts) {
+        (None, facts) => facts,
+        (Some(org), Some(facts)) => Some(crate::prompt_context::prefixed(Some(org), &facts)),
+        (Some(org), None) => Some(org.to_string()),
+    };
     // IP-3 skips opted-out agents' results; unreadable switches turn it off for the turn.
     let uncompressed_tools = match opted_out_agent_tools(&state.db).await {
         Ok(tools) => Some(tools),
@@ -701,11 +670,6 @@ pub(crate) async fn orchestrator_stream(
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
     let traceparent = crate::telemetry::traceparent_for(&flow_ctx);
-    // The inbound traceparent seeds this trace id, and it is the caller's to send, so it can
-    // name a flow that belongs to someone else. Refuse before any per-flow state is touched
-    // (including the telemetry below, which is keyed by this trace id); `open_flow` further down
-    // is the race-free backstop.
-    refuse_foreign_flow(state, &flow_id, user_id).await?;
 
     // Selection ran in the caller, before any of this existed; `dispatch_span` is the span the
     // trace page looks for, so the report is attached here. `agent_id` stays unset — routing has
@@ -741,19 +705,18 @@ pub(crate) async fn orchestrator_stream(
         TurnKind::User => serde_json::json!({ "context_id": context_id, "user_message": raw_text }),
         TurnKind::Continuation => serde_json::json!({ "context_id": context_id }),
     };
-    open_dispatch_flow(
-        state,
-        crate::flows::NewFlow {
-            flow_id: &flow_id,
-            user_id,
-            root_agent_id: None,
-            root_agent_name: "orchestrator",
-            title: Some(query),
-            metadata: &flow_metadata,
-            session_id: None,
-        },
+    let _ = sqlx::query(
+        r#"INSERT INTO flows (flow_id, user_id, root_agent_name, title, status, metadata)
+           VALUES ($1, $2, 'orchestrator', $3, 'running', $4)
+           ON CONFLICT (flow_id) DO UPDATE
+              SET status = 'running', completed_at = NULL"#,
     )
-    .await?;
+    .bind(&flow_id)
+    .bind(user_id)
+    .bind(query)
+    .bind(&flow_metadata)
+    .execute(&state.db)
+    .await;
 
     // `flow_id` doubles as the trace id (see comment below) — index it against
     // the session so `nasiko history`'s Tempo-miss fallback
@@ -788,13 +751,14 @@ pub(crate) async fn orchestrator_stream(
         state.flow_guard.clone(),
         flow_ctx,
         caller_uuid,
+        state.genai_metrics.agent_call_meter(),
     );
 
     // `A2aClient`'s own default is deliberately short — it is shared with agent
     // card / discovery fetches, where a long hang is the wrong behaviour. This
     // client makes real agent turns, including the `message/send` fallback taken
     // by agents that reject `message/stream`, so it carries the agent budget.
-    let a2a_client = nasiko_react_agent::A2aClient::new()
+    let a2a_client = nasiko_react_agent::A2aClient::with_http_client(state.agent_client.clone())
         .with_timeout(std::time::Duration::from_secs(
             state.config.agent_call_timeout_secs,
         ))
@@ -1278,41 +1242,6 @@ pub(crate) async fn orchestrator_stream(
 /// Resolve a caller-supplied target (either the agent's UUID or its name) to a
 /// concrete, running agent row. Callers MUST authorize on the returned `id`
 /// before using it — this function does no access control of its own.
-/// Rejects a dispatch whose flow id already belongs to another user. See
-/// [`crate::flows::OpenFlowError::ForeignFlow`] for why the flow id cannot be trusted.
-async fn refuse_foreign_flow(
-    state: &AppState,
-    flow_id: &str,
-    user_id: Uuid,
-) -> Result<(), A2aDispatchError> {
-    match crate::flows::flow_belongs_to_another(&state.db, flow_id, user_id).await {
-        Ok(false) => Ok(()),
-        Ok(true) => Err(foreign_flow_rejection(flow_id, user_id)),
-        Err(e) => Err(A2aDispatchError::Internal(e.to_string())),
-    }
-}
-
-/// Opens the dispatch's `flows` row. The row is load-bearing for the agent's MCP and LLM
-/// authorization, and an unwritten row has no known owner, so a failure here stops the dispatch
-/// rather than forwarding without it.
-async fn open_dispatch_flow(
-    state: &AppState,
-    flow: crate::flows::NewFlow<'_>,
-) -> Result<(), A2aDispatchError> {
-    let (flow_id, user_id) = (flow.flow_id.to_string(), flow.user_id);
-    crate::flows::open_flow(&state.db, flow)
-        .await
-        .map_err(|e| match e {
-            crate::flows::OpenFlowError::ForeignFlow => foreign_flow_rejection(&flow_id, user_id),
-            crate::flows::OpenFlowError::Db(e) => A2aDispatchError::Internal(e.to_string()),
-        })
-}
-
-fn foreign_flow_rejection(flow_id: &str, user_id: Uuid) -> A2aDispatchError {
-    tracing::warn!(%flow_id, %user_id, "a2a dispatch: traceparent names another user's flow");
-    A2aDispatchError::Forbidden("traceparent does not belong to this user".into())
-}
-
 async fn resolve_agent(state: &AppState, target: &str) -> Result<AgentRow, A2aDispatchError> {
     // Excludes `is_internal` agents unconditionally, including for the owning
     // superuser — this is the platform's only generic A2A entry point, and an
@@ -1446,11 +1375,6 @@ async fn agent_stream(
     let flow_ctx = crate::telemetry::flow_context_from_span(&dispatch_span)
         .unwrap_or_else(FlowContext::new_root);
     let flow_id = flow_ctx.flow_id.clone();
-    // The inbound traceparent seeds this trace id, and it is the caller's to send, so it can
-    // name a flow that belongs to someone else. Refuse before any per-flow state is touched
-    // (including the telemetry below, which is keyed by this trace id); `open_flow` further down
-    // is the race-free backstop.
-    refuse_foreign_flow(state, &flow_id, user_id).await?;
 
     if let Some(report) = context_report {
         crate::telemetry::record_context_report(
@@ -1501,19 +1425,20 @@ async fn agent_stream(
             serde_json::json!({ "applied": true })
         };
     }
-    open_dispatch_flow(
-        state,
-        crate::flows::NewFlow {
-            flow_id: &flow_id,
-            user_id,
-            root_agent_id: Some(agent.id),
-            root_agent_name: &agent.name,
-            title: Some(query),
-            metadata: &flow_metadata,
-            session_id: None,
-        },
+    let _ = sqlx::query(
+        r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
+           VALUES ($1, $2, $3, $4, $5, 'running', $6)
+           ON CONFLICT (flow_id) DO UPDATE
+              SET status = 'running', completed_at = NULL"#,
     )
-    .await?;
+    .bind(&flow_id)
+    .bind(user_id)
+    .bind(agent.id)
+    .bind(&agent.name)
+    .bind(query)
+    .bind(&flow_metadata)
+    .execute(&state.db)
+    .await;
     // Participant record — load-bearing for MCP gateway / LLM router auth
     // (docs/MCP_GATEWAY_AGENT_AUTH.md §2.4); same synchronous pre-forward write
     // as the flows row above.
@@ -1599,17 +1524,15 @@ async fn agent_stream(
     // flow_participants record written above carry the user binding.
     let build_agent_req = || {
         let mut req = state
-            .http_client
+            .agent_client
             .post(&target.url)
             .header("A2A-Version", nasiko_types::a2a::A2A_VERSION_HEADER_VALUE)
             .header(
                 nasiko_agent_proxy::headers::HEADER_TRACEPARENT,
                 crate::telemetry::traceparent_for(&flow_ctx),
             )
-            // Agent turns can legitimately run past the shared client's short
-            // default (long tool calls, multi-step orchestration); override
-            // per-request instead of raising the global default for every caller
-            // of `state.http_client`.
+            // Agent turns can legitimately run long (long tool calls,
+            // multi-step orchestration), so this hop carries the agent budget.
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
             ));
@@ -1620,6 +1543,12 @@ async fn agent_stream(
         }
         req
     };
+
+    // In flight until the agent's reply is complete. Starts as `Error`, so the early returns
+    // below count as failures.
+    let mut request_guard = state
+        .genai_metrics
+        .begin_agent_request(&agent.id.to_string());
 
     let response = build_agent_req()
         .json(&req_body)
@@ -1656,6 +1585,9 @@ async fn agent_stream(
     if content_type.contains("text/event-stream") {
         let byte_stream = response.bytes_stream();
         let flow_id_cleanup = flow_id;
+        // Dropping the generator (client disconnect) skips the code after the relay loop, which
+        // is the only place the outcome is settled.
+        request_guard.set_outcome(RequestOutcome::Cancelled);
 
         let stream = async_stream::stream! {
             // Hold the dispatch span for the life of the stream so its duration
@@ -1692,7 +1624,11 @@ async fn agent_stream(
                         };
                         let chunk = match chunk_result {
                             Ok(c) => c,
-                            Err(_) => { agent_done = true; continue; }
+                            Err(_) => {
+                                request_guard.set_outcome(RequestOutcome::Error);
+                                agent_done = true;
+                                continue;
+                            }
                         };
                         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -1734,6 +1670,12 @@ async fn agent_stream(
                     }
                 }
             }
+
+            // The agent's part is over; what follows is bookkeeping, not in-flight agent load.
+            request_guard.settle(RequestOutcome::from_success(
+                agent_error.is_none() && final_disposition != a2a::StreamDisposition::Failed,
+            ));
+            drop(request_guard);
 
             if final_disposition == a2a::StreamDisposition::Paused {
                 // §8 (HITL plan): a Paused disposition is not "the task is done" — persist the
@@ -1815,6 +1757,9 @@ async fn agent_stream(
             .await
             .map_err(|e| A2aDispatchError::Internal(format!("invalid agent JSON: {e}")))?;
 
+        // A non-success first reply returned early above; the retry's status is checked below.
+        let mut reply_status_ok = true;
+
         // The agent rejected `message/stream` (e.g. method not found) —
         // retry once with plain `message/send`.
         if resp_body.get("error").is_some() {
@@ -1826,6 +1771,7 @@ async fn agent_stream(
                 .send()
                 .await
                 .map_err(|e| A2aDispatchError::Internal(format!("agent request failed: {e}")))?;
+            reply_status_ok = retry.status().is_success();
             resp_body = retry
                 .json()
                 .await
@@ -1836,6 +1782,9 @@ async fn agent_stream(
         // `message/send`, or whose `message/stream` fell back here) — §8 applies here just as
         // much as it does to the streaming branch; without this check the pause was silently
         // flattened into `extract_text`'s ordinary-reply fallback and lost entirely.
+        // A transport or parse failure above returned early with the guard still `Error`.
+        request_guard.set_outcome(non_streaming_reply_outcome(reply_status_ok, &resp_body));
+
         let raw_body = resp_body.to_string();
         if a2a::classify_stream_disposition(&raw_body) == a2a::StreamDisposition::Paused {
             let question_text = build_pause_question(&raw_body)["message"]
@@ -2311,6 +2260,16 @@ pub(crate) async fn resolve_endpoint(
 
 /// Normalize a Python a2a-sdk JSONRPC event to CP native StreamResponse format.
 /// Extract the error message if this SSE event represents a TASK_STATE_FAILED status update.
+/// The per-agent metrics outcome of a non-streaming agent reply: a success status, no JSON-RPC
+/// `error`, and a task that did not end failed. The task state is read with the same wire-shape
+/// classifier the streaming relay ends its exchange on, which (unlike `extract_failure_message`)
+/// also reads the task-wrapped reply a non-streaming agent sends.
+fn non_streaming_reply_outcome(status_ok: bool, body: &serde_json::Value) -> RequestOutcome {
+    let task_failed =
+        a2a::classify_stream_disposition(&body.to_string()) == a2a::StreamDisposition::Failed;
+    RequestOutcome::from_success(status_ok && body.get("error").is_none() && !task_failed)
+}
+
 fn extract_failure_message(data: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
     let status_update = parsed
@@ -2724,69 +2683,48 @@ mod hitl_pause_tests {
     }
 }
 
-/// `build_preamble`'s only job is precedence ordering — L0 > L1A > L2 — over three independently
-/// optional inputs. Pure and DB-free, so every combination is cheap to pin hermetically without
-/// standing up `orchestrator_stream`'s full DB/state dependencies.
 #[cfg(test)]
-mod build_preamble_tests {
+mod reply_outcome_tests {
     use super::*;
 
     #[test]
-    fn nothing_configured_or_recalled_is_none_not_an_empty_string() {
-        // The common case (OSS, or an EE deployment with nothing to add yet) must leave
-        // `OrchestratorConfig.preamble` exactly `None`, not `Some(String::new())` — a caller that
-        // only checks `.is_some()` would otherwise start behaving as if something was injected.
-        assert_eq!(build_preamble(None, None, None), None);
-    }
+    fn a_non_streaming_reply_is_ok_only_without_an_error_or_a_failed_task() {
+        let completed = json!({"jsonrpc": "2.0", "id": "1", "result": {"task": {
+            "id": "t", "status": {"state": "TASK_STATE_COMPLETED"}}}});
+        let flat_message = json!({"jsonrpc": "2.0", "id": "1",
+            "result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}});
+        let failed = json!({"jsonrpc": "2.0", "id": "1", "result": {"task": {
+            "id": "t", "status": {"state": "TASK_STATE_FAILED"}}}});
+        let rpc_error = json!({"jsonrpc": "2.0", "id": "1",
+            "error": {"code": -32601, "message": "method not found"}});
 
-    #[test]
-    fn each_layer_alone_surfaces_on_its_own() {
         assert_eq!(
-            build_preamble(Some("ORG"), None, None),
-            Some("ORG".to_string())
+            non_streaming_reply_outcome(true, &completed),
+            RequestOutcome::Ok
         );
         assert_eq!(
-            build_preamble(None, Some("FACTS"), None),
-            Some("FACTS".to_string())
+            non_streaming_reply_outcome(true, &flat_message),
+            RequestOutcome::Ok
         );
         assert_eq!(
-            build_preamble(None, None, Some("RECALL")),
-            Some("## What you know about this user\nRECALL".to_string())
+            non_streaming_reply_outcome(false, &completed),
+            RequestOutcome::Error
         );
-    }
-
-    #[test]
-    fn all_three_land_in_precedence_order_l0_then_l1a_then_l2() {
-        let preamble = build_preamble(Some("ORG"), Some("FACTS"), Some("RECALL")).unwrap();
-        let org_at = preamble.find("ORG").expect("org policy present");
-        let facts_at = preamble.find("FACTS").expect("agent facts present");
-        let user_at = preamble
-            .find("## What you know about this user")
-            .expect("user recall present");
-        assert!(
-            org_at < facts_at && facts_at < user_at,
-            "L0 must precede L1A must precede L2, got: {preamble:?}"
-        );
-    }
-
-    #[test]
-    fn user_recall_is_headed_but_agent_facts_are_not_double_headed() {
-        // `agent_facts` already carries its own "## Known facts..." heading from its own call
-        // site — `build_preamble` must not add a second one on top of it.
-        let preamble =
-            build_preamble(None, Some("## Known facts about specific agents\nX"), None).unwrap();
         assert_eq!(
-            preamble.matches("##").count(),
-            1,
-            "agent_facts must not be re-headed: {preamble:?}"
+            non_streaming_reply_outcome(true, &failed),
+            RequestOutcome::Error
+        );
+        assert_eq!(
+            non_streaming_reply_outcome(true, &rpc_error),
+            RequestOutcome::Error
         );
     }
 }
 
 /// `append_org_policy_part` is `agent_stream`'s half of the marker-splicing fix — the other half
-/// (L1A, at the EE injection proxy) is pinned by that hop's own tests. These
-/// don't need a live agent or the EE proxy: `append_org_policy_part` operates purely on an
-/// in-memory `JsonRpcRequest`, so they run hermetically.
+/// (`agent_proxy.rs`'s own delivery point) is pinned by its own tests. These don't need a live
+/// agent: `append_org_policy_part` operates purely on an in-memory `JsonRpcRequest`, so they run
+/// hermetically.
 #[cfg(test)]
 mod org_policy_part_tests {
     use super::*;

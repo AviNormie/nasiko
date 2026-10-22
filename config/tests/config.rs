@@ -371,6 +371,70 @@ fn build_concurrency_is_parsed_and_clamped() {
     unset_required_vars();
 }
 
+const AGENT_STATE_KEYS: [&str; 4] = [
+    "AGENT_STATE_TTL_DAYS",
+    "AGENT_STATE_MAX_BODY_BYTES",
+    "AGENT_STATE_RATE_LIMIT_PER_MINUTE",
+    "AGENT_STATE_LIST_BYTES_BUDGET",
+];
+
+#[test]
+#[serial]
+fn agent_state_limits_default_when_unset() {
+    set_required_vars();
+    unset_vars(&AGENT_STATE_KEYS);
+
+    let cfg = Config::from_env().unwrap();
+    assert_eq!(cfg.agent_state_ttl_days, 7);
+    assert_eq!(cfg.agent_state_max_body_bytes, 1_048_576);
+    assert_eq!(cfg.agent_state_rate_limit_per_minute, 1200);
+    assert_eq!(cfg.agent_state_list_bytes_budget, 8 * 1024 * 1024);
+
+    unset_required_vars();
+}
+
+#[test]
+#[serial]
+fn agent_state_limits_are_parsed_and_clamped() {
+    set_required_vars();
+    unset_vars(&AGENT_STATE_KEYS);
+
+    // A zero TTL would expire every row as it is written, and a zero limit would
+    // refuse every request, so both resolve to the smallest usable value.
+    for (env_value, expected_ttl_days) in [("30", 30), ("1", 1), ("0", 1), ("-3", 1), ("9999", 365)]
+    {
+        unsafe { std::env::set_var("AGENT_STATE_TTL_DAYS", env_value) };
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(
+            cfg.agent_state_ttl_days, expected_ttl_days,
+            "AGENT_STATE_TTL_DAYS={env_value} should resolve to {expected_ttl_days}"
+        );
+    }
+
+    unsafe {
+        std::env::set_var("AGENT_STATE_MAX_BODY_BYTES", "0");
+        std::env::set_var("AGENT_STATE_RATE_LIMIT_PER_MINUTE", "0");
+        std::env::set_var("AGENT_STATE_LIST_BYTES_BUDGET", "0");
+    }
+    let cfg = Config::from_env().unwrap();
+    assert_eq!(cfg.agent_state_max_body_bytes, 1);
+    assert_eq!(cfg.agent_state_rate_limit_per_minute, 1);
+    assert_eq!(cfg.agent_state_list_bytes_budget, 1);
+
+    unsafe {
+        std::env::set_var("AGENT_STATE_MAX_BODY_BYTES", "2048");
+        std::env::set_var("AGENT_STATE_RATE_LIMIT_PER_MINUTE", "5");
+        std::env::set_var("AGENT_STATE_LIST_BYTES_BUDGET", "4096");
+    }
+    let cfg = Config::from_env().unwrap();
+    assert_eq!(cfg.agent_state_max_body_bytes, 2048);
+    assert_eq!(cfg.agent_state_rate_limit_per_minute, 5);
+    assert_eq!(cfg.agent_state_list_bytes_budget, 4096);
+
+    unset_vars(&AGENT_STATE_KEYS);
+    unset_required_vars();
+}
+
 #[test]
 #[serial]
 fn flow_max_depth_is_parsed_from_env() {
