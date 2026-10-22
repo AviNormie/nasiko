@@ -225,6 +225,7 @@ async fn opening_a_flow_never_succeeds_for_another_users_flow() {
         root_agent_name: "helper-agent",
         title: Some("hello"),
         metadata: &metadata,
+        session_id: None,
     };
 
     assert!(
@@ -278,6 +279,7 @@ async fn opening_a_flow_never_succeeds_for_another_users_flow() {
             root_agent_name: "orchestrator",
             title: None,
             metadata: &metadata,
+            session_id: None,
         },
     )
     .await

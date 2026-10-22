@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use nasiko_flow::{FlowContext, FlowGuard};
 use nasiko_types::a2a::{PauseReason, StreamDisposition, build_send_request_for_task};
-use nasiko_types::agent_call::AgentCallMeter;
 use sqlx::PgPool;
 use tracing::Instrument as _;
 use uuid::Uuid;
@@ -37,19 +36,6 @@ enum StepLoopOutcome {
 /// This is deliberately kept alongside the spans added by `run_maf`: spans go
 /// to Tempo and are the only way to see the trace tree, but they produce
 /// nothing in a deployment with no collector, which is the common local case.
-/// Count one step's agent call as in flight to `agent_id` for exactly as long as `call` runs.
-/// A pause is a reply, so only an `Err` counts as a failed call.
-async fn metered<T>(
-    agent_calls: &Arc<dyn AgentCallMeter>,
-    agent_id: Uuid,
-    call: impl std::future::Future<Output = Result<T, String>>,
-) -> Result<T, String> {
-    let mut in_flight = agent_calls.begin(agent_id);
-    let result = call.await;
-    in_flight.set_succeeded(result.is_ok());
-    result
-}
-
 async fn timed<T>(
     label: &'static str,
     execution_id: Uuid,
@@ -233,7 +219,6 @@ pub async fn run_maf(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
-    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
@@ -265,7 +250,6 @@ pub async fn run_maf(
         client,
         db,
         flow_guard,
-        agent_calls,
         execution_id,
         user_id,
         maf_def,
@@ -282,7 +266,6 @@ async fn run_maf_inner(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
-    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
@@ -435,7 +418,6 @@ async fn run_maf_inner(
             client,
             db,
             flow_guard,
-            agent_calls,
             execution_id,
             user_id,
             step,
@@ -486,7 +468,6 @@ pub async fn run_maf_from(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
-    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     maf_def: &MafDefinition,
@@ -555,7 +536,6 @@ pub async fn run_maf_from(
         client,
         db,
         flow_guard,
-        agent_calls,
         execution_id,
         user_id,
         &maf_def.steps[resume_index],
@@ -583,7 +563,6 @@ pub async fn run_maf_from(
             client,
             db,
             flow_guard,
-            agent_calls,
             execution_id,
             user_id,
             &maf_def.steps[i],
@@ -629,7 +608,6 @@ async fn execute_step(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
-    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     step: &MafStep,
@@ -878,22 +856,22 @@ async fn execute_step(
         return StepLoopOutcome::Failed(err);
     }
 
+    // Org policy is appended as its own part inside `call_agent`, never composed back into
+    // `actual_prompt`: that value is persisted to `step_results[i].prompt` below and read back
+    // verbatim on resume, so folding the policy into it in place would put the policy in the
+    // record — and then re-append it to the already-appended copy on every resume.
     let raw_response = timed(
         "call_agent",
         execution_id,
         Some(step.step_index),
-        metered(
-            agent_calls,
-            step.agent_id,
-            call_agent(
-                client,
-                &endpoint,
-                &execution_id.to_string(),
-                &user_id.to_string(),
-                &actual_prompt,
-                outbound_prefix,
-                &traceparent,
-            ),
+        call_agent(
+            client,
+            &endpoint,
+            &execution_id.to_string(),
+            &user_id.to_string(),
+            &actual_prompt,
+            outbound_prefix,
+            &traceparent,
         ),
     )
     .instrument(step_span)
@@ -998,7 +976,6 @@ async fn continue_paused_step(
     client: &reqwest::Client,
     db: &PgPool,
     flow_guard: &Arc<FlowGuard>,
-    agent_calls: &Arc<dyn AgentCallMeter>,
     execution_id: Uuid,
     user_id: Uuid,
     step: &MafStep,
@@ -1044,18 +1021,14 @@ async fn continue_paused_step(
     .execute(db)
     .await;
 
-    let call_result = metered(
-        agent_calls,
-        step.agent_id,
-        call_agent_continuation(
-            client,
-            &step.agent_endpoint,
-            context_id,
-            task_id,
-            &user_id.to_string(),
-            injected_answer,
-            &traceparent,
-        ),
+    let call_result = call_agent_continuation(
+        client,
+        &step.agent_endpoint,
+        context_id,
+        task_id,
+        &user_id.to_string(),
+        injected_answer,
+        &traceparent,
     )
     .await;
 
@@ -2020,6 +1993,10 @@ async fn call_agent(
     context_id: &str,
     user_id: &str,
     prompt: &str,
+    // Organization policy (L0), appended as its own part — never spliced into `prompt`, which is
+    // persisted verbatim to `step_results[i].prompt` and read back on resume (see this function's
+    // caller). Same representation `a2a_dispatch.rs`/`agent_proxy.rs`/`tool.rs` use for the exact
+    // same reason: a second, independently-addressable part rather than a merged string.
     outbound_prefix: Option<&str>,
     traceparent: &str,
 ) -> Result<AgentCallOutcome, String> {
@@ -2096,7 +2073,7 @@ async fn post_a2a_request<T: serde::Serialize + ?Sized>(
     // with its own deploy-time MCP_GATEWAY_TOKEN, and the user binding rides
     // the forwarded traceparent + the flow_participants record written before
     // this call (docs/MCP_GATEWAY_AGENT_AUTH.md).
-    // No per-request timeout: `client` is the worker's agent client, built with the
+    // No per-request timeout: `client` is the MAF worker's own, built with the
     // platform's agent-call budget because agent A2A calls are all it makes.
     let resp = {
         let r = client
@@ -2387,13 +2364,11 @@ mod resume_tests {
             nasiko_flow::FlowConfig::default(),
         ));
         let llm = LlmClient::new(reqwest::Client::new(), String::new(), None, String::new());
-        let agent_calls: Arc<dyn AgentCallMeter> = Arc::new(RecordingMeter::default());
 
         let result = run_maf_from(
             &client,
             &db,
             &flow_guard,
-            &agent_calls,
             Uuid::new_v4(),
             Uuid::new_v4(),
             &maf_def,
@@ -2418,67 +2393,6 @@ mod resume_tests {
             err.contains("does not match"),
             "error should name the actual mismatch: {err}"
         );
-    }
-
-    /// Per call: the agent, the result it was told (if any), and whether its handle was dropped.
-    type RecordedCalls = Arc<std::sync::Mutex<Vec<(Uuid, Option<bool>, bool)>>>;
-
-    /// Records what a step's agent call reports through the metering seam.
-    #[derive(Default)]
-    struct RecordingMeter {
-        calls: RecordedCalls,
-    }
-
-    struct RecordingHandle {
-        calls: RecordedCalls,
-        index: usize,
-    }
-
-    impl AgentCallMeter for RecordingMeter {
-        fn begin(&self, agent_id: Uuid) -> Box<dyn nasiko_types::agent_call::AgentCallHandle> {
-            let mut calls = self.calls.lock().unwrap();
-            calls.push((agent_id, None, false));
-            Box::new(RecordingHandle {
-                calls: self.calls.clone(),
-                index: calls.len() - 1,
-            })
-        }
-    }
-
-    impl nasiko_types::agent_call::AgentCallHandle for RecordingHandle {
-        fn set_succeeded(&mut self, succeeded: bool) {
-            self.calls.lock().unwrap()[self.index].1 = Some(succeeded);
-        }
-    }
-
-    impl Drop for RecordingHandle {
-        fn drop(&mut self) {
-            self.calls.lock().unwrap()[self.index].2 = true;
-        }
-    }
-
-    #[tokio::test]
-    async fn a_metered_call_is_in_flight_only_while_it_runs_and_reports_its_result() {
-        let meter = RecordingMeter::default();
-        let calls = meter.calls.clone();
-        let meter: Arc<dyn AgentCallMeter> = Arc::new(meter);
-        let agent = Uuid::new_v4();
-
-        let observed = metered(&meter, agent, async {
-            // Mid-call: begun, no result yet, still held.
-            Ok::<_, String>(calls.lock().unwrap().clone())
-        })
-        .await
-        .unwrap();
-        assert_eq!(observed, vec![(agent, None, false)]);
-        assert_eq!(calls.lock().unwrap()[0], (agent, Some(true), true));
-
-        let failed = metered(&meter, agent, async {
-            Err::<(), _>("HTTP 502".to_string())
-        })
-        .await;
-        assert!(failed.is_err());
-        assert_eq!(calls.lock().unwrap()[1], (agent, Some(false), true));
     }
 
     /// An `OutboundPrefix` that supplies a recognisable prefix and joins it the way the real
@@ -2594,6 +2508,7 @@ mod resume_tests {
                     {"text": "POLICY"}
                 ]}}
             })))
+            .match_request(|request| forwarded_part_count(request) == 2)
             .with_status(200)
             .with_body(completed_agent_response())
             .create_async()
@@ -2625,6 +2540,7 @@ mod resume_tests {
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
                 "params": {"message": {"parts": [{"text": "do the thing"}]}}
             })))
+            .match_request(|request| forwarded_part_count(request) == 1)
             .with_status(200)
             .with_body(completed_agent_response())
             .create_async()
@@ -2644,6 +2560,22 @@ mod resume_tests {
 
         mock.assert_async().await;
         assert!(matches!(result, Ok(AgentCallOutcome::Completed(_))));
+    }
+
+    /// How many message parts a forwarded request carried. `mockito::Matcher::PartialJson` accepts
+    /// extra trailing array elements, so on its own it cannot say "and nothing else was sent"; a
+    /// test that claims an exact list pairs it with this.
+    fn forwarded_part_count(request: &mockito::Request) -> usize {
+        request
+            .body()
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<serde_json::Value>(raw).ok())
+            .and_then(|body| {
+                body.pointer("/params/message/parts")
+                    .and_then(serde_json::Value::as_array)
+                    .map(Vec::len)
+            })
+            .unwrap_or(0)
     }
 
     fn completed_agent_response() -> String {
