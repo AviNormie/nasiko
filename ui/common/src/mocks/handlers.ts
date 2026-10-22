@@ -906,6 +906,8 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
     }),
   ],
   auth: [
+    // The desktop app's own "Forgot password?" probe (app/shell/ForgotPassword.tsx): the 404 a browser gets.
+    http.get('/__nasiko/local/reset/state', () => new HttpResponse('Not Found', { status: 404 })),
     http.get('/api/me', () => {
       if (!loggedIn) return unauthorized()
       // The session is the viewer: OSS gates /api/users/me behind an admin, so the Harnesses page falls back to these
