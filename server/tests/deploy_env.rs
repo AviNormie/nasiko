@@ -214,7 +214,8 @@ async fn seed_agent_deploy_carries_the_platform_env() {
     let f = start().await;
     // A seed image is mirrored from its source registry first. This test has no registry, so it
     // points at an unreachable one and starts from an earlier mirrored copy, which a failed mirror
-    // falls back to; the redeploy of that copy is the deploy judged here.
+    // falls back to; the redeploy of that copy is the deploy judged here. `SEED_FORCE_PULL` makes
+    // it redeploy although the copy is unchanged and the fake runtime reports it running.
     let agent_id = f.create_agent("seeded-echo", "1.0.0").await;
     sqlx::query("UPDATE agents SET image = 'localhost:5000/nasiko/seeded-echo:v1' WHERE id = $1")
         .bind(agent_id)
@@ -222,7 +223,10 @@ async fn seed_agent_deploy_carries_the_platform_env() {
         .await
         .unwrap();
     // SAFETY: serial tests.
-    unsafe { std::env::set_var("SEED_AGENTS", "127.0.0.1:9/nasiko/seeded-echo:v1") };
+    unsafe {
+        std::env::set_var("SEED_AGENTS", "127.0.0.1:9/nasiko/seeded-echo:v1");
+        std::env::set_var("SEED_FORCE_PULL", "1");
+    }
 
     // The seed routine then waits for the agent card from a container that is not there; the
     // deploy it is judged on has long been recorded by the time that wait is cut off.
@@ -231,7 +235,10 @@ async fn seed_agent_deploy_carries_the_platform_env() {
         seed_agents_if_configured(&f.server.state),
     )
     .await;
-    unsafe { std::env::remove_var("SEED_AGENTS") };
+    unsafe {
+        std::env::remove_var("SEED_AGENTS");
+        std::env::remove_var("SEED_FORCE_PULL");
+    }
 
     assert_platform_env(&f.first_spec(agent_id).await);
     f.server.cleanup().await;
