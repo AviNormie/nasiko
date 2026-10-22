@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::Claims;
 use crate::state::AppState;
+use crate::telemetry::agent_request::{AgentRequestGuard, RequestOutcome};
 
 /// Proxy agent requests: auth → flow guard → resolve endpoint → forward.
 ///
@@ -335,7 +336,7 @@ pub async fn agent_proxy(
     // orchestration), so this hop carries the agent-call budget.
     let mut forwarded =
         state
-            .http_client
+            .agent_client
             .request(method, &target_url)
             .timeout(std::time::Duration::from_secs(
                 state.config.agent_call_timeout_secs,
@@ -419,6 +420,10 @@ pub async fn agent_proxy(
         forwarded = forwarded.body(body_bytes);
     }
 
+    // In flight from here to the end of the reply (for a stream, to the end of the stream, or the
+    // client dropping it). Starts as `Error`, so the early returns below count as failures.
+    let mut request_guard = state.genai_metrics.begin_agent_request(&agent_id_str);
+
     let response = forwarded.send().await.map_err(|e| {
         tracing::error!(error = %e, %agent_id, %target_url, "agent proxy: request to agent failed");
         StatusCode::BAD_GATEWAY
@@ -434,6 +439,8 @@ pub async fn agent_proxy(
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|ct| ct.contains("text/event-stream"));
+
+    let upstream_outcome = RequestOutcome::from_success(status.is_success());
 
     let mut builder = Response::builder().status(status.as_u16());
     for (name, value) in resp_headers.iter() {
@@ -464,26 +471,38 @@ pub async fn agent_proxy(
         // right after the chunk that fed the pause is yielded, driven by the *client's*
         // next read of the response body (via hyper/axum), not by another upstream poll —
         // so ending the stream never depends on the agent sending or closing anything else.
+        // Until the stream reaches its natural end the request is `Cancelled`: dropping the
+        // relay (client disconnect) is the only way out that skips the end-of-stream code.
+        request_guard.set_outcome(RequestOutcome::Cancelled);
         let boxed: std::pin::Pin<
             Box<dyn futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>,
         > = Box::pin(stream);
         let body = Body::from_stream(futures::stream::unfold(
-            RelayStep::Read(boxed, tap),
-            |step| async move {
+            RelayStep::Read(boxed, tap, Box::new(request_guard)),
+            move |step| async move {
                 match step {
                     RelayStep::Done => None,
                     // One extra chunk carrying the synthetic "type":"hitl" frame, injected
                     // right after the agent's own pause event — see `RelayStep`'s doc
                     // comment for why this can't just be yielded inline in the same step.
                     RelayStep::Inject(extra) => Some((Ok(extra), RelayStep::Done)),
-                    RelayStep::Read(mut stream, mut tap) => {
-                        let chunk_result = stream.next().await?;
-                        if let Ok(bytes) = &chunk_result {
-                            tap.collector.feed(bytes);
+                    RelayStep::Read(mut stream, mut tap, mut guard) => {
+                        let Some(chunk_result) = stream.next().await else {
+                            guard.settle(upstream_outcome);
+                            return None;
+                        };
+                        match &chunk_result {
+                            Ok(bytes) => tap.collector.feed(bytes),
+                            Err(_) => guard.set_outcome(RequestOutcome::Error),
                         }
                         if !tap.collector.is_paused() {
-                            return Some((chunk_result, RelayStep::Read(stream, tap)));
+                            return Some((chunk_result, RelayStep::Read(stream, tap, guard)));
                         }
+                        // A pause ends the agent's part of the request here. Release the count
+                        // now: persisting the pause below is the platform's bookkeeping, not
+                        // load on the agent.
+                        guard.settle(upstream_outcome);
+                        drop(guard);
                         // Persist synchronously here, before the stream is allowed to
                         // close, and inject the id-carrying frame on this same still-open
                         // connection: this used to happen only in `Drop`, after the stream
@@ -507,6 +526,10 @@ pub async fn agent_proxy(
         tracing::error!(error = %e, %agent_id, "agent proxy: failed to read agent response body");
         StatusCode::BAD_GATEWAY
     })?;
+    // The agent's work is done once its reply is fully read; the pause check and persistence
+    // below are not load on the agent.
+    request_guard.set_outcome(upstream_outcome);
+    drop(request_guard);
 
     // A non-streaming reply can pause too — same check `agent_stream()`'s own non-streaming
     // branch runs, so this proxy doesn't flatten a pause into a bogus "assistant reply" just
@@ -1134,6 +1157,8 @@ enum RelayStep {
     Read(
         std::pin::Pin<Box<dyn futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
         SseReplyTap,
+        // Boxed: the guard carries the metric handles and would bloat every `RelayStep`.
+        Box<AgentRequestGuard>,
     ),
     /// One buffered chunk — the synthetic HITL frame — left to yield before the stream ends.
     Inject(bytes::Bytes),
