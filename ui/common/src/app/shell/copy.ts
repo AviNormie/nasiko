@@ -87,6 +87,11 @@ export const copy = {
     newTab: '(opens in a new tab)',
     loginLead: 'New to Nasiko?',
   },
+  // The desktop app's sign-in, while it runs Nasiko on this computer (ForgotPassword.tsx).
+  forgotPassword: {
+    link: 'Forgot password?',
+    lead: "The password can't be recovered. You can reset Nasiko on this computer and start over.",
+  },
   account: {
     menu: (name: string) => `Account: ${name}`,
     unavailable: 'Account unavailable',
