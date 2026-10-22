@@ -24,6 +24,9 @@ pub struct Config {
     pub s3_access_key: String,
     pub s3_secret_key: String,
     pub s3_region: String,
+    /// Where `POST /api/assessments` forwards the free-assessment form: the Nasiko
+    /// intake that stores it. Unset → the route answers 503.
+    pub assessment_intake_url: Option<String>,
     pub secrets_encryption_key: String,
     pub oci_storage_bucket: String,
     /// Registry prefix prepended to agent image tags at build time.
@@ -504,6 +507,10 @@ impl Config {
                 String::new()
             },
             s3_region: env_or("S3_REGION", "us-east-1"),
+            assessment_intake_url: std::env::var("ASSESSMENT_INTAKE_URL")
+                .ok()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
             secrets_encryption_key: required_env("SECRETS_ENCRYPTION_KEY")?,
             oci_storage_bucket: env_or("OCI_STORAGE_BUCKET", "nasiko-artifacts"),
             agent_image_registry: env_or("AGENT_IMAGE_REGISTRY", ""),

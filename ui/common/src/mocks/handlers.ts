@@ -286,6 +286,8 @@ export const MOCK_VARIANTS = [
   // /api/me/onboarding (bare 404), or a user who already picked a persona.
   'onboarding-absent',
   'onboarding-done',
+  // The free assessment: a server with no ASSESSMENT_S3_BUCKET (503), so the form's answers aren't saved.
+  'assessment-unconfigured',
   // Context optimization (plans/feat-context-optimization.md §3): answers as today's server (no off switch, no tier
   // values, no last-chat preview: the proposed CX-5, CX-T1 and CX-6 are bare 404s or absent).
   'optimization-classic',
@@ -591,6 +593,9 @@ export interface MockOnboarding {
 const ONBOARDED: MockOnboarding = { persona: 'developer', completed: true }
 let onboardingRow: MockOnboarding = ONBOARDED
 let persistOnboarding: ((row: MockOnboarding) => void) | null = null
+/** Bodies `POST /api/assessments` accepted, oldest first. */
+let assessments: unknown[] = []
+export const assessmentsMockState = (): readonly unknown[] => assessments
 
 /** An edition's own mock state, dropped with the core's (EE: the SSO settings and SCIM tokens). */
 const editionResets = new Set<() => void>()
@@ -609,6 +614,7 @@ export function resetAgentsMock() {
   secretValues = new Map()
   mockPassword = null
   onboardingRow = ONBOARDED
+  assessments = []
   codingAgentsState = null
   resetOptimizationMock()
   resetChatMock()
@@ -938,6 +944,19 @@ export const handlerGroups: Record<Mockable, HttpHandler[]> = {
       onboardingRow = { persona: persona as Persona, completed: true }
       persistOnboarding?.(onboardingRow)
       return HttpResponse.json({ is_first_time_user: false, persona })
+    }),
+  ],
+  // `assessment.rs`: `{data: {id}}` on 201; 503 `assessments_not_configured` without a bucket.
+  assessment: [
+    http.post('/api/assessments', async ({ request }) => {
+      if (!loggedIn) return unauthorized()
+      if (variant() === 'assessment-unconfigured')
+        return HttpResponse.json(
+          { error: 'assessment storage is not configured', code: 'assessments_not_configured' },
+          { status: 503 },
+        )
+      assessments.push(await request.json())
+      return HttpResponse.json({ data: { id: crypto.randomUUID() } }, { status: 201 })
     }),
   ],
   auth: [
