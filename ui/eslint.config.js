@@ -6,6 +6,10 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import { createRequire } from 'module';
+
+var require = createRequire(import.meta.url);
+var module = { exports: {} };
 
 /**
  * Each feature's public modules: what another feature may import from it. Anything else is internal.
@@ -322,81 +326,4 @@ export default tseslint.config(
     },
   },
   ...Object.keys(PUBLIC).map(featureRule),
-  // The EE layer builds on the core: any core module (a feature's internals included) and its own `@ee/*`.
-  { files: ['ee/**/*.{ts,tsx}'], rules: { 'no-restricted-imports': layerImports } },
-  // shadcn primitives: the raw elements live here, and upstream owns their compiler-rule findings.
-  {
-    files: ['common/src/components/ui/**'],
-    rules: {
-      'no-restricted-syntax': ['error', ...banned],
-      'react-refresh/only-export-components': 'off',
-      'react-hooks/purity': 'off',
-      'react-hooks/set-state-in-effect': 'off',
-      '@eslint-react/no-array-index-key': 'off',
-      'jsx-a11y/click-events-have-key-events': 'off',
-      'jsx-a11y/no-noninteractive-element-interactions': 'off',
-      'jsx-a11y/anchor-has-content': 'off',
-    },
-  },
-  // The two ARIA widgets shadcn has no equivalent for (plan §8 Phase 1 exceptions).
-  {
-    files: [
-      'common/src/features/tokenops/components/MonthHero.tsx',
-      'common/src/features/trace/Waterfall.tsx',
-    ],
-    rules: { 'no-restricted-syntax': ['error', ...banned, noRawElements[0]] },
-  },
-  // The one fetch wrapper, and the streams it doesn't cover (SSE bodies need the raw Response): chat turns, the
-  // agent log tail (`useLogStream`), a build's deploy stream (`useBuildStream`) and EE's Weave generation; API
-  // modules, so still no fetch in components.
-  {
-    files: [
-      'common/src/lib/api/client.ts',
-      'common/src/features/chat/registry.ts',
-      'common/src/features/sessions/api.ts',
-      'common/src/features/deploy/api.ts',
-      'ee/web/src/genui/conversation/api.ts',
-    ],
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        ...banned.filter((b) => !b.selector.includes("'fetch'")),
-        ...noRawElements,
-      ],
-    },
-  },
-  { files: ['common/src/lib/env.ts'], rules: { 'no-restricted-syntax': 'off' } },
-  {
-    files: ['common/src/routes/**', '*/*/src/routes/**'],
-    rules: { 'react-refresh/only-export-components': 'off' },
-  },
-  // Tests, mocks and Node scripts: assertions and fixtures may use what app code may not.
-  {
-    files: ['**/*.test.{ts,tsx}', '*/src/test/**', '*/src/mocks/**', '*/*/src/mocks/**'],
-    rules: {
-      '@typescript-eslint/no-non-null-assertion': 'off',
-      'no-restricted-syntax': 'off',
-      'no-console': 'off',
-      'react-refresh/only-export-components': 'off',
-      '@eslint-react/no-array-index-key': 'off',
-    },
-  },
-  // Node scripts aren't in a tsconfig program: syntax rules only.
-  { files: ['scripts/**', '*/*/scripts/**'], ...tseslint.configs.disableTypeChecked },
-  {
-    files: ['scripts/**', '*/*/scripts/**'],
-    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
-  },
-  {
-    files: [
-      'scripts/**',
-      '*/*/scripts/**',
-      'vite.shared.ts',
-      'vitest.config.ts',
-      '**/vite.config.ts',
-      'common/src/test/live/**',
-    ],
-    languageOptions: { globals: globals.node },
-    rules: { 'no-console': 'off', 'no-restricted-syntax': 'off' },
-  },
-)
+  // The EE layer builds on the core: any core module (a feature's internals included) and its own `@ee/*`.;
