@@ -42,6 +42,10 @@ pub struct NewFlow<'a> {
     pub root_agent_name: &'a str,
     pub title: Option<&'a str>,
     pub metadata: &'a serde_json::Value,
+    /// `flows.session_id` (0058): the conversation this flow belongs to, as a column so
+    /// `session/list` can group by it. Written on insert only, like the rest of the row; `None`
+    /// where the caller has no conversation to name.
+    pub session_id: Option<&'a str>,
 }
 
 /// Whether `flow_id` already exists and belongs to someone other than `user_id`.
@@ -71,8 +75,8 @@ pub async fn flow_belongs_to_another(
 /// [`OpenFlowError::ForeignFlow`].
 pub async fn open_flow(db: &sqlx::PgPool, flow: NewFlow<'_>) -> Result<(), OpenFlowError> {
     let opened: Option<String> = sqlx::query_scalar(
-        r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata)
-           VALUES ($1, $2, $3, $4, $5, 'running', $6)
+        r#"INSERT INTO flows (flow_id, user_id, root_agent_id, root_agent_name, title, status, metadata, session_id)
+           VALUES ($1, $2, $3, $4, $5, 'running', $6, $7)
            ON CONFLICT (flow_id) DO UPDATE
               SET status = 'running', completed_at = NULL
               WHERE flows.user_id = EXCLUDED.user_id
@@ -84,6 +88,7 @@ pub async fn open_flow(db: &sqlx::PgPool, flow: NewFlow<'_>) -> Result<(), OpenF
     .bind(flow.root_agent_name)
     .bind(flow.title)
     .bind(flow.metadata)
+    .bind(flow.session_id)
     .fetch_optional(db)
     .await
     .map_err(OpenFlowError::Db)?;
