@@ -20,6 +20,7 @@ export const HARNESS_MOCK_VARIANTS = [
   'usage-500',
   'all-unpriced',
   'no-activity',
+  'no-spend',
   'server-down',
   'logout-unavailable',
   // Deploy (plans/feat-deploy.md §9); same reason.

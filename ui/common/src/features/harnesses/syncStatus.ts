@@ -1,5 +1,5 @@
 /**
- * Whether the desktop app is syncing coding-agent data, and the numbers the app-wide sync bar and the Harnesses card
+ * Whether the desktop app is syncing coding-agent data, and the numbers Monitor's import state and the Harnesses card
  * both show (one source: the desktop's state, desktop.ts). It syncs while its run reads or sends history (discovering
  * … sending), while a delivery pass is going, or while turns wait in its queue (a hook's turns included).
  */
@@ -55,21 +55,20 @@ export function desktopSync(state: SyncSource): DesktopSync {
   }
 }
 
-/** The bar's one line: "Syncing coding agents · Oct 17 · 1,730 turns sent · 499 waiting". */
-export function syncLine(sync: DesktopSync): string {
-  const c = copy.syncBar
+/** One line: "Syncing coding agents · Oct 17 · 1,730 turns sent · 499 waiting". */
+export const syncLine = (sync: DesktopSync): string =>
+  [copy.sync.title, syncDetail(sync)].filter(Boolean).join(' · ')
+
+/** The line without its title, where the title is already on screen: "Oct 17 · 1,730 turns sent · 499 waiting". */
+export function syncDetail(sync: DesktopSync): string {
+  const c = copy.sync
   const step =
     sync.phase === 'discovering'
       ? c.discovering
       : sync.phase === 'connecting'
         ? c.connecting
         : sync.window
-  return [
-    c.title,
-    step,
-    sync.sent ? c.sent(sync.sent) : null,
-    sync.waiting ? c.waiting(sync.waiting) : null,
-  ]
+  return [step, sync.sent ? c.sent(sync.sent) : null, sync.waiting ? c.waiting(sync.waiting) : null]
     .filter(Boolean)
     .join(' · ')
 }

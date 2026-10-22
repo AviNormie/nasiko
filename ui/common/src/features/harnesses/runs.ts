@@ -123,7 +123,7 @@ export function lastMonthIn(windows: readonly SyncWindow[]): boolean {
 }
 
 /**
- * One run's progress, the one rule the card and the app's sync bar share. Importing: windows read over windows when
+ * One run's progress, the one rule the card and Monitor's import state share. Importing: windows read over windows when
  * the client reports them, else sessions processed over sessions to process. Sending: turns sent over turns sent and
  * waiting, where `waiting` is what still waits to be sent (the run's own count unless the caller knows the whole
  * queue's), 99 at most. Null while that is unknown (discovering, connecting, nothing counted yet).

@@ -61,7 +61,7 @@ function reached(run: SyncRun, phase: SyncPhase): number {
 }
 
 /** One device's run. `waiting` is the whole queue's count when the desktop app reports it, so the card and the app's
- *  sync bar show the same numbers. */
+ *  Monitor show the same numbers. */
 export function RunBlock({
   run,
   retry,

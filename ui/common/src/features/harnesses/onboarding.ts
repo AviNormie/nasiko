@@ -213,7 +213,7 @@ export interface AgentsOnboarding {
   retry: RetryControl
   /** Desktop only: its POSTs. */
   desktop: DesktopControl | null
-  /** Desktop only: turns waiting in its whole queue (the sync bar's number); null in a browser (each run's own). */
+  /** Desktop only: turns waiting in its whole queue (Monitor's number too); null in a browser (each run's own). */
   waiting: number | null
 }
 
