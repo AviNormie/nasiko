@@ -2,8 +2,6 @@ target/
 .otel-build/
 *.pyc
 __pycache__/
-.env
-.env.*
 *.env.toml
 !.env.example
 .venv/
@@ -18,7 +16,6 @@ uv.lock
 
 # IDE
 .idea/
-.vscode/settings.json
 *.swp
 *.swo
 .envrc
@@ -63,3 +60,4 @@ ui/tests/fixtures/runs/
 
 # Local git worktrees (superpowers workflow)
 .worktrees/
+config.bat
