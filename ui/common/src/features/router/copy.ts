@@ -201,7 +201,6 @@ export const copy = {
   cantClear:
     'OpenRuntime can’t clear this field yet. Duplicate without this field, or use the CLI.',
   duplicateWithout: 'Duplicate without this field',
-  openrouterHidden: 'openrouter isn’t served here: calls will fail',
   missingKey: (name: string) => `Saved key ${name} not found: add it again`,
   providerGone: 'Provider no longer registered',
   useAsDefault: 'Use as my default',

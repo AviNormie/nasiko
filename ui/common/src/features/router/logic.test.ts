@@ -172,10 +172,20 @@ describe('providers', () => {
     expect(isRoutable('openai', [])).toBe(true)
     expect(isRoutable('gemini', [])).toBe(true)
     expect(isRoutable('google', [])).toBe(false)
-    expect(isRoutable('openrouter', [])).toBe(false)
-    expect(isRoutable('openrouter', ['openrouter'])).toBe(true)
-    expect(pickableProviders(['custom'])).toEqual(['openai', 'anthropic', 'gemini', 'custom'])
-    expect(pickableProviders([])).not.toContain('openrouter')
+    expect(isRoutable('openrouter', [])).toBe(true)
+    expect(pickableProviders(['custom'])).toEqual([
+      'openai',
+      'anthropic',
+      'gemini',
+      'openrouter',
+      'custom',
+    ])
+    expect(pickableProviders(['openrouter'])).toEqual([
+      'openai',
+      'anthropic',
+      'gemini',
+      'openrouter',
+    ])
   })
 })
 
@@ -473,7 +483,7 @@ describe('configWarnings (DX #9)', () => {
   it('warns about data made elsewhere, never about a clean config', () => {
     expect(configWarnings(cfg({ api_key_secret_name: 'K' }), ctx)).toEqual([])
     expect(configWarnings(cfg({ provider: 'openrouter', model: 'x' }), ctx)).toEqual([
-      copy.openrouterHidden,
+      copy.notInCatalog,
     ])
     expect(configWarnings(cfg({ provider: 'retired-llm', model: 'x' }), ctx)).toEqual([
       copy.providerGone,

@@ -12,7 +12,7 @@ import { copy } from './copy'
 import type { AgentRouting, AttachBody, LlmConfig, ProviderCatalog, RoutingConfig } from './types'
 
 /** Providers the router speaks natively (llm-router resolver `is_builtin_provider`). */
-const BUILTIN_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const
+const BUILTIN_PROVIDERS = ['openai', 'anthropic', 'gemini', 'openrouter'] as const
 
 // ─── models, tiers and pins ─────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ export function isRoutable(provider: string, customLabels: readonly string[]): b
   )
 }
 
-/** Providers a new config may use: built-ins plus custom labels. `openrouter` only when a custom provider has that label. */
+/** Providers a new config may use: built-ins plus custom labels. */
 export function pickableProviders(customLabels: readonly string[]): string[] {
   return [
     ...BUILTIN_PROVIDERS,
@@ -424,8 +424,7 @@ export interface WarnContext {
  */
 export function configWarnings(c: RoutingConfig, ctx: WarnContext): string[] {
   const out: string[] = []
-  if (!isRoutable(c.provider, ctx.customLabels))
-    out.push(c.provider === 'openrouter' ? copy.openrouterHidden : copy.providerGone)
+  if (!isRoutable(c.provider, ctx.customLabels)) out.push(copy.providerGone)
   if (c.api_key_secret_name && ctx.secrets && !ctx.secrets.includes(c.api_key_secret_name))
     out.push(copy.missingKey(c.api_key_secret_name))
   if (ctx.catalogLoaded && isRoutable(c.provider, ctx.customLabels)) {
