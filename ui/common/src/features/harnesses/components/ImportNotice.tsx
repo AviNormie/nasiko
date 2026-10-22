@@ -1,12 +1,26 @@
 /**
- * Monitor's note while coding agents are being brought in: their spend is still arriving, so the page says so, with
- * the import's progress. The desktop app's own run (the card's Yes, find my agents), or in a browser a run that
- * `nasiko agents setup` reports to the server (re-read on focus, as the viewer comes back from the terminal). Only while
- * an import run is active: a background delivery of hook turns is the desktop sync bar's alone.
+ * Monitor while coding agents are being brought in. The desktop app's own run (the card's Yes, find my agents) and its
+ * queue, or in a browser a run that `nasiko agents setup` reports to the server (re-read on focus, as the viewer comes
+ * back from the terminal).
+ *
+ * - `ImportNotice`: a note above the page's data while an import run is active (not for a background delivery of
+ *   hook turns: the data is there, and the turns are small).
+ * - `ImportingOr`: in place of the page's empty state while anything syncs (import or delivery), the loading state:
+ *   their spend is on its way, so "nothing recorded yet" would be wrong.
  */
 import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { PageLoader } from '@/components/shared/page-loader'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
@@ -15,24 +29,34 @@ import { SYNC_POLL_MS } from '../constants'
 import { useDesktopState } from '../desktop'
 import { useSyncRuns } from '../onboarding'
 import { isActivePhase, shownPhase, type LocalRun } from '../runs'
-import { desktopSync, syncLine } from '../syncStatus'
+import { desktopSync, syncDetail, syncLine, type DesktopSync } from '../syncStatus'
 
 const copy = pageCopy.importNotice
 
 const importing = (run: LocalRun | null | undefined) => !!run && isActivePhase(shownPhase(run))
 
-export function ImportNotice() {
+/** Where the viewer's coding-agent sync is: `pending` until the desktop probe (and in a browser the runs) answer. */
+function useCodingAgentSync(): { pending: boolean; importing: boolean; sync: DesktopSync } {
   const desktop = useDesktopState()
+  const browser = desktop.isSuccess && !desktop.data
   const runs = useSyncRuns({
-    enabled: desktop.isSuccess && !desktop.data,
+    enabled: browser,
     interval: (r) => (r?.some(importing) ? SYNC_POLL_MS : false),
   })
   // ponytail: one device's run in a browser (the first importing); per-device lines live on Harnesses' card.
   const source = desktop.data ?? { run: runs.data?.find(importing) ?? null, backlog: null }
-  if (!importing(source.run)) return null
-  const sync = desktopSync(source)
+  return {
+    pending: desktop.isPending || (browser && runs.isPending),
+    importing: importing(source.run),
+    sync: desktopSync(source),
+  }
+}
+
+export function ImportNotice() {
+  const { importing: active, sync } = useCodingAgentSync()
+  if (!active) return null
   return (
-    // The sync bar's live region already speaks start and finish: this is a note, not a second announcement.
+    // A note, not an announcement: it stays on screen while the import runs.
     <Alert role="note" data-testid="import-notice" className="p-3">
       <Loader2 aria-hidden className="animate-spin motion-reduce:animate-none" />
       <AlertTitle>{copy.title}</AlertTitle>
@@ -56,5 +80,53 @@ export function ImportNotice() {
         </div>
       </AlertDescription>
     </Alert>
+  )
+}
+
+/**
+ * A page's empty state, or while the viewer's coding agents sync, the loading state that replaces it: the empty
+ * state's own frame (the same card, icon tile and type), with a spinner in the tile, what is happening, how far the
+ * sync has got, and the way to the details. Until the sync state is known the page loader alone shows, so the empty
+ * state never flashes before it.
+ */
+export function ImportingOr({ children }: { children: ReactNode }) {
+  const { pending, sync } = useCodingAgentSync()
+  if (pending) return <PageLoader label={copy.title} />
+  if (!sync.syncing) return children
+  const detail = syncDetail(sync)
+  return (
+    <Empty
+      aria-busy="true"
+      data-testid="importing-loader"
+      className="gap-4 border border-border px-4 py-12 md:p-8 md:py-14"
+    >
+      <EmptyHeader className="gap-1">
+        <EmptyMedia variant="icon" className="mb-2 text-muted-foreground">
+          <Loader2 aria-hidden className="size-5 motion-safe:animate-spin" />
+        </EmptyMedia>
+        <EmptyTitle className="text-base">
+          <h2>{copy.title}</h2>
+        </EmptyTitle>
+        <EmptyDescription className="text-sm text-pretty">{copy.loaderBody}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="w-full max-w-xs gap-3">
+        <div className="flex w-full flex-col gap-1.5">
+          <Progress
+            aria-label={copy.label}
+            value={sync.value}
+            aria-valuenow={sync.value ?? undefined}
+            aria-valuetext={sync.value === null ? undefined : `${sync.value}%`}
+            className={cn(
+              'h-1.5 motion-reduce:*:transition-none',
+              sync.value === null && 'animate-pulse motion-reduce:animate-none',
+            )}
+          />
+          {detail ? <p className="text-xs text-muted-foreground tabular-nums">{detail}</p> : null}
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/harnesses">{copy.details}</Link>
+        </Button>
+      </EmptyContent>
+    </Empty>
   )
 }

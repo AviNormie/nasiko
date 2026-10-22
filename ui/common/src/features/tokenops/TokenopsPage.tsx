@@ -68,7 +68,7 @@ import { OptimisationPanel } from './components/OptimisationPanel'
 import { SavingsHighlight } from './components/SavingsHighlight'
 import { summarizeOptimisation } from './optimisation'
 import { PageHeader } from '@/components/shared/page-header'
-import { ImportNotice } from '@/features/harnesses/components/ImportNotice'
+import { ImportingOr, ImportNotice } from '@/features/harnesses/components/ImportNotice'
 import { PanelError } from '@/components/shared/panel'
 import { PageLoader } from '@/components/shared/page-loader'
 import { EmptyState, StateCard } from '@/components/shared/state-card'
@@ -853,36 +853,41 @@ function FirstRun() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="TokenOps" />
-      {/* The steps sit inside the card as its action, widened past Empty's 24rem content cap. */}
-      <EmptyState
-        icon={DollarSign}
-        title="No AI spend recorded yet"
-        className="*:data-[slot=empty-content]:max-w-xl"
-        action={
-          <div className="flex w-full flex-col gap-3 rounded-md border bg-muted/40 p-4 text-left text-sm text-muted-foreground">
-            <ol className="flex list-decimal flex-col gap-1.5 pl-5">
-              <li>
-                Set <code className="font-mono text-foreground">TEMPO_URL</code> and{' '}
-                <code className="font-mono text-foreground">LOKI_URL</code> on nasiko-server and run
-                the OTel collector.
-              </li>
-              <li>Deploy an agent and send it a few requests.</li>
-              <li>
-                Spend appears within a couple of minutes (the trace materializer runs every 120 s).
-              </li>
-            </ol>
-            <p className="border-t pt-3 text-xs text-pretty">
-              Setup details: <code className="font-mono">oss/docs/BOOTSTRAP_AND_NETWORKING.md</code>{' '}
-              in the nasiko repository (collector, Tempo and Loki wiring). Developing locally? Run{' '}
-              <code className="font-mono">npm run seed:live</code> against your OSS stack, or use
-              mock mode.
-            </p>
-          </div>
-        }
-      >
-        TokenOps reads spend from agent traces. Nothing has arrived in the last two months, which
-        usually means the telemetry pipeline isn't connected yet.
-      </EmptyState>
+      {/* While coding agents sync, their spend is on its way: the loading state, never "nothing recorded yet". */}
+      <ImportingOr>
+        {/* The steps sit inside the card as its action, widened past Empty's 24rem content cap. */}
+        <EmptyState
+          icon={DollarSign}
+          title="No AI spend recorded yet"
+          className="*:data-[slot=empty-content]:max-w-xl"
+          action={
+            <div className="flex w-full flex-col gap-3 rounded-md border bg-muted/40 p-4 text-left text-sm text-muted-foreground">
+              <ol className="flex list-decimal flex-col gap-1.5 pl-5">
+                <li>
+                  Set <code className="font-mono text-foreground">TEMPO_URL</code> and{' '}
+                  <code className="font-mono text-foreground">LOKI_URL</code> on nasiko-server and
+                  run the OTel collector.
+                </li>
+                <li>Deploy an agent and send it a few requests.</li>
+                <li>
+                  Spend appears within a couple of minutes (the trace materializer runs every 120
+                  s).
+                </li>
+              </ol>
+              <p className="border-t pt-3 text-xs text-pretty">
+                Setup details:{' '}
+                <code className="font-mono">oss/docs/BOOTSTRAP_AND_NETWORKING.md</code> in the
+                nasiko repository (collector, Tempo and Loki wiring). Developing locally? Run{' '}
+                <code className="font-mono">npm run seed:live</code> against your OSS stack, or use
+                mock mode.
+              </p>
+            </div>
+          }
+        >
+          TokenOps reads spend from agent traces. Nothing has arrived in the last two months, which
+          usually means the telemetry pipeline isn't connected yet.
+        </EmptyState>
+      </ImportingOr>
     </div>
   )
 }

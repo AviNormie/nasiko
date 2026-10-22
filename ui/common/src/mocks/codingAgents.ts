@@ -11,7 +11,7 @@
  * - The desktop app (`/__nasiko/coding-agents/state|start|decline|retry`): a 404 by default, as a browser gets.
  *   `?mock=desktop-unasked|running|failed|rejected` answer as the desktop app, with its local consent and run;
  *   `desktop-sending` is a finished import while the app delivers turns its hooks queued (the `backlog`, which every
- *   desktop state carries: the run's waiting and refused turns plus `queued`), so the app-wide sync bar shows.
+ *   desktop state carries: the run's waiting and refused turns plus `queued`), so the queue is still being sent.
  *   Every desktop state also routes LLM calls (`/__nasiko/coding-agents/routing[/connect|/disconnect]`, `mockRouting`):
  *   a connect attaches its config to the viewer's harness row through the router mock, so the routing read follows.
  *

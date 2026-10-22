@@ -397,6 +397,28 @@ describe('TokenOps page', () => {
     expect(router.state.location.search).toMatchObject({ expired: true })
   })
 
+  it('shows the loading state, not the empty state, while coding agents sync (their spend is on its way)', async () => {
+    configureMocks({
+      seed: { ...seed, agents: [], traces: [], sessions: [] },
+      harnessSeed: { ...generateHarnessSeed({ anchor: FIXED }), sessions: [] },
+      variant: 'desktop-running',
+    })
+    try {
+      renderApp('/tokenops')
+      const loader = await screen.findByTestId('importing-loader')
+      expect(
+        within(loader).getByRole('heading', { name: 'Bringing in your coding agents' }),
+      ).toBeInTheDocument()
+      expect(within(loader).getByRole('link', { name: 'See progress' })).toHaveAttribute(
+        'href',
+        '/harnesses',
+      )
+      expect(screen.queryByText('No AI spend recorded yet')).toBeNull()
+    } finally {
+      configureMocks({ harnessSeed: generateHarnessSeed({ anchor: FIXED }), variant: null })
+    }
+  })
+
   it('shows first-run guidance when there is no spend in the last two months', async () => {
     // The admin's harness turns count as spend too (aggregate.ts withHarnessTurns), so empty both seeds.
     configureMocks({

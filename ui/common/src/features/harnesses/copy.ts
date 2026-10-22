@@ -182,6 +182,9 @@ export const copy = {
     body: "Their sessions are still arriving, so this page doesn't show all of their spend yet. Keep working: it fills in as the import goes, and you don't need to do anything.",
     label: 'Coding agent import progress',
     details: 'See progress',
+    // In place of "No AI spend recorded yet" while they sync (components/ImportNotice.tsx `ImportingOr`).
+    loaderBody:
+      "Their sessions are on their way. Spend shows up here as soon as the first ones land; there's nothing you need to do.",
   },
   // The desktop app's LLM routing card (components/RoutingCard.tsx): `nasiko connect <harness> [--config]`.
   routing: {
@@ -218,17 +221,12 @@ export const copy = {
       `Couldn't change ${name}'s routing${detail ? `: ${detail}` : '.'}`,
     loadFailed: "Couldn't read this computer's coding harnesses from the desktop app.",
   },
-  // The desktop app's sync bar, on every page while coding-agent data syncs (components/SyncBar.tsx).
-  syncBar: {
+  // One line of where the sync is (syncStatus.ts `syncLine`), on Monitor's import note and loading state.
+  sync: {
     title: 'Syncing coding agents',
-    label: 'Coding agent sync progress',
     discovering: 'Looking for agents',
     connecting: 'Connecting',
     sent: (turns: number) => `${plural(turns, 'turn')} sent`,
     waiting: (turns: number) => `${turns.toLocaleString('en-US')} waiting`,
-    details: 'Details',
-    detailsLabel: 'Coding agent sync details',
-    started: 'Syncing coding agents.',
-    finished: 'Coding agents synced.',
   },
 } as const

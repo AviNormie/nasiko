@@ -32,7 +32,7 @@ export const desktopStateSchema = z.looseObject({
   consent: z.enum(['unasked', 'granted', 'declined']),
   signed_in: z.boolean(),
   run: localRunSchema.nullable(),
-  // A desktop app from before the sync bar has no queue to report.
+  // An older desktop app has no queue to report.
   backlog: backlogSchema.nullish(),
 })
 export type DesktopState = z.infer<typeof desktopStateSchema>
@@ -61,7 +61,7 @@ export function desktopPollInterval(state: DesktopState | null | undefined): num
   return desktopSync(state).syncing ? DESKTOP_STATE_POLL_MS : DESKTOP_IDLE_POLL_MS
 }
 
-/** The desktop probe (one query for the app's sync bar and the Harnesses card), re-read by `desktopPollInterval`. */
+/** The desktop probe (one query for Monitor's import state and the Harnesses card), re-read by `desktopPollInterval`. */
 export function useDesktopState(enabled = true) {
   return useQuery({
     queryKey: desktopKeys.state,

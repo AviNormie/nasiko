@@ -1,7 +1,6 @@
 import { skipToken, useQuery } from '@tanstack/react-query'
 import { createFileRoute, redirect, useRouterState } from '@tanstack/react-router'
 import { useSyncExternalStore } from 'react'
-import { deferred } from '@/app/deferred'
 import { useSlots } from '@/app/edition-context'
 import { AppShell } from '@/app/shell/AppShell'
 import { BuildToasts } from '@/features/deploy/components/BuildToasts'
@@ -43,11 +42,6 @@ export const Route = createFileRoute('/_app')({
 })
 
 const NONE: readonly string[] = []
-/** The desktop app's coding-agent sync bar: its own chunk, so the shell carries none of its query or schema code. */
-const SyncBar = deferred(() =>
-  import('@/features/harnesses/components/SyncBar').then((m) => m.SyncBar),
-)
-
 /** The shell plus the feature pieces it shows on every page (the shell itself never imports a feature). */
 function AppLayout() {
   const building = useSyncExternalStore(subscribeFollower, followedCount)
@@ -63,7 +57,6 @@ function AppLayout() {
   return (
     <AppShell
       split={shellSplit}
-      banner={<SyncBar />}
       end={
         <>
           <BuildToasts />

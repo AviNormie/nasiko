@@ -252,6 +252,9 @@ export const MOCK_VARIANTS = [
   'usage-500',
   'all-unpriced',
   'no-activity',
+  // TokenOps: no spend in the last two months (its first-run state); `?mock=no-spend,desktop-running` is that state
+  // while coding agents sync, when the page shows the loading state instead.
+  'no-spend',
   // App shell (plans/feat-app-shell.md eng D4): /health fails like a stopped server.
   'server-down',
   // App shell sign out: logout gets the server's fail-closed 401 (review, api-contract).
@@ -455,12 +458,13 @@ const getAgents = (): AgentsState => {
   return agentsState
 }
 /** Finops endpoints see the harness turns too (aggregate.ts withHarnessTurns); memoised per seed pair. */
-let finops: { seed: Seed; hs: HarnessSeed; merged: Seed } | null = null
+let finops: { seed: Seed; hs: HarnessSeed; merged: Seed; empty?: Seed } | null = null
 const getFinopsSeed = (): Seed => {
   const base = getSeed()
   const hs = getHarnessSeed()
   if (!finops || finops.seed !== base || finops.hs !== hs)
     finops = { seed: base, hs, merged: withHarnessTurns(base, hs) }
+  if (variant() === 'no-spend') return (finops.empty ??= { ...finops.merged, traces: [] })
   return finops.merged
 }
 // Deploy: builds and uploads derived from the agents state, rebuilt with it (plans/feat-deploy.md §9).
