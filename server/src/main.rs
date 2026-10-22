@@ -125,9 +125,7 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&bind).await.unwrap();
     tracing::info!("nasiko-server (OSS) listening on {bind}");
-    // Peer addresses let per-address limits (the agent state API's) key on the real source.
-    let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
-    axum::serve(listener, service).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 /// The OSS shell loads the Reo analytics snippet, which injects a `<script>`

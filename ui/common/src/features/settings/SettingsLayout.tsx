@@ -7,7 +7,8 @@
  * the EE layer's `nav-ext-ee.js`:
  * - Workspace: General, (EE: Orchestrator), Flow limits, Optimization tiers (`/settings/optimization-tiers`), Registry.
  *   `/settings?section=` for the sections of the one form.
- * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`).
+ * - Security: (EE: Single sign-on), Secrets (`/settings/secrets`), then a layer's `personalSettingsLinks` (EE: Memory
+ *   recall, `/settings/memory`).
  * A layer's rows come from the `settingsSections` slot, placed after the row they name. A member sees Secrets only:
  * the workspace sections are superuser-gated on the API. This is the sidebar's Organization → Settings.
  * With `account`, the same layout holds the account's own settings (the account menu's Settings): Appearance
@@ -41,13 +42,9 @@ import { CORE_SECTIONS } from './search'
 interface Row {
   key: string
   label: string
-  to:
-    | '/settings'
-    | '/settings/secrets'
-    | '/settings/optimization-tiers'
-    | '/account/appearance'
-    | '/account/password'
-    | '/account/shortcuts'
+  // A layer's own `personalSettingsLinks` entry carries its own route (e.g. `/settings/memory`), not one of the
+  // core's — same widening `LayerNavItem` uses for the app sidebar (edition.ts).
+  to: string
   section?: string
 }
 
@@ -74,7 +71,7 @@ export function SettingsLayout({
   // Chat's breakpoint for an inline rail (ChatPage `wide`).
   const wide = useMediaQuery('(min-width: 1024px)')
   const [sheetOpen, setSheetOpen] = useState(false)
-  const { settingsSections } = useSlots()
+  const { settingsSections, personalSettingsLinks } = useSlots()
   const location = useRouterState({ select: (s) => s.location })
   const admin = me.data?.is_superuser === true
   const inGroup = (g: 'workspace' | 'security') => settingsSections.filter((s) => s.group === g)
@@ -127,6 +124,9 @@ export function SettingsLayout({
           rows: [
             ...withLayer([], admin ? inGroup('security') : []),
             { key: 'secrets', label: copy.secrets.title, to: '/settings/secrets' },
+            // Every user's own, like Secrets above — never gated by `admin` (personalSettingsLinks is a plain nav
+            // link to the layer's own route, not a `/settings?section=` page).
+            ...personalSettingsLinks.map((l): Row => ({ key: l.key, label: l.label, to: l.to })),
           ],
         },
       ]
