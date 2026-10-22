@@ -1,15 +1,19 @@
 /**
  * The onboarding card's history timeline (contract v2 `windows`, newest first): the finished windows (the first few,
- * then Show all), the window being read, and one line for the rest, so a 40-window run never draws 40 rows.
+ * then Show all), the window being read, and one line for the rest, so a 40-window run never draws 40 rows. The
+ * run log's icons (bits.tsx `StateIcon`).
  */
 import { useState } from 'react'
-import { Check, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { copy as pageCopy } from '../copy'
 import { OLDER_WINDOW_LABEL, SYNC_DONE_WINDOWS_SHOWN } from '../constants'
-import { lastMonthIn, type SyncWindow } from '../runs'
+import type { SyncWindow } from '../runs'
+import { StateIcon } from './bits'
 
 const copy = pageCopy.agentsOnboarding
+
+const ROW = 'flex min-h-7 items-center gap-2 tabular-nums'
 
 export function WindowTimeline({
   windows,
@@ -28,23 +32,24 @@ export function WindowTimeline({
   const days = waiting.length - (olderWaiting ? 1 : 0)
   return (
     <div className="flex flex-col gap-1 text-sm">
-      <ul aria-label={copy.timelineLabel(device)} className="flex flex-col gap-1">
+      <ul aria-label={copy.timelineLabel(device)} className="flex flex-col">
         {shownDone.map((w) => (
           // Labels are unique within a run (contract v2 `windows`).
-          <li key={w.label} className="flex items-center gap-2">
-            <Check aria-hidden className="size-4 text-success" />
+          <li key={w.label} className={ROW}>
+            <StateIcon state="done" />
             <span>{copy.windowDone(w.label, w.sessions)}</span>
           </li>
         ))}
         {running.map((w) => (
-          <li key={w.label} className="flex items-center gap-2">
-            <Loader2 aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />
+          <li key={w.label} className={cn(ROW, 'font-medium')} aria-current="step">
+            <StateIcon state="active" />
             <span>{copy.windowRunning(w.label)}</span>
           </li>
         ))}
         {waiting.length ? (
-          <li className="pl-6 text-muted-foreground">
-            {copy.windowsRemaining(days, olderWaiting)}
+          <li className={cn(ROW, 'text-muted-foreground')}>
+            <StateIcon state="pending" />
+            <span>{copy.windowsRemaining(days, olderWaiting)}</span>
           </li>
         ) : null}
       </ul>
@@ -61,7 +66,6 @@ export function WindowTimeline({
           </Button>
         </div>
       ) : null}
-      {lastMonthIn(windows) ? <p className="text-muted-foreground">{copy.lastMonthIn}</p> : null}
     </div>
   )
 }

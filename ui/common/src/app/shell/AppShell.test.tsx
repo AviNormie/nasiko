@@ -433,12 +433,13 @@ describe('footer', () => {
     expect(within(sidebar()).queryByRole('button', { name: 'Theme' })).toBeNull()
   })
 
-  it('the account menu has Theme, Account settings and Sign out', async () => {
+  it('the account menu has Theme, Account settings, Tour the sidebar and Sign out', async () => {
     const { router } = renderApp('/agents')
     await openAccountMenu()
     expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent?.trim())).toEqual([
       'Theme',
       'Account settings',
+      'Tour the sidebar',
       'Sign out',
     ])
     await userEvent.click(screen.getByRole('menuitem', { name: 'Account settings' }))

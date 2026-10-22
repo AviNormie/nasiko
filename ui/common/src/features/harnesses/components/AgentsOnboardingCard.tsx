@@ -14,6 +14,7 @@ import { copy as pageCopy } from '../copy'
 import type { AgentsOnboarding, CardView, DesktopControl } from '../onboarding'
 import { rejectedTurns, shownPhase, type SyncRun } from '../runs'
 import { RunBlock } from './AgentsOnboardingRun'
+import { HarnessOptimization } from './HarnessOptimization'
 
 const copy = pageCopy.agentsOnboarding
 
@@ -22,7 +23,7 @@ export function AgentsOnboardingCard({ onboarding }: { onboarding: AgentsOnboard
   if (!view) return null
   return (
     <Announcer>
-      <Card asChild className="gap-4 p-5">
+      <Card asChild className="gap-5 p-5 md:p-6">
         <section aria-labelledby="agents-onboarding-title" data-testid="agents-onboarding">
           <CardBody view={view} onboarding={onboarding} />
           <PhaseAnnouncer view={view} />
@@ -88,16 +89,26 @@ function CardBody({ view, onboarding }: { view: CardView; onboarding: AgentsOnbo
     case 'finished':
       return (
         <>
-          <Title>{view.kind === 'running' ? copy.runningTitle : finishedTitle(view.runs)}</Title>
-          {view.runs.map((run) => (
-            <RunBlock key={run.device_id} run={run} retry={retry} waiting={waiting} />
-          ))}
+          <div className="flex flex-col gap-1">
+            <Title>{view.kind === 'running' ? copy.runningTitle : finishedTitle(view.runs)}</Title>
+            {view.kind === 'running' ? (
+              <p className="text-sm text-muted-foreground">{copy.runningBody}</p>
+            ) : null}
+          </div>
+          {/* One block per device, a hairline apart. */}
+          <div className="flex flex-col divide-y [&>*]:py-5 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+            {view.runs.map((run) => (
+              <RunBlock key={run.device_id} run={run} retry={retry} waiting={waiting} />
+            ))}
+          </div>
           {view.runs.some((r) => r.phase === 'failed') ? (
             desktop ? (
               <TryAgain desktop={desktop} runs={view.runs} />
             ) : mode === 'browser' ? (
               <Command />
             ) : null
+          ) : view.kind === 'finished' ? (
+            <HarnessOptimization />
           ) : null}
           <ActionError desktop={desktop} />
         </>

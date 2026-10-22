@@ -3,7 +3,7 @@
  * syncs, with one line, a bar and a Details link to Harnesses. Nothing in a browser or while idle. Its polite live
  * region speaks only when syncing starts and when it ends, never on each tick.
  */
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { useAnnounce } from '@/components/shared/announce'
 import { Announcer } from '@/components/shared/announcer'
@@ -12,14 +12,18 @@ import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 import { copy as pageCopy } from '../copy'
 import { useDesktopState } from '../desktop'
+import { isActivePhase, shownPhase } from '../runs'
 import { desktopSync, syncLine, type DesktopSync } from '../syncStatus'
 
 const copy = pageCopy.syncBar
 
 export function SyncBar() {
   const { data } = useDesktopState()
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
   // In a browser nothing renders, not even the live region: a page's own `status` stays the only one.
   if (!data) return null
+  // On Harnesses the onboarding card shows an active import in full (it is always on screen then): one progress, not two.
+  if (pathname === '/harnesses' && data.run && isActivePhase(shownPhase(data.run))) return null
   return (
     <Announcer testId="sync-bar-announcer">
       <Bar sync={desktopSync(data)} />

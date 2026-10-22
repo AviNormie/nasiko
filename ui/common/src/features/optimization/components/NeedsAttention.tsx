@@ -19,7 +19,7 @@ import { Spinner } from '@/components/ui/spinner'
 import {
   useAgentsDirectory,
   useOwnedAgents,
-  useTurnOnCompression,
+  useSetCompressionFor,
   useUsers,
 } from '@/features/agents/api'
 import { ConfirmDialog } from '@/features/agents/components/dialogs'
@@ -42,7 +42,7 @@ export function NeedsAttention() {
   const owned = useOwnedAgents(sub)
   const directory = useAgentsDirectory(superuser)
   const tiers = useQuery(tiersQuery)
-  const turnOn = useTurnOnCompression()
+  const turnOn = useSetCompressionFor()
   const [confirm, setConfirm] = useState<Group | null>(null)
   // Owner names are shown only in the fleet-wide confirm: read them once there is such a line (review: performance).
   const users = useUsers(
@@ -104,6 +104,7 @@ export function NeedsAttention() {
     turnOn.mutate(
       {
         ids: agents.map((a) => a.id),
+        enabled: true,
         onProgress: (done) => setRunning((r) => (r ? { ...r, done } : r)),
       },
       {

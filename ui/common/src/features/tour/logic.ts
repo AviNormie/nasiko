@@ -5,8 +5,8 @@
 import type { LayerTour } from '@/app/edition'
 
 /**
- * The app tour (the sidebar: it rides along on the Overview's tour and on a first-time user's first tour), then one per
- * page. Ids are storage keys: rename one and its users see it again.
+ * The app tour (the sidebar, its own tour: asked for on a page without one), then one per page. Ids are storage keys:
+ * rename one and its users see it again.
  */
 export const TOUR_IDS = [
   'app',
@@ -76,26 +76,21 @@ export function tourFor(pathname: string, layers: Layered = []): string | null {
 }
 
 export interface TourPrefs {
-  /** Tours start on their own (a first-time user, until they say No thanks). */
+  /** The Overview's tour starts on its own (a first-time user, until they say No thanks). */
   auto: boolean
   /** Tour ids: the core's and any layer's. */
   seen: readonly string[]
 }
 export const NO_PREFS: TourPrefs = { auto: false, seen: [] }
 
-export interface Due {
-  id: string
-  /** The app tour's steps come first (`tours.ts` `stepsFor`). */
-  withApp: boolean
-}
-
-/** The tour to start on its own here, if any: the first one carries the app tour, then each page's own, once. */
-export function dueTour(prefs: TourPrefs, pathname: string, layers: Layered = []): Due | null {
-  if (!prefs.auto) return null
-  const page = tourFor(pathname, layers)
-  if (!prefs.seen.includes('app')) return { id: page ?? 'app', withApp: true }
-  return page && !prefs.seen.includes(page) ? { id: page, withApp: false } : null
-}
+/**
+ * The tour to start on its own here, if any: only the Overview's, once. Every other page's tour, and the app tour (the
+ * sidebar), opens only when asked.
+ */
+export const dueTour = (prefs: TourPrefs, pathname: string): TourId | null =>
+  prefs.auto && tourFor(pathname) === 'overview' && !prefs.seen.includes('overview')
+    ? 'overview'
+    : null
 
 export const markSeen = (prefs: TourPrefs, id: string): TourPrefs =>
   prefs.seen.includes(id) ? prefs : { ...prefs, seen: [...prefs.seen, id] }

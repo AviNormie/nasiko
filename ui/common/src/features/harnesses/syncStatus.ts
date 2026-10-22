@@ -24,13 +24,16 @@ export interface DesktopSync {
 }
 
 /** Turns waiting to be sent: the whole queue when the desktop reports it, else the run's own count. */
-export function waitingTurns(state: DesktopState): number {
+/** What the numbers need: a browser has a server run and no queue of its own. */
+type SyncSource = Pick<DesktopState, 'run' | 'backlog'>
+
+export function waitingTurns(state: SyncSource): number {
   return state.backlog?.pending ?? (state.run ? pendingTurns(state.run) : 0)
 }
 
 const IDLE = { phase: null, value: null, window: null, sent: null } as const
 
-export function desktopSync(state: DesktopState): DesktopSync {
+export function desktopSync(state: SyncSource): DesktopSync {
   const { run } = state
   const waiting = waitingTurns(state)
   const runPhase = run ? shownPhase(run) : null

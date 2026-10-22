@@ -29,7 +29,7 @@ import { copy } from './copy'
 import type { LayerTour } from '@/app/edition'
 import type { TourStep } from '@/lib/tour'
 import type { TourId } from './logic'
-import { stepsFor, TOURS } from './tours'
+import { TOURS } from './tours'
 
 /** Room between the target and the spotlight's edge. */
 const PAD = 6
@@ -247,7 +247,6 @@ function stepsOf(layer: LayerTour): Promise<readonly TourStep[]> {
 export function TourOverlay({
   id,
   layer,
-  withApp,
   offerOptOut,
   onEnd,
   onOptOut,
@@ -256,8 +255,6 @@ export function TourOverlay({
   id: string
   /** A layer's own page (the `tours` slot): its steps load first (the overlay waits in Suspense meanwhile). */
   layer: LayerTour | null
-  /** The app tour's steps (the sidebar) come first (`stepsFor`). */
-  withApp: boolean
   /** A first-time user's first tour: its first card offers No thanks, which turns automatic tours off. */
   offerOptOut: boolean
   onEnd(): void
@@ -265,9 +262,7 @@ export function TourOverlay({
 }) {
   // The steps this page can show now (tours.ts), read once when the tour opens: a later re-render never drops one.
   const page = layer ? use(stepsOf(layer)) : (TOURS[id as TourId] ?? [])
-  const [steps] = useState(() =>
-    stepsFor(page, withApp).filter((s) => !s.target || findTarget(s.target)),
-  )
+  const [steps] = useState(() => page.filter((s) => !s.target || findTarget(s.target)))
   // Nothing to show (a layer's steps failed to load): end at once rather than hold the page under an empty tour.
   const empty = steps.length === 0
   useEffect(() => {

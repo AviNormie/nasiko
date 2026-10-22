@@ -46,6 +46,43 @@ const localOf = (run: MockSyncRun): MockLocalRun => {
   return local
 }
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** An agent's row (name, then its status) by its whole text: the two sit in their own spans. */
+const agentRow = (text: string) => (_: string, el: Element | null) =>
+  el?.tagName === 'LI' && el.textContent === text
+
+describe('Token optimization for your coding agents', () => {
+  it("is a switch over the viewer's harnesses that writes the agent switch's field, on and back off", async () => {
+    // A finished import: the viewer's harnesses came in with Token optimization off (the column default).
+    as('agents-done')
+    renderApp('/harnesses')
+    // On the import card, where Optimize was.
+    const toggle = await within(await card()).findByRole('switch', {
+      name: 'On for your coding agents',
+    })
+    expect(toggle).not.toBeChecked()
+    const rec = recordRequestBodies()
+    try {
+      const puts = () => rec.requests.filter((r) => r.method === 'PUT')
+      await userEvent.click(toggle)
+      await waitFor(() => expect(toggle).toBeChecked())
+      const on = puts()
+      expect(on.length).toBeGreaterThan(0)
+      for (const r of on) {
+        expect(r.url.pathname).toMatch(/^\/api\/agents\/[^/]+$/)
+        expect(r.body).toEqual({ compress_enabled: true })
+      }
+      await userEvent.click(toggle)
+      await waitFor(() => expect(toggle).not.toBeChecked())
+      expect(
+        puts()
+          .slice(on.length)
+          .map((r) => r.body),
+      ).toEqual(on.map(() => ({ compress_enabled: false })))
+    } finally {
+      rec.stop()
+    }
+  })
+})
 
 describe('browser: the command, no consent', () => {
   it('a viewer with no harnesses gets the command and its Copy, and nothing asks', async () => {
@@ -106,10 +143,10 @@ describe('browser: progress from the server', () => {
     expect(within(run).getByText('desktop')).toBeInTheDocument()
     expect(within(run).getByText('Found Claude Code, Codex, OpenCode')).toBeInTheDocument()
     expect(within(run).getByText('Connected')).toBeInTheDocument()
-    expect(within(run).getByText('Importing Claude Code… 40 of 123')).toBeInTheDocument()
-    expect(within(run).getByText('Codex: 12 sessions, 58 turns')).toBeInTheDocument()
-    expect(within(run).getByText('OpenCode: waiting')).toBeInTheDocument()
-    expect(within(run).getByText('Cursor: not on this computer')).toBeInTheDocument()
+    expect(within(run).getByText(agentRow('Claude Code, 40 of 123 sessions'))).toBeInTheDocument()
+    expect(within(run).getByText(agentRow('Codex, 12 sessions · 58 turns'))).toBeInTheDocument()
+    expect(within(run).getByText(agentRow('OpenCode, Waiting'))).toBeInTheDocument()
+    expect(within(run).getByText(agentRow('Cursor, Not on this computer'))).toBeInTheDocument()
     // (40 + 12 + 0) of (123 + 12 + 7) sessions.
     const bar = within(run).getByRole('progressbar', { name: 'Import progress on Example MacBook' })
     expect(bar).toHaveAttribute('aria-valuenow', '37')
@@ -130,7 +167,7 @@ describe('browser: progress from the server', () => {
     const rec = recordRequests()
     try {
       renderApp('/harnesses')
-      await within(await card()).findByText('Importing Claude Code… 40 of 123')
+      await within(await card()).findByText(agentRow('Claude Code, 40 of 123 sessions'))
       const usageReads = () => rec.urls.filter((u) => u.pathname === USAGE).length
       const before = usageReads()
       st.runs = [mockRun('done', doneAgents(), now() + 1000)]
@@ -144,7 +181,7 @@ describe('browser: progress from the server', () => {
         ),
       ).toBeInTheDocument()
       expect(
-        within(c).getByText("Claude Code: 98 sessions, 753 turns (1 couldn't be read)"),
+        within(c).getByText(agentRow("Claude Code, 98 sessions · 753 turns · 1 couldn't be read")),
       ).toBeInTheDocument()
       await waitFor(() => expect(usageReads()).toBeGreaterThan(before))
       const reads = rec.urls.filter((u) => u.pathname === SYNC).length
@@ -173,7 +210,9 @@ describe('browser: progress from the server', () => {
     expect(
       within(c).getByText('The import stopped: the server stopped answering'),
     ).toBeInTheDocument()
-    expect(within(c).getByText('Claude Code: import failed (disk read error)')).toBeInTheDocument()
+    expect(
+      within(c).getByText(agentRow('Claude Code, Import failed: disk read error')),
+    ).toBeInTheDocument()
     expect(within(c).getByText('nasiko agents setup')).toBeInTheDocument()
   })
 
@@ -182,7 +221,7 @@ describe('browser: progress from the server', () => {
     codingAgentsMockState().runs = [mockRun('importing', importingAgents(), now())]
     renderApp('/harnesses')
     expect(
-      await within(await card()).findByText('Importing Claude Code… 40 of 123'),
+      await within(await card()).findByText(agentRow('Claude Code, 40 of 123 sessions')),
     ).toBeInTheDocument()
   })
 })
@@ -303,7 +342,7 @@ describe('v2: history windows, sending and refused turns', () => {
     codingAgentsMockState().runs = [{ ...v1, agents: v1Agents } as unknown as MockSyncRun]
     renderApp('/harnesses')
     const c = await card()
-    expect(within(c).getByText('Importing Claude Code… 40 of 123')).toBeInTheDocument()
+    expect(within(c).getByText(agentRow('Claude Code, 40 of 123 sessions'))).toBeInTheDocument()
     expect(within(c).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '37')
     expect(within(c).queryByRole('list', { name: /History read on/ })).toBeNull()
     expect(within(c).queryByText(/Waiting to send/)).toBeNull()

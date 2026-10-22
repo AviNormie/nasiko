@@ -10,85 +10,87 @@
 import type { TourStep } from '@/lib/tour'
 import type { TourId } from './logic'
 
-/**
- * A page's steps, with the app tour folded in when `withApp`: its welcome and the sidebar first, then the page, and
- * the tour button last, so the tour ends on where to find the next one.
- */
-export function stepsFor(page: readonly TourStep[], withApp: boolean): readonly TourStep[] {
-  const app = TOURS.app
-  if (!withApp || page === app) return page
-  const last = app[app.length - 1]
-  return [...app.slice(0, -1), ...page, ...(last ? [last] : [])]
-}
-
 export const TOURS: Record<TourId, readonly TourStep[]> = {
+  // Compact (user 2026-10-22): one line per group, opened from the account menu's Tour the sidebar.
   app: [
     {
-      title: 'Welcome to Nasiko',
-      body: 'A quick look around: where your agents live, how they connect to models and tools, and where to watch what they do and spend.',
+      title: 'The sidebar',
+      body: 'Every page, grouped by what you do there.',
     },
     {
       target: 'app-menu',
       title: 'Every page is in the menu',
-      body: 'Open it to move between Chat, Agents, Observe and Settings.',
+      body: 'Open it to move between pages.',
     },
-    {
-      target: 'nav-work',
-      side: 'right',
-      title: 'Start here',
-      body: 'Overview shows what needs you today. Chat talks to one agent, or lets the Orchestrator pick the right one.',
-    },
+    { target: 'nav-work', side: 'right', title: 'Start', body: 'Overview and Chat.' },
     {
       target: 'nav-fleet',
       side: 'right',
-      title: 'Your fleet',
-      body: 'Agents are what you deploy and run. Workflows chain several agents into one repeatable job. Coding harnesses are the coding tools connected to it.',
+      title: 'Fleet',
+      body: 'Your agents, workflows and coding harnesses.',
     },
     {
       target: 'nav-observe',
       side: 'right',
-      title: 'Watch',
-      body: 'Sessions and Flows show what happened, step by step.',
+      title: 'Observe',
+      body: 'What happened, step by step.',
     },
     {
       target: 'nav-tokenops',
       side: 'right',
       title: 'Spend',
-      body: 'Monitor shows what it cost. Optimize shows how to spend less.',
+      body: 'What it cost, and how to cut it.',
     },
     {
       target: 'nav-connect',
       side: 'right',
-      title: 'What agents can call',
-      body: 'The LLM router decides which model and key each agent uses. MCP servers give agents tools.',
+      title: 'Connect',
+      body: 'Models and tools agents can call.',
     },
     {
       target: 'nav-org',
       side: 'right',
-      title: 'Workspace settings',
-      body: 'Defaults for the router, flow limits, the registry and your secrets.',
-    },
-    {
-      target: 'tour-button',
-      title: 'Lost? Take a tour',
-      body: 'Every page has its own short tour. Start it from this button, or press ?.',
+      title: 'Settings',
+      body: 'Workspace defaults and secrets.',
     },
   ],
 
+  // Every section the Overview has (redesign 2026-10-19, the village and map 2026-10-16, the first run 2026-10-21);
+  // each step shows only where its section is on screen, so one tour serves the cards, the canvas and the first run.
   overview: [
     {
       title: 'Home',
-      body: 'Your fleet at a glance: what needs you, what it costs, and how healthy each agent is.',
+      body: 'Your fleet at a glance: what it costs, what needs you and how healthy each agent is.',
+    },
+    {
+      target: 'overview-views',
+      title: 'Three ways to look',
+      body: 'Overview is the cards. Village and Map draw the same fleet as a place you can explore. Your choice is remembered.',
     },
     {
       target: 'overview-range',
       title: 'Pick the window',
-      body: 'Switch between 7, 30 and 90 days. The headline, Spend and Coding harnesses follow it.',
+      body: 'Switch between 7, 30 and 90 days. Every figure on the page follows it.',
     },
     {
       target: 'overview-summary',
       title: 'The headline',
-      body: 'Fleet spend, runs and agents in one sentence, compared with the period before.',
+      body: 'Fleet spend in one sentence, with tokens, agent runs, coding harnesses and what token optimization saved.',
+    },
+    {
+      target: 'overview-canvas',
+      title: 'Your estate',
+      body: 'Agents, harnesses and spend, laid out as one place. Select anything to see its details and what to do about it.',
+    },
+    {
+      target: 'overview-setup-guide',
+      title: 'Get your first agent running',
+      body: 'Pick your role, connect a model and deploy a first agent. Each step opens the setup guide where you left off.',
+    },
+    {
+      target: 'overview-cli',
+      title: 'Or use the CLI',
+      body: 'The same steps as three commands, ready to copy.',
     },
     {
       target: 'overview-needs',
@@ -101,14 +103,29 @@ export const TOURS: Record<TourId, readonly TourStep[]> = {
       body: 'Each agent rated Healthy, Watch or Needs action. Click a count to see those agents.',
     },
     {
-      target: 'overview-setup-guide',
-      title: 'Finish setting up',
-      body: 'Pick your role, connect a model and deploy a first agent. Each step opens the setup guide where you left off.',
+      target: 'overview-spend',
+      title: 'Spend',
+      body: 'Spend per day and the agents behind it, against the period before. Pick a day to see its sessions.',
+    },
+    {
+      target: 'overview-sessions',
+      title: 'Recent sessions',
+      body: 'The latest runs with their status and cost. Open one to follow it step by step.',
+    },
+    {
+      target: 'overview-saved',
+      title: 'Saved tokens by agent',
+      body: 'What token optimization saved for each agent, largest first.',
+    },
+    {
+      target: 'overview-chats',
+      title: 'Recent chats',
+      body: 'Pick a conversation up where you left it.',
     },
     {
       target: 'overview-actions',
       title: 'Quick actions',
-      body: 'Start a chat, ask the Orchestrator or deploy an agent from here.',
+      body: 'Start a chat, ask the Orchestrator or set up what agents need, from here.',
     },
   ],
 

@@ -17,22 +17,27 @@ export interface TourStep {
   side?: 'top' | 'right' | 'bottom' | 'left'
 }
 
-let asks = 0
+/** The latest ask: a new object per ask, so a change is a new ask. `tour` names one (the account menu's sidebar
+ *  tour); null is the current page's. */
+export interface TourAsk {
+  n: number
+  tour: string | null
+}
+let ask: TourAsk = { n: 0, tour: null }
 const listeners = new Set<() => void>()
 const subscribe = (fn: () => void) => {
   listeners.add(fn)
   return () => void listeners.delete(fn)
 }
 
-export function askForTour() {
-  asks += 1
+export function askForTour(tour: string | null = null) {
+  ask = { n: ask.n + 1, tour }
   for (const fn of listeners) fn()
 }
 
-/** How many times a tour was asked for: a change is a new ask. */
 export const useTourAsks = () =>
   useSyncExternalStore(
     subscribe,
-    () => asks,
-    () => asks,
+    () => ask,
+    () => ask,
   )

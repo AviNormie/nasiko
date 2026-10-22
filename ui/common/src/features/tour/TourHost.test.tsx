@@ -77,12 +77,13 @@ describe('page tour', () => {
     expect(await tour('Agents')).toBeInTheDocument()
   })
 
-  it("carries the sidebar on the Overview's tour", async () => {
+  it("keeps the sidebar out of the Overview's tour", async () => {
     const user = userEvent.setup()
     renderApp('/')
     await screen.findByRole('heading', { level: 1 })
     await user.click(await tourButton())
-    expect(await tour(TOURS.app[0]!.title)).toBeInTheDocument()
+    expect(await tour(TOURS.overview[0]!.title)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: TOURS.app[0]!.title })).toBeNull()
     // Not a first run: nothing to opt out of.
     expect(screen.queryByRole('button', { name: copy.noThanks })).toBeNull()
   })
@@ -95,19 +96,41 @@ describe('page tour', () => {
   })
 })
 
+describe('the sidebar tour', () => {
+  it('opens from the account menu, on its own', async () => {
+    const user = userEvent.setup()
+    renderApp('/tokenops')
+    await screen.findByRole('heading', { level: 1 })
+    await user.click(await screen.findByRole('button', { name: /^Account: / }))
+    await user.click(await screen.findByRole('menuitem', { name: shellCopy.account.sidebarTour }))
+    const dialog = await tour(TOURS.app[0]!.title)
+    expect(within(dialog).getByText(copy.step(1, 1))).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(prefs().seen).toContain('app'))
+  })
+})
+
 describe('first-time user', () => {
-  it('gets the app tour once the setup guide is skipped, and No thanks turns tours off', async () => {
+  it("gets the Overview's tour alone once the setup guide is skipped, and No thanks turns it off", async () => {
     configureMocks({ onboarding: { persona: null, completed: false } })
     const user = userEvent.setup()
     renderApp('/')
     await user.click(await screen.findByRole('button', { name: /skip guide/i }))
 
-    // On the Overview: the sidebar's steps lead its tour.
-    const dialog = await tour(TOURS.app[0]!.title)
+    // The Overview's own steps, without the sidebar's.
+    const dialog = await tour(TOURS.overview[0]!.title)
     expect(prefs().auto).toBe(true)
     expect(within(dialog).getByRole('button', { name: copy.start })).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: copy.noThanks }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(prefs()).toEqual({ auto: false, seen: ['app'] })
+    expect(prefs()).toEqual({ auto: false, seen: ['overview'] })
+  })
+
+  it("never opens another page's tour on its own, even with the automatic tour still on", async () => {
+    localStorage.setItem(prefsKey(ADMIN_ID), JSON.stringify({ auto: true, seen: [] }))
+    renderApp('/tokenops')
+    await screen.findByRole('heading', { level: 1 })
+    await new Promise((r) => setTimeout(r, 1_200))
+    expect(screen.queryByRole('dialog', { name: 'TokenOps' })).toBeNull()
   })
 })

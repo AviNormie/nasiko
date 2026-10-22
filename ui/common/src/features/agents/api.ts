@@ -777,14 +777,14 @@ export function useSetCompression(id: string, onFailed: (err: Error) => void) {
   })
 }
 
-/** Bulk turn-ons in flight; a cache reset (sign-out, another account) stops their queued writes. */
+/** Bulk writes in flight; a cache reset (sign-out, another account) stops their queued writes. */
 const bulkBatches = new Set<AbortController>()
 onCacheReset(() => {
   for (const stop of bulkBatches) stop.abort()
   bulkBatches.clear()
 })
 
-/** At most this many Token optimization writes in flight for a bulk turn-on (plans/feat-optimization-page.md R2F). */
+/** At most this many Token optimization writes in flight for a bulk write (plans/feat-optimization-page.md R2F). */
 const BULK_WRITES = 4
 
 interface TurnOnResult {
@@ -793,17 +793,19 @@ interface TurnOnResult {
 }
 
 /**
- * The Optimization page's bulk turn-on (plans/feat-optimization-page.md R2F, eng C7): `PUT /api/agents/{id}
- * {compress_enabled: true}` for each agent, 4 at a time, as one mutation. Each write settles on its own (a failure is
+ * Token optimization for many agents at once: the Optimization page's bulk turn-on (plans/feat-optimization-page.md
+ * R2F, eng C7) and the Harnesses page's switch over the viewer's coding harnesses, which also turns them off.
+ * `PUT /api/agents/{id} {compress_enabled}` for each agent, 4 at a time, as one mutation. Each write settles on its own (a failure is
  * returned, not thrown, so the rest still run); a 401 is rethrown for the app's expiry path. Once per batch it re-reads
  * every agents query (the restart watches are cache-only state and stay) and both savings reads, so the strip, By agent
  * and the Mechanisms counts change together.
  */
-export function useTurnOnCompression() {
+export function useSetCompressionFor() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (v: {
       ids: readonly string[]
+      enabled: boolean
       onProgress?: (settled: number) => void
     }): Promise<TurnOnResult> => {
       const run = createLimiter(BULK_WRITES)
@@ -823,7 +825,7 @@ export function useTurnOnCompression() {
               throw new DOMException('The session changed', 'AbortError')
             }
             return apiFetch<Agent>(`/api/agents/${id}`, {
-              ...json({ compress_enabled: true }),
+              ...json({ compress_enabled: v.enabled }),
               method: 'PUT',
               signal,
             })

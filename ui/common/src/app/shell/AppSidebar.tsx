@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   CircleAlert,
   CircleUser,
+  Compass,
   LogOut,
   Palette,
   PanelLeftClose,
@@ -59,6 +60,7 @@ import { ApiError } from '@/lib/api/client'
 import { SIDEBAR_HEALTH_INTERVAL_MS, useHealth } from '@/lib/api/health'
 import { env } from '@/lib/env'
 import { IS_MAC } from '@/lib/keys'
+import { askForTour } from '@/lib/tour'
 import { cn } from '@/lib/utils'
 import { pickShared, withoutWindow } from './context'
 import { copy } from './copy'
@@ -586,6 +588,15 @@ function AccountMenu({ onPick }: { onPick(): void }) {
             >
               <Settings aria-hidden /> {copy.account.settings}
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              setOpenMobile(false)
+              // A frame later: the menu has closed and returned focus, so the tour's card keeps it.
+              requestAnimationFrame(() => askForTour('app'))
+            }}
+          >
+            <Compass aria-hidden /> {copy.account.sidebarTour}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={busy || loading}
