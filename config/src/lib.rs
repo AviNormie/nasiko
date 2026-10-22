@@ -1,8 +1,5 @@
 use nasiko_utils::{env_bool, env_or, env_parse, required_env};
 
-mod coding_agent_ingest;
-pub use coding_agent_ingest::CodingAgentIngestConfig;
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind: String,
@@ -91,8 +88,6 @@ pub struct Config {
     /// OTLP/HTTP JSON base endpoint used only by the durable coding-agent
     /// telemetry outbox. Unset leaves receipts pending and disables its worker.
     pub coding_agent_otlp_endpoint: Option<String>,
-    /// Rate, concurrency and Tempo-age limits on coding-agent telemetry ingest.
-    pub coding_agent_ingest: CodingAgentIngestConfig,
     pub tempo_url: String,
     pub loki_url: String,
     /// Whether the Tempo/Loki observability backend is enabled — the SINGLE
@@ -148,6 +143,31 @@ pub struct Config {
     pub hitl_resume_lease_minutes: i64,
     pub hitl_resume_max_attempts: u32,
     pub hitl_resume_retry_delay_secs: u64,
+    /// How many times the `direct_chat`/`agent_proxy`/`orchestrator` resume dispatcher re-sends a
+    /// resume the agent answered with "task not found" before it concludes the agent lost the
+    /// paused task (`agent_lost_task`). A round-robin Service can send the first attempt to a
+    /// replica that never saw the task, so one such answer proves nothing. Total POSTs = this + 1.
+    pub hitl_lost_task_retries: u32,
+    /// How long an agent's durable state row (task or key-value entry) lives after its last
+    /// write, in days. AGENT_STATE_TTL_DAYS, default 7, clamped to 1..=365: zero would expire
+    /// every row the instant it is written. Reads never extend it.
+    pub agent_state_ttl_days: i32,
+    /// Largest task `body` or key-value `value` the agent state API accepts, measured on the
+    /// bytes of that field as sent. AGENT_STATE_MAX_BODY_BYTES, default 1 MiB, floored at 1.
+    /// Larger writes get a 413.
+    pub agent_state_max_body_bytes: usize,
+    /// Requests per minute one agent may make to the agent state API, for each of its ready
+    /// replicas: an agent running three replicas may make three times this. Replicas the server
+    /// does not know of yet count as one. AGENT_STATE_RATE_LIMIT_PER_MINUTE, default 1200,
+    /// floored at 1. The default leaves headroom over what a durable agent turn costs (a handful
+    /// of calls) so a burst of turns is not refused. Over it gets a 429. Counted in memory by
+    /// each server process, like the other limiters (`rate_limit.rs`), so the ceiling across
+    /// several processes is this value times their number.
+    pub agent_state_rate_limit_per_minute: u32,
+    /// Most body bytes one agent state listing page carries. AGENT_STATE_LIST_BYTES_BUDGET,
+    /// default 8 MiB, floored at 1. A page stops before the next row would pass it and hands back
+    /// a cursor, so a short page is normal; a single row larger than it still lists, alone.
+    pub agent_state_list_bytes_budget: usize,
     pub github_client_id: Option<String>,
     pub github_client_secret: Option<String>,
     /// Multi-tenant mode (per-CP): when on, this control plane runs behind the
@@ -341,11 +361,9 @@ pub struct Config {
     /// (KEDA ScaledObject). MCP_UPLOAD_MAX_REPLICAS, default 1 (matches
     /// agents; set higher when KEDA is installed). Ignored by DockerRuntime.
     pub mcp_upload_max_replicas: u32,
-    /// Maximum replica count for deployed agent pods under Kubernetes (KEDA
-    /// ScaledObject) — same mechanism and same global-ceiling shape as
-    /// `mcp_upload_max_replicas` above, just for regular agents instead of
-    /// MCP connectors. AGENT_MAX_REPLICAS, default 1 (no autoscaling unless
-    /// explicitly raised). Ignored by DockerRuntime.
+    /// AGENT_MAX_REPLICAS, default 1. No longer read for agent deploys: every agent deploys
+    /// through `AgentScaling` (OSS: one replica; EE: its per-agent autoscaling). Kept so a
+    /// server and an install of different versions still agree on the key during an upgrade.
     pub agent_max_replicas: u32,
     /// Number of agent/connector image builds the build worker runs
     /// concurrently. BUILD_CONCURRENCY, default 4. Clamped to 1..=16: each
@@ -534,7 +552,6 @@ impl Config {
                 .ok()
                 .map(|value| value.trim_end_matches('/').to_owned())
                 .filter(|value| !value.is_empty()),
-            coding_agent_ingest: CodingAgentIngestConfig::from_env(),
             tempo_url: env_or("TEMPO_URL", ""),
             loki_url: env_or("LOKI_URL", ""),
             // Enabled only when BOTH backends are explicitly configured; a
@@ -569,6 +586,16 @@ impl Config {
             hitl_resume_lease_minutes: env_parse("HITL_RESUME_LEASE_MINUTES", 16),
             hitl_resume_max_attempts: env_parse("HITL_RESUME_MAX_ATTEMPTS", 3),
             hitl_resume_retry_delay_secs: env_parse("HITL_RESUME_RETRY_DELAY_SECS", 2),
+            hitl_lost_task_retries: env_parse("HITL_LOST_TASK_RETRIES", 3),
+            agent_state_ttl_days: env_parse("AGENT_STATE_TTL_DAYS", 7).clamp(1, 365),
+            agent_state_max_body_bytes: env_parse("AGENT_STATE_MAX_BODY_BYTES", 1_048_576).max(1),
+            agent_state_rate_limit_per_minute: env_parse("AGENT_STATE_RATE_LIMIT_PER_MINUTE", 1200)
+                .max(1),
+            agent_state_list_bytes_budget: env_parse(
+                "AGENT_STATE_LIST_BYTES_BUDGET",
+                8 * 1024 * 1024,
+            )
+            .max(1),
             github_client_id: std::env::var("GITHUB_CLIENT_ID").ok(),
             github_client_secret: std::env::var("GITHUB_CLIENT_SECRET").ok(),
             multi_tenant_mode: std::env::var("MULTI_TENANT_MODE")
