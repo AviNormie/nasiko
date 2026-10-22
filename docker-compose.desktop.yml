@@ -17,6 +17,9 @@
 # Settings (shell environment, or the .env next to this file):
 #   NASIKO_SERVER_IMAGE   the nasiko-server image to run (required)
 #   NASIKO_LOCAL_PORT     host port for the server, default 8080
+#   NASIKO_PLATFORM       the platform seed agent images are pulled for, default linux/amd64
+#                         (the app passes this computer's: linux/arm64 on Apple silicon)
+#   SEED_AGENTS           the agents every install starts with (below); empty for none
 
 name: nasiko-local
 
@@ -109,6 +112,10 @@ services:
       # Agents run as sibling containers on this network and reach the server by name.
       AGENT_RUNTIME: docker
       DOCKER_AGENT_NETWORK: nasiko-local
+      # The agents every install starts with (`server/src/seed.rs`): deployed on each start unless
+      # already running. `${SEED_AGENTS-…}`, not `:-`, so `SEED_AGENTS=` in .env means none.
+      SEED_AGENTS: ${SEED_AGENTS-docker.io/karannasiko/crm-agent:1.0.2 docker.io/karannasiko/general-assistant:1.1.1 docker.io/karannasiko/opencode:0.1.0}
+      SEED_IMAGE_PLATFORM: ${NASIKO_PLATFORM:-linux/amd64}
       MCP_GATEWAY_PUBLIC_URL: http://server:8080/api/mcp
       LLM_GATEWAY_BASE_URL: http://server:8080
       # OAuth providers send the browser back here, so it is the host-side address.
