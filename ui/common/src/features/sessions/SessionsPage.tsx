@@ -4,8 +4,9 @@
  *   fleet mode  window from the shared context, time sort, Load more, Live (replay/poll)
  *   day mode    scan from the day start, cost sort, Live disabled, divergence note
  *
- * Lanes (failing, slow, costly) filter the list; failing only covers status-checked rows
- * (the first 25 in the current order). Everything the page shows comes from the URL.
+ * Lanes (failing, slow, costly) filter the list; failing only covers rows with a status: the server's own
+ * (`session/list.status`) or, for rows without one, the client's trace check of the first 25 of those in the current
+ * order. Everything the page shows comes from the URL.
  */
 import { useQuery } from '@tanstack/react-query'
 import { m } from 'motion/react'
@@ -31,6 +32,7 @@ import {
   computeLanes,
   isUnknownAgent,
   noTraceData,
+  serverStatus,
   sessionCost,
   sortSessions,
   type Status,
@@ -54,6 +56,7 @@ import { meQuery } from '@/lib/api/auth'
 import { env } from '@/lib/env'
 import { cn } from '@/lib/utils'
 import { useAgentsDirectory } from '@/features/agents/api'
+import { isHarness } from '@/features/agents/status'
 import { frozenNow, tempoSafeStart, useDayScan, useFleetSessions, useSessionStatuses } from './api'
 import { useLiveFeed } from './live'
 import { SessionRow } from './SessionRow'
@@ -124,6 +127,10 @@ export function SessionsPage({
   const agentName = search.agent ? (agents.byId.get(search.agent)?.name ?? search.agent) : undefined
   const knownAgent =
     !agentName || agents.byName.has(agentName) || rowsAll.some((r) => r.agent_id === agentName)
+  const isHarnessRow = (s: SessionSummary) => {
+    const a = agents.byName.get(s.agent_id)
+    return !!a && isHarness(a)
+  }
   const display = (s: SessionSummary) =>
     isUnknownAgent(s)
       ? copy.unknownAgent
@@ -134,10 +141,19 @@ export function SessionsPage({
     () => sortSessions(agentName ? rowsAll.filter((r) => r.agent_id === agentName) : rowsAll, sort),
     [rowsAll, agentName, sort],
   )
-  const checkRows = useMemo(() => filtered.slice(0, STATUS_CHECK_ROWS), [filtered])
+  // The server's status wins; only rows without one spend the client's trace checks.
+  const checkRows = useMemo(
+    () => filtered.filter((s) => serverStatus(s.status) === null).slice(0, STATUS_CHECK_ROWS),
+    [filtered],
+  )
   const checked = useSessionStatuses(checkRows, now.getTime(), !dayMode && !paused && !pastWindow)
-  const status = (s: SessionSummary): Status => checked.get(s.session_id) ?? 'unchecked'
-  const lanes = useMemo(() => computeLanes(filtered, checked), [filtered, checked])
+  const statuses = useMemo(() => withServerStatuses(filtered, checked), [filtered, checked])
+  const status = (s: SessionSummary): Status => statuses.get(s.session_id) ?? 'unchecked'
+  const lanes = useMemo(() => computeLanes(filtered, statuses), [filtered, statuses])
+  const checking = checkRows.some((s) => {
+    const st = checked.get(s.session_id)
+    return st === undefined || st === 'checking'
+  })
   const shown = filtered.filter((s) => {
     if (search.lane === 'failing' && !lanes.failing.has(s.session_id)) return false
     if (search.lane === 'slow' && !lanes.slow.has(s.session_id)) return false
@@ -376,7 +392,8 @@ export function SessionsPage({
         <>
           {/* Rows come from the DB even when their trace lookups failed: list them (each opens its
               own page, which looks the trace up directly) and say why the details are missing. */}
-          {base.length > 0 && noTraceData(base) ? (
+          {/* A harness row's count is its stored turns, not trace data: it says nothing about the trace store. */}
+          {base.length > 0 && noTraceData(base.filter((s) => !isHarnessRow(s))) ? (
             longSearch ? (
               <Notice tone="warning">
                 {copy.noTraceDataLongWindow} {copy.noTraceDataLongWindowFix}
@@ -454,7 +471,7 @@ export function SessionsPage({
                 lanes={lanes}
                 lane={search.lane}
                 total={filtered.length}
-                checkRows={checkRows.length}
+                checking={checking}
                 day={day}
                 onLane={(l) => setSearch({ lane: l }, { replace: true })}
               />
@@ -487,6 +504,7 @@ export function SessionsPage({
                       linkSearch={linkSearch}
                       linkState={linkState}
                       fresh={live.fresh.has(s.session_id)}
+                      harness={isHarnessRow(s)}
                     />
                   ))}
                 </ul>
@@ -539,25 +557,38 @@ export function SessionsPage({
   )
 }
 
-/** The lanes as tabs with counts: one at a time, All clears it. Failing covers only the status-checked rows. */
+/** Every row's status: the server's where it has one, else the client's check. */
+function withServerStatuses(
+  rows: readonly SessionSummary[],
+  checked: ReadonlyMap<string, Status>,
+): Map<string, Status> {
+  const out = new Map(checked)
+  for (const s of rows) {
+    const st = serverStatus(s.status)
+    if (st) out.set(s.session_id, st)
+  }
+  return out
+}
+
+/** The lanes as tabs with counts: one at a time, All clears it. Failing covers only the rows with a status. */
 function Lanes({
   lanes,
   lane,
   total,
-  checkRows,
+  checking,
   day,
   onLane,
 }: {
   lanes: ReturnType<typeof computeLanes>
   lane: SessionsSearch['lane']
   total: number
-  checkRows: number
+  /** Client trace checks are still running. */
+  checking: boolean
   day?: string
   onLane: (l: SessionsSearch['lane']) => void
 }) {
   if (!lanes.ranked)
     return <p className="px-1 text-sm text-muted-foreground">{copy.notEnoughToRank}</p>
-  const checking = lanes.settled < checkRows
   const scope = copy.laneScope(day ? fmtShortDay(day) : undefined)
   const tab = (
     id: 'failing' | 'slow' | 'costly',

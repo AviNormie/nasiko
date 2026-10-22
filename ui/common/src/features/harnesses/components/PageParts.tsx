@@ -24,6 +24,8 @@ import type { LiveIndividual } from '../liveIndividual'
 import { unconnectedHarnesses } from '../rollup'
 import type { HarnessesSearch } from '../search'
 import type { HarnessTotals, UsageResponse } from '../types'
+import { useAgentsOnboarding } from '../onboarding'
+import { AgentsOnboardingCard } from './AgentsOnboardingCard'
 import { Crumbs, type Crumb } from './Crumbs'
 import { HarnessPanels, type PanelItem } from './HarnessPanels'
 import { ActivityStrip, ConnectPanel, SessionsList, TopModels } from './IndividualView'
@@ -315,9 +317,15 @@ export function LiveFallbackLevel({
   const unconnected = unconnectedHarnesses(
     (h) => !!d?.harnesses.some((x) => x.harness === h && x.registered),
   )
+  // The live fallback is always the viewer's own usage. Until it loads, nothing says the viewer has no harnesses.
+  const onboarding = useAgentsOnboarding({
+    enabled: true,
+    noHarnesses: !!d && !d.totals.registered,
+  })
   return (
     <div className="flex flex-col gap-4">
       {header}
+      {onboarding.visible ? <AgentsOnboardingCard onboarding={onboarding} /> : null}
       {live.error ? (
         <StateCard
           tone="error"
@@ -354,7 +362,10 @@ export function LiveFallbackLevel({
             initial={RECENT_SESSIONS_SHOWN}
             emptyText={copy.noRecentSessions}
           />
-          <ConnectPanel unconnected={unconnected} self name={name ?? ''} server={serverOrigin} />
+          {/* The onboarding card carries the same command. */}
+          {onboarding.visible ? null : (
+            <ConnectPanel unconnected={unconnected} self name={name ?? ''} server={serverOrigin} />
+          )}
         </>
       )}
     </div>
@@ -394,8 +405,14 @@ export function UserLevel({
   const unconnected = unconnectedHarnesses((h) =>
     res.by_harness.some((x) => x.harness === h && x.registered_devs > 0),
   )
+  // Onboarding is the viewer's own: only their own level shows it.
+  const onboarding = useAgentsOnboarding({
+    enabled: self,
+    noHarnesses: res.totals.registered_devs === 0,
+  })
   return (
     <>
+      {onboarding.visible ? <AgentsOnboardingCard onboarding={onboarding} /> : null}
       <SummaryCard
         windowLabel={win.label}
         compare={compare}
@@ -437,12 +454,15 @@ export function UserLevel({
           defaultMode="cost"
         />
       </div>
-      <ConnectPanel
-        unconnected={unconnected}
-        self={self}
-        name={res.scope.label}
-        server={serverOrigin}
-      />
+      {/* The onboarding card carries the same command. */}
+      {onboarding.visible ? null : (
+        <ConnectPanel
+          unconnected={unconnected}
+          self={self}
+          name={res.scope.label}
+          server={serverOrigin}
+        />
+      )}
     </>
   )
 }
