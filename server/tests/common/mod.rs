@@ -413,6 +413,7 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         seed_image_platform: "linux/amd64".into(),
         agent_image_registry_placeholder: None,
         build_push_token: String::new(),
+        injection_proxy_token: String::new(),
         seed_agents: None,
         openai_api_key: None,
         openai_base_url: None,
@@ -431,12 +432,6 @@ fn test_config(db_url: String, redis_url: String, s3_endpoint: String) -> Config
         otel_collector_endpoint: "http://localhost:4318".into(),
         otel_capture_content: false,
         coding_agent_otlp_endpoint: None,
-        // Fixture turns are dated 2023, far outside Tempo's window; a test that
-        // exercises the age cutoff sets this back to the production default.
-        coding_agent_ingest: nasiko_config::CodingAgentIngestConfig {
-            tempo_max_age_secs: u64::MAX / 4,
-            ..Default::default()
-        },
         tempo_url: "http://localhost:3200".into(),
         loki_url: "http://localhost:3100".into(),
         observability_enabled: false,
