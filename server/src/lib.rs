@@ -15,14 +15,8 @@ pub mod build;
 pub mod capabilities;
 pub mod catalog;
 pub mod chat;
-pub mod coding_agent_backlog;
-pub mod coding_agent_ingest_guard;
-pub mod coding_agent_onboarding;
 pub mod coding_agent_otlp;
-pub mod coding_agent_subagents;
 pub mod coding_agent_telemetry;
-pub mod coding_agent_turn_summary_backfill;
-mod coding_agent_usage;
 pub mod context_selection;
 pub mod embedding_change;
 pub mod flows;
@@ -37,7 +31,6 @@ pub mod observability;
 pub mod onboarding;
 pub mod openapi;
 pub mod orchestrator_policy;
-pub mod overview;
 pub mod pool;
 pub mod prompt_context;
 pub mod rate_limit;
@@ -318,9 +311,7 @@ where
         .merge(chat::router())
         .merge(context_selection::router())
         .merge(onboarding::router())
-        .merge(overview::router())
-        .merge(coding_agent_onboarding::router())
-        .merge(coding_agent_telemetry::router(state.clone()))
+        .merge(coding_agent_telemetry::router())
         .merge(maf::router(maf_run_limiter, maf_read_limiter))
         .merge(secrets::router())
         .merge(llm_configs::router())

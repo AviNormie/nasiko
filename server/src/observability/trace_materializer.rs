@@ -212,31 +212,12 @@ pub(crate) async fn upsert_row(
         None => None,
     };
 
-    let mut tx = db.begin().await.map_err(|e| e.to_string())?;
-    write_usage_row(&mut tx, row, session_id.as_deref(), agent_id, user_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    tx.commit().await.map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Upsert one `trace_usage` row with its owners already resolved, inside the
-/// caller's transaction. The single write path for every producer: the Tempo
-/// window scan and receipt read-back above, and coding-agent ingest, which
-/// writes a turn's row in the same transaction as its receipt. Keyed
-/// `(trace_id, agent_name)`, so a second producer of the same trace replaces the
-/// row rather than adding to it.
-pub(crate) async fn write_usage_row(
-    conn: &mut sqlx::PgConnection,
-    row: &TraceUsageRow,
-    session_id: Option<&str>,
-    agent_id: Option<uuid::Uuid>,
-    user_id: Option<uuid::Uuid>,
-) -> Result<(), sqlx::Error> {
     // A price-book match is not evidence of who served this request.
     let provider = &row.provider;
-    let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
-    sqlx::query(
+
+    let mut tx = db.begin().await.map_err(|e| e.to_string())?;
+    // Upsert into trace_usage (composite PK: trace_id, agent_name).
+    let result = sqlx::query(
             r#"INSERT INTO trace_usage (
                    trace_id, agent_name, session_id, agent_id, user_id,
                    model, provider,
@@ -266,15 +247,15 @@ pub(crate) async fn write_usage_row(
         )
         .bind(&row.trace_id)
         .bind(&row.agent_name)
-        .bind(session_id)
+        .bind(&session_id)
         .bind(agent_id)
         .bind(user_id)
         .bind(&row.model)
         .bind(provider)
-        .bind(count(row.input_tokens))
-        .bind(count(row.output_tokens))
-        .bind(count(row.cache_read_tokens))
-        .bind(count(row.cache_creation_tokens))
+        .bind(row.input_tokens as i64)
+        .bind(row.output_tokens as i64)
+        .bind(row.cache_read_tokens as i64)
+        .bind(row.cache_creation_tokens as i64)
         .bind(row.tool_call_count as i64)
         .bind(row.cost_usd)
         .bind(row.prompt_cost_usd)
@@ -282,14 +263,18 @@ pub(crate) async fn write_usage_row(
         .bind(row.latency_ms)
         .bind(row.started_at)
         .bind(row.error_count as i32)
-        .execute(&mut *conn)
-        .await?;
+        .execute(&mut *tx)
+        .await;
+
+    result.map_err(|e| e.to_string())?;
     sqlx::query("UPDATE trace_usage SET cost_estimated=$3 WHERE trace_id=$1 AND agent_name=$2")
         .bind(&row.trace_id)
         .bind(&row.agent_name)
         .bind(row.cost_estimated)
-        .execute(&mut *conn)
-        .await?;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
 

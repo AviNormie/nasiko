@@ -31,7 +31,6 @@ import {
   SCAN_PAGE_SIZE,
   STATUS_CHECK_CONCURRENCY,
   STATUS_TRACES_PER_SESSION,
-  SUBAGENT_PAGE_SIZE,
   TEMPO_MAX_SEARCH_MS,
   TEMPO_SAFETY_MS,
   WINDOW_FREEZE_MS,
@@ -53,8 +52,6 @@ export const sessionKeys = {
   fleet: (windowKey: string) => ['sessions', 'fleet', windowKey] as const,
   day: (day: string) => ['sessions', 'day', day] as const,
   detail: (id: string) => ['sessions', 'detail', id] as const,
-  /** One session's subagent sessions (`session/list?parent=`), read when its row is expanded. */
-  children: (parentId: string) => ['sessions', 'children', parentId] as const,
   trace: (id: string) => ['trace', id] as const,
   /** A small, filtered page under its own key — the Overview's two reads. */
   page: (windowKey: string, limit: number, status?: string) =>
@@ -376,26 +373,6 @@ export function useSessionStatuses(
 /** Row expand: the token split comes from SessionDetail (the list only has the total). */
 export function useSessionDetail(id: string | undefined) {
   return useQuery({ ...sessionDetailQuery(id ?? ''), enabled: !!id, staleTime: Infinity })
-}
-
-/**
- * A session's subagent sessions: `session/list?parent=<id>` (R15), newest first, one page of up to
- * SUBAGENT_PAGE_SIZE. Only while `enabled` (the row is expanded), so a closed list never reads children.
- */
-export function useSubagentSessions(parentId: string, enabled: boolean) {
-  const path = withQuery(`${OBS}/session/list`, { parent: parentId, limit: SUBAGENT_PAGE_SIZE })
-  return useQuery({
-    queryKey: sessionKeys.children(parentId),
-    queryFn: async ({ signal }) => {
-      const raw = await apiFetch<SessionListResponse>(path, { signal })
-      if (!raw?.data?.sessions)
-        throw new ApiError(200, raw, path, 'session/list → unexpected response')
-      return raw.data.sessions
-    },
-    enabled,
-    staleTime: Infinity,
-    meta: { path },
-  })
 }
 
 // ─── log tail ───────────────────────────────────────────────────────────────

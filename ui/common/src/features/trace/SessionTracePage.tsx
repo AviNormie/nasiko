@@ -10,7 +10,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { Link2, ListTree, Rows3, Table2, Workflow } from 'lucide-react'
-import { useDeferredValue, useMemo, useState, type ReactNode } from 'react'
+import { useDeferredValue, useMemo, useState } from 'react'
 import { PageHeader } from '@/components/shared/page-header'
 import { PageLoader } from '@/components/shared/page-loader'
 import { PrevNext } from '@/components/shared/prev-next'
@@ -110,13 +110,10 @@ export function SessionTracePage({
   sessionId,
   search,
   setSearch,
-  lineage,
 }: {
   sessionId: string
   search: TraceSearch
   setSearch: SetTraceSearch
-  /** The parent link and the Subagents panel (R15), from the route; drawn under the header. */
-  lineage?: ReactNode
 }) {
   const client = useQueryClient()
   const router = useRouter()
@@ -421,8 +418,6 @@ export function SessionTracePage({
           </>
         }
       />
-
-      {lineage}
 
       {traces.length === 0 ? (
         <EmptyState icon={ListTree} title={copy.noTraces}>

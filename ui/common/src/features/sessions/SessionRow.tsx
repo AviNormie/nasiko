@@ -14,19 +14,13 @@ import { AgentLink } from '@/features/agents/components/AgentLink'
 import { OpenChatLink } from '@/features/chat/components/OpenChatLink'
 import { OpenFlowLink } from '@/features/flows/components/OpenFlowLink'
 import { copy, STATUS_LABEL } from '@/features/observability/copy'
-import {
-  costWithSubagents,
-  rowSubagents,
-  sessionCost,
-  type Status,
-} from '@/features/observability/sessions'
+import { sessionCost, type Status } from '@/features/observability/sessions'
 import type { SessionSummary } from '@/features/observability/types'
 import { fmtDuration, fmtMoney, fmtTokens, fmtUtcDayTime, fmtUtcTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useSessionDetail } from './api'
 import type { SessionsSearch } from './search'
 import { LogDrawer } from './LogDrawer'
-import { RowSubagents, SubagentChip } from './Subagents'
 
 const STATUS_TONE: Record<Status, string> = {
   failed: 'text-destructive',
@@ -56,7 +50,6 @@ export const SessionRow = memo(function SessionRow({
   linkSearch,
   linkState,
   fresh,
-  harness,
 }: {
   s: SessionSummary
   agentLabel: string
@@ -70,25 +63,13 @@ export const SessionRow = memo(function SessionRow({
   linkSearch: Partial<SessionsSearch>
   linkState: () => HistoryState
   fresh: boolean
-  /** The agent is a coding harness: its session counts turns, not traces. */
-  harness: boolean
 }) {
   const input = s.first_input ?? s.session_id
   const badges = [...(slow ? ['slow' as const] : []), ...(costly ? ['costly' as const] : [])]
-  // Subagents (R15): the row's own cost stays the figure; the children's are added only in their own label.
-  const subs = rowSubagents(s)
-  const withSubs = subs.count ? costWithSubagents(sessionCost(s), subs.totals?.cost ?? null) : null
-  const inclCost = !withSubs
-    ? null
-    : withSubs.kind === 'incl'
-      ? copy.subagents.inclCost(fmtMoney(withSubs.value))
-      : copy.subagents.onlyCost(fmtMoney(withSubs.value))
   const label = [
     input,
     agentLabel,
     fmtMoney(sessionCost(s)),
-    ...(subs.count ? [copy.subagents.chip(subs.count)] : []),
-    ...(inclCost ? [inclCost] : []),
     STATUS_LABEL[status],
     timeLabel(s.start_time, withDay),
     fmtDuration(s.duration_ms),
@@ -124,7 +105,6 @@ export const SessionRow = memo(function SessionRow({
               <span className="min-w-0 flex-1 truncate">“{input}”</span>
               <span className="text-xs tabular-nums">{timeLabel(s.start_time, withDay)}</span>
             </span>
-            {subs.count ? <SubagentLine count={subs.count} inclCost={inclCost} /> : null}
           </span>
           <span className="hidden text-muted-foreground tabular-nums @[672px]:inline">
             {timeLabel(s.start_time, withDay)}
@@ -149,11 +129,6 @@ export const SessionRow = memo(function SessionRow({
                     {b}
                   </Badge>
                 ))}
-              </span>
-            ) : null}
-            {subs.count ? (
-              <span className="ml-2 inline-flex align-middle">
-                <SubagentLine count={subs.count} inclCost={inclCost} />
               </span>
             ) : null}
           </span>
@@ -181,44 +156,13 @@ export const SessionRow = memo(function SessionRow({
           />
         </Button>
       </div>
-      {expanded ? (
-        <RowDetail
-          s={s}
-          agentLabel={agentLabel}
-          harness={harness}
-          subagents={subs.count > 0}
-          linkSearch={linkSearch}
-        />
-      ) : null}
+      {expanded ? <RowDetail s={s} agentLabel={agentLabel} /> : null}
     </m.li>
   )
 })
 
-/** The chip, then the cost with the subagents' added, labelled as such (never in the cost column). */
-function SubagentLine({ count, inclCost }: { count: number; inclCost: string | null }) {
-  return (
-    <span className="inline-flex flex-wrap items-baseline gap-1.5 text-xs text-muted-foreground">
-      <SubagentChip count={count} />
-      {inclCost ? <span className="tabular-nums">{inclCost}</span> : null}
-    </span>
-  )
-}
-
 /** Lazy: the list has only total tokens; the split comes from SessionDetail. */
-function RowDetail({
-  s,
-  agentLabel,
-  harness,
-  subagents,
-  linkSearch,
-}: {
-  s: SessionSummary
-  agentLabel: string
-  harness: boolean
-  /** The row has subagents: list them (read now, while the row is open). */
-  subagents: boolean
-  linkSearch: Partial<SessionsSearch>
-}) {
+function RowDetail({ s, agentLabel }: { s: SessionSummary; agentLabel: string }) {
   const d = useSessionDetail(s.session_id)
   const [logs, setLogs] = useState(false)
   const latest = d.data ? latestTrace(d.data.traces) : null
@@ -229,7 +173,7 @@ function RowDetail({
         <div className="line-clamp-3">{s.last_output ?? '—'}</div>
       </div>
       <div className="flex flex-col gap-1">
-        <div className="text-xs text-muted-foreground">{copy.tokensAnd(harness)}</div>
+        <div className="text-xs text-muted-foreground">Tokens · traces</div>
         {d.isPending ? (
           <span className="text-muted-foreground">Loading…</span>
         ) : d.isError ? (
@@ -237,9 +181,8 @@ function RowDetail({
         ) : (
           <span className="tabular-nums">
             {fmtTokens(d.data.cost_summary.prompt.tokens)} in ·{' '}
-            {fmtTokens(d.data.cost_summary.completion.tokens)} out ·{' '}
-            {/* A harness row's list count is its stored turns (session/list), the detail's its traces. */}
-            {copy.countOf((harness ? s.num_traces : null) ?? d.data.num_traces, harness)}
+            {fmtTokens(d.data.cost_summary.completion.tokens)} out · {d.data.num_traces} trace
+            {d.data.num_traces === 1 ? '' : 's'}
           </span>
         )}
         {s.agent_id ? (
@@ -273,11 +216,6 @@ function RowDetail({
           />
         ) : null}
       </div>
-      {subagents ? (
-        <div className="@[672px]:col-span-3">
-          <RowSubagents sessionId={s.session_id} linkSearch={linkSearch} />
-        </div>
-      ) : null}
     </div>
   )
 }

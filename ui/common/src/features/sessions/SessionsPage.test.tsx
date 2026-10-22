@@ -1,11 +1,11 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { copy } from '@/features/observability/copy'
 import { TEMPO_MAX_SEARCH_MS, TEMPO_SAFETY_MS } from '@/features/observability/tuning'
 import { configureMocks } from '@/mocks/handlers'
-import { observabilityData, sessionList } from '@/mocks/observability'
+import { observabilityData } from '@/mocks/observability'
 import { now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { REPLAY_HOLD } from './live'
@@ -13,14 +13,6 @@ import { recordRequests, server } from '@/test/setup'
 
 setupPinnedSeed()
 afterEach(() => configureMocks({ variant: null }))
-
-/** session/list as the mock answers it, but with no server status on any row (the client checks them). */
-const withoutServerStatus = (request: Request) => {
-  const body = sessionList(seed, Object.fromEntries(new URL(request.url).searchParams), now())
-  return HttpResponse.json({
-    data: { ...body.data, sessions: body.data.sessions.map((r) => ({ ...r, status: null })) },
-  })
-}
 
 const rows = async () =>
   within(await screen.findByRole('list', { name: 'Sessions' })).getAllByRole('link')
@@ -216,9 +208,9 @@ describe('Sessions: states', () => {
 
   it('a session with no traces reads "unknown", not ok', async () => {
     server.use(
-      http.get('/api/observability/session/:id', ({ params, request }) =>
+      http.get('/api/observability/session/:id', ({ params }) =>
         params.id === 'list'
-          ? withoutServerStatus(request)
+          ? undefined
           : HttpResponse.json({
               data: { session: { session_id: params.id, traces: [] } },
               status_code: 200,
@@ -245,67 +237,5 @@ describe('Sessions: states', () => {
     await user.click(expand)
     expect(expand).toHaveAttribute('aria-expanded', 'true')
     expect(await screen.findByText(/in · .* out · \d+ traces$/)).toBeInTheDocument()
-  })
-})
-
-describe('Sessions: server status and harness rows', () => {
-  const firstLabel = () =>
-    within(screen.getByRole('list', { name: 'Sessions' }))
-      .getAllByRole('link')[0]
-      .getAttribute('aria-label')
-
-  it("the row's server status wins, without a client trace check", async () => {
-    const rec = recordRequests()
-    try {
-      server.use(
-        http.get('/api/observability/session/:id', ({ params }) =>
-          params.id === 'list' ? undefined : new HttpResponse('internal error', { status: 500 }),
-        ),
-      )
-      renderApp('/sessions?live=paused')
-      await rows()
-      // Every detail read fails, yet the rows read the server's ok / failed.
-      await waitFor(() => expect(firstLabel()).toMatch(/ · (✓ ok|✕ failed) · /))
-      const details = rec.urls.filter(
-        (u) =>
-          u.pathname.startsWith('/api/observability/session/') && !u.pathname.endsWith('/list'),
-      )
-      expect(details).toHaveLength(0)
-    } finally {
-      rec.stop()
-    }
-  })
-
-  it('a row without a server status falls back to the client check', async () => {
-    const rec = recordRequests()
-    onTestFinished(() => rec.stop())
-    server.use(
-      http.get('/api/observability/session/:id', ({ params, request }) =>
-        params.id === 'list' ? withoutServerStatus(request) : undefined,
-      ),
-    )
-    renderApp('/sessions?live=paused')
-    await rows()
-    await waitFor(() => expect(firstLabel()).toMatch(/ · (✓ ok|✕ failed|\? unknown) · /))
-    expect(
-      rec.urls.some(
-        (u) =>
-          u.pathname.startsWith('/api/observability/session/') && !u.pathname.endsWith('/list'),
-      ),
-    ).toBe(true)
-  })
-
-  it('a coding-harness row carries its server status and counts turns, not traces', async () => {
-    const user = userEvent.setup()
-    renderApp('/sessions?live=paused')
-    const list = await rows()
-    const harness = list.find((a) =>
-      a.getAttribute('href')?.includes('5eedc000-0000-4000-8000-00000000c004'),
-    )!
-    expect(harness.getAttribute('aria-label')).toMatch(/ · ✓ ok · /)
-    const expand = harness.parentElement!.querySelector('button[aria-expanded]') as HTMLElement
-    await user.click(expand)
-    expect(await screen.findByText('Tokens · turns')).toBeInTheDocument()
-    expect(await screen.findByText(/out · \d+ turns?$/)).toBeInTheDocument()
   })
 })

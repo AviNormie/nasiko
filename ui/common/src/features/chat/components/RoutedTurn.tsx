@@ -28,7 +28,6 @@ import { copy, policyCopy } from '../copy'
 import { copyDetails } from '../copyDetails'
 import { ChatError } from '../errors'
 import { usageFromMessage, usageFromMeta } from '../format'
-import type { answeredResume } from '../turnModel'
 import { splitStopped } from '../normalize'
 import { useSeen } from '../onScreen'
 import { policyLimit, POLICY_ENV } from '../serverContract'
@@ -47,7 +46,7 @@ export interface RoutedContext {
   /** The recorded end of a user message's newest attempt (EN-5). */
   endFor(userMessageId: string): TurnEnd | undefined
   /** The newest turn's answered request with no reply yet (ship review D3); the page derives it once. */
-  resume?: ReturnType<typeof answeredResume>
+  resume?: { mayArrive: boolean } | null
   /** The agent of the request a live resume answered (a chained pause's frame names no agent). */
   resumedAsker?: string
 }

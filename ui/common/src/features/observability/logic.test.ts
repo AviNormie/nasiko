@@ -8,7 +8,6 @@ import {
   foldDayScan,
   noTraceData,
   percentile,
-  serverStatus,
   sessionDay,
   sortSessions,
   type Status,
@@ -642,16 +641,5 @@ describe('a span collapsed inside an expanded group', () => {
       )
     expect(names(new Set())).toContain('http.call')
     expect(names(new Set([mid.id]))).not.toContain('http.call')
-  })
-})
-
-describe('serverStatus', () => {
-  it("maps session/list's failed / ok / running and leaves anything else to the client check", () => {
-    expect(serverStatus('failed')).toBe('failed')
-    expect(serverStatus('ok')).toBe('ok')
-    expect(serverStatus('running')).toBe('running')
-    expect(serverStatus(null)).toBeNull()
-    expect(serverStatus(undefined)).toBeNull()
-    expect(serverStatus('paused')).toBeNull()
   })
 })

@@ -56,9 +56,6 @@ export const HARNESS_MOCK_VARIANTS = [
   'events-absent',
   'ledger-no-trace',
   'home-budgets-absent',
-  'overview-absent',
-  'overview-quiet',
-  'village-unlimited',
   // Chat page variants (v1c DX1); harmless here, listed so the lists stay equal.
   'no-agents',
   'many-chats',
@@ -90,18 +87,6 @@ export const HARNESS_MOCK_VARIANTS = [
   'alerts-absent',
   'alerts-nowhere',
   'alerts-failing',
-  // Coding-agent onboarding (the card on this page): browser runs from the server, then the desktop app's states.
-  'agents-none',
-  'agents-importing',
-  'agents-sending',
-  'agents-rejected',
-  'agents-done',
-  'agents-absent',
-  'desktop-unasked',
-  'desktop-running',
-  'desktop-failed',
-  'desktop-rejected',
-  'desktop-sending',
 ] as const
 
 const id = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))

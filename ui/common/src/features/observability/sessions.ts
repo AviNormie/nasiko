@@ -5,18 +5,6 @@
 import { LANE_MIN_PER_AGENT, LANE_MIN_SESSIONS, P95 } from './tuning'
 import type { SessionSummary, TraceEntry } from './types'
 
-// A session's subagent fields (R15) are session derivations too; their parsing lives in its own file.
-export {
-  childRun,
-  costWithSubagents,
-  detailSubagents,
-  rowSubagents,
-  type DetailSubagents,
-  type ParentLink,
-  type RowSubagents,
-  type SubagentRun,
-} from './subagents'
-
 export const sessionCost = (s: Pick<SessionSummary, 'cost_summary'>): number | null =>
   s.cost_summary?.total?.cost ?? null
 /** `agent_id` is the raw agent name; "" when the server couldn't resolve it (deleted/unknown). */
@@ -56,12 +44,6 @@ export function percentile(values: readonly (number | null | undefined)[], q = P
  * `unknown` / `checking` for the Sessions page's per-trace checks.
  */
 export type Status = 'failed' | 'ok' | 'running' | 'unchecked' | 'unknown' | 'checking'
-
-const SERVER_STATUSES: ReadonlySet<string> = new Set<Status>(['failed', 'ok', 'running'])
-/** `session/list.status` (sessions_sql.rs `derive_status`: `failed` / `ok` / `running`, or null with no recorded
- *  request) as a display status; null when the server has none, so the caller falls back to its own check. */
-export const serverStatus = (raw: string | null | undefined): Status | null =>
-  raw && SERVER_STATUSES.has(raw) ? (raw as Status) : null
 
 /**
  * A sample's checked-sessions verdict, the rule the Overview's and the agent hub's Needs you share (design 5A, QA
