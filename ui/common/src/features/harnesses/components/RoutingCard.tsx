@@ -25,11 +25,8 @@ import { ApiError } from '@/lib/api/client'
 import { copy as pageCopy } from '../copy'
 import { useDesktopState } from '../desktop'
 import {
-  DEFAULT_CHOICE,
-  configForChoice,
   configModel,
   connectAction,
-  defaultConfig,
   initialChoice,
   useDesktopRouting,
   useRoutingChange,
@@ -100,10 +97,7 @@ function HarnessRow({ harness, configs }: { harness: RoutedHarness; configs: Llm
   const change = useRoutingChange()
   const [picked, setPicked] = useState<string | null>(null)
   const [notes, setNotes] = useState<string[]>([])
-  const fallback = defaultConfig(configs)
-  // With no default config, "Your default" can't route anything: start on the first config instead.
-  const initial = initialChoice(routing.data)
-  const choice = picked ?? (initial === DEFAULT_CHOICE && !fallback ? configs[0].id : initial)
+  const choice = picked ?? initialChoice(routing.data, configs)
   const action = connectAction(harness, choice, routing.data)
   const busy = change.isPending
   const connected = harness.connected_by !== null
@@ -113,7 +107,7 @@ function HarnessRow({ harness, configs }: { harness: RoutedHarness; configs: Llm
     announce(kind === 'connect' ? copy.working(harness.name) : copy.disconnecting(harness.name))
     change.mutate(
       kind === 'connect'
-        ? { action: 'connect', agent: harness.id, config: configForChoice(choice) }
+        ? { action: 'connect', agent: harness.id, config: choice }
         : { action: 'disconnect', agent: harness.id },
       {
         onSuccess: (r) => {
@@ -137,7 +131,11 @@ function HarnessRow({ harness, configs }: { harness: RoutedHarness; configs: Llm
           <span className="text-sm text-muted-foreground">{statusLine(harness, routing.data)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={choice} onValueChange={setPicked} disabled={!harness.detected || busy}>
+          <Select
+            value={choice ?? undefined}
+            onValueChange={setPicked}
+            disabled={!harness.detected || busy}
+          >
             <SelectTrigger
               size="sm"
               aria-label={copy.configLabel(harness.name)}
@@ -146,12 +144,9 @@ function HarnessRow({ harness, configs }: { harness: RoutedHarness; configs: Llm
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {fallback ? (
-                <SelectItem value={DEFAULT_CHOICE}>{copy.yourDefault(fallback.name)}</SelectItem>
-              ) : null}
               {configs.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {copy.configOption(c.name, c.provider, configModel(c))}
+                  {copy.configOption(c.name, c.provider, configModel(c), c.is_default)}
                 </SelectItem>
               ))}
             </SelectContent>

@@ -167,8 +167,12 @@ export const copy = {
   // intro are the agent switch's own (agents/copy.ts).
   optimization: {
     label: 'On for your coding agents',
-    hint: 'For all your coding agents at once. On a coding harness it affects history compression, which needs it on for every agent you own.',
+    hint: "Compresses the tool output (logs, diffs, JSON) your coding agents send through Nasiko's LLM router, for every coding agent with an LLM config attached.",
+    needsConfig:
+      'Attach an LLM config to a coding agent first: connect it under LLM routing, or attach one on the LLM router page.',
     some: (on: number, total: number) => `On for ${on} of ${total}.`,
+    notAttached: (n: number) =>
+      `${n === 1 ? 'One coding agent has' : `${n} coding agents have`} no LLM config attached, so ${n === 1 ? "it isn't" : "they aren't"} included.`,
     failed: (n: number, reason: string) =>
       `Couldn't change Token optimization for ${n === 1 ? 'one coding agent' : `${n} coding agents`}: ${reason}`,
   },
@@ -185,9 +189,8 @@ export const copy = {
     body: "Point a coding harness on this computer at Nasiko's LLM router, with the LLM config you choose. Nothing is routed until you connect it.",
     listLabel: 'Coding harnesses on this computer',
     configLabel: (harness: string) => `LLM config for ${harness}`,
-    yourDefault: (name: string) => `Your default (${name})`,
-    configOption: (name: string, provider: string, model: string | null) =>
-      model ? `${name} · ${provider}/${model}` : `${name} · ${provider}`,
+    configOption: (name: string, provider: string, model: string | null, isDefault: boolean) =>
+      `${name}${isDefault ? ' (your default)' : ''} · ${provider}${model ? `/${model}` : ''}`,
     noConfigs: 'Add an LLM config on the LLM router page before routing a harness.',
     openRouter: 'Open LLM router',
     configsFailed: "Couldn't load your LLM configs.",

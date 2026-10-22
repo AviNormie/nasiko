@@ -14,7 +14,12 @@ import {
   type MockLocalRun,
   type MockSyncRun,
 } from '@/mocks/codingAgents'
-import { codingAgentsMockState, configureMocks, type MockVariant } from '@/mocks/handlers'
+import {
+  codingAgentsMockState,
+  configureMocks,
+  routerMockState,
+  type MockVariant,
+} from '@/mocks/handlers'
 import { generateHarnessSeed } from '@/mocks/seed-harness'
 import { FIXED, now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
@@ -78,6 +83,51 @@ describe('Token optimization for your coding agents', () => {
           .slice(on.length)
           .map((r) => r.body),
       ).toEqual(on.map(() => ({ compress_enabled: false })))
+    } finally {
+      rec.stop()
+    }
+  })
+
+  it('writes only the harnesses with an LLM config attached: the ones routed through the LLM router', async () => {
+    as('agents-done')
+    const attached = new Set(
+      [...routerMockState().routing.entries()]
+        .filter(([, r]) => r.llm_config_id)
+        .map(([agent]) => agent),
+    )
+    renderApp('/harnesses')
+    const toggle = await within(await card()).findByRole('switch', {
+      name: 'On for your coding agents',
+    })
+    await waitFor(() => expect(toggle).toBeEnabled())
+    const rec = recordRequestBodies()
+    try {
+      await userEvent.click(toggle)
+      await waitFor(() => expect(toggle).toBeChecked())
+      const written = rec.requests
+        .filter((r) => r.method === 'PUT')
+        .map((r) => r.url.pathname.split('/').pop()!)
+      expect(written.length).toBeGreaterThan(0)
+      for (const id of written) expect(attached.has(id)).toBe(true)
+    } finally {
+      rec.stop()
+    }
+  })
+
+  it('is disabled, and says how to attach a config, while no harness has one', async () => {
+    as('agents-done')
+    for (const r of routerMockState().routing.values()) r.llm_config_id = null
+    const rec = recordRequests()
+    try {
+      renderApp('/harnesses')
+      const c = await card()
+      const toggle = await within(c).findByRole('switch', { name: 'On for your coding agents' })
+      await waitFor(() => expect(toggle).toBeDisabled())
+      expect(
+        within(c).getByText(/Attach an LLM config to a coding agent first/),
+      ).toBeInTheDocument()
+      await userEvent.click(toggle)
+      expect(rec.urls.some((u) => /^\/api\/agents\/[^/]+$/.test(u.pathname))).toBe(false)
     } finally {
       rec.stop()
     }
