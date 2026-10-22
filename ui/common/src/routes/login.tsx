@@ -21,7 +21,8 @@ import { copy } from '@/app/shell/copy'
 import { ForgotPasswordLink } from '@/app/shell/ForgotPassword'
 import { LoginGlow, LoginShowcase } from '@/app/shell/LoginShowcase'
 import { NasikoLockup } from '@/app/shell/NasikoMark'
-import { WaitlistLoginLink } from '@/app/shell/WaitlistCta'
+// The waitlist line is off while the free assessment replaces it (user request 2026-10-22).
+// import { WaitlistLoginLink } from '@/app/shell/WaitlistCta'
 import { LOGIN_ACCENT, pinAccent } from '@/app/shell/theme'
 import {
   endServerSession,
@@ -274,7 +275,7 @@ function LoginPage() {
                 error={externalError}
               />
             ) : null}
-            <WaitlistLoginLink />
+            {/* <WaitlistLoginLink /> */}
           </div>
         </div>
       </div>

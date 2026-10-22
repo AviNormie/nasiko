@@ -87,6 +87,20 @@ export const copy = {
     newTab: '(opens in a new tab)',
     loginLead: 'New to Nasiko?',
   },
+  // The free-assessment card above the sidebar footer and its rail row (AssessmentCta.tsx); it replaced the waitlist's.
+  assessment: {
+    badge: 'Free',
+    title: 'Get a free TokenOps assessment',
+    line: "Tell us how your agents run. We'll show where the tokens go.",
+    cta: 'Request assessment',
+  },
+  // The sidebar footer's help rows, above the account (AppSidebar.tsx HelpRows).
+  help: {
+    docs: 'How to use',
+    cli: 'CLI guide',
+    expert: 'Talk to an expert',
+    newTab: '(opens in a new tab)',
+  },
   // The desktop app's sign-in, while it runs Nasiko on this computer (ForgotPassword.tsx).
   forgotPassword: {
     link: 'Forgot password?',

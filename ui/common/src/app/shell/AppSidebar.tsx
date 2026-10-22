@@ -7,6 +7,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
 import {
   ArrowLeft,
+  BookOpen,
+  CalendarClock,
   CircleAlert,
   CircleUser,
   Compass,
@@ -16,6 +18,7 @@ import {
   PanelLeftOpen,
   RotateCw,
   Settings,
+  SquareTerminal,
 } from 'lucide-react'
 import {
   use,
@@ -60,6 +63,7 @@ import { ApiError } from '@/lib/api/client'
 import { SIDEBAR_HEALTH_INTERVAL_MS, useHealth } from '@/lib/api/health'
 import { env } from '@/lib/env'
 import { IS_MAC } from '@/lib/keys'
+import { DOCS_URL, EXPERT_CALL_URL } from '@/lib/links'
 import { askForTour } from '@/lib/tour'
 import { cn } from '@/lib/utils'
 import { pickShared, withoutWindow } from './context'
@@ -78,7 +82,9 @@ import {
   type Theme,
 } from './theme'
 import { SidebarPanelContext } from './panelSlot'
-import { WaitlistCard } from './WaitlistCta'
+// The waitlist card gave way to the free-assessment card (user request 2026-10-22); WaitlistCta.tsx stays for now.
+// import { WaitlistCard } from './WaitlistCta'
+import { AssessmentCard } from './AssessmentCta'
 
 /** How long a pending health check stays quiet before "Checking…" shows (design review 2A). */
 const CHECKING_DELAY_MS = 1_000
@@ -202,9 +208,11 @@ export function AppSidebar({
       ) : null}
       {/* Not while a page's panel holds the sidebar: Chat's history and Settings' sections keep the room, and Chat's dot
           background stays its page's one effect (CLAUDE.md, Aceternity effects). */}
-      {holds ? null : <WaitlistCard />}
+      {/* {holds ? null : <WaitlistCard />} */}
+      {holds || pathname === '/assessment' ? null : <AssessmentCard />}
       <SidebarFooter className={cn(GROUP, 'gap-0 border-t border-sidebar-border py-2')}>
         <SidebarMenu>
+          <HelpRows pathname={pathname} onPick={pick} />
           {SHOW_STATUS ? <StatusRow /> : null}
           <AccountMenu onPick={pick} />
         </SidebarMenu>
@@ -220,6 +228,7 @@ const TRAIL_LENGTH = 20
 function labelFor(path: string, items: readonly AnyNavItem[]): string | null {
   if (moduleOf(path) === 'account') return copy.account.settings
   if (path === '/status') return copy.statusPage
+  if (path === '/cli') return copy.help.cli
   return activeItem(path, items)?.label ?? null
 }
 
@@ -393,6 +402,51 @@ function NavGroups({
         ))}
       </SidebarContent>
     </nav>
+  )
+}
+
+/** How to use (the docs), the CLI guide (in the app) and Talk to an expert (the booking page), above the account. */
+function HelpRows({ pathname, onPick }: { pathname: string; onPick(): void }) {
+  const { setOpenMobile } = useSidebar()
+  const external = (href: string, label: string, Icon: typeof BookOpen) => (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild tooltip={label} className={ROW}>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`${label} ${copy.help.newTab}`}
+        >
+          <Icon aria-hidden />
+          <span className={LABEL}>{label}</span>
+        </a>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  )
+  return (
+    <>
+      {external(DOCS_URL, copy.help.docs, BookOpen)}
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          asChild
+          isActive={pathname === '/cli'}
+          tooltip={copy.help.cli}
+          className={cn(ROW, ACTIVE_ROW)}
+        >
+          <Link
+            to="/cli"
+            onClick={() => {
+              onPick()
+              setOpenMobile(false)
+            }}
+          >
+            <SquareTerminal aria-hidden />
+            <span className={LABEL}>{copy.help.cli}</span>
+          </Link>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+      {external(EXPERT_CALL_URL, copy.help.expert, CalendarClock)}
+    </>
   )
 }
 
