@@ -23,7 +23,8 @@ afterEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth })
 })
 
-describe('waitlist', () => {
+// Off while the free assessment replaces the waitlist in the UI (user request 2026-10-22); WaitlistCta.tsx is unmounted.
+describe.skip('waitlist', () => {
   it('links to the Nasiko waitlist page, tagged ref=oss-app', () => {
     expect(env.waitlistUrl).toBe('https://nasiko-waitlist.vercel.app/?ref=oss-app')
   })

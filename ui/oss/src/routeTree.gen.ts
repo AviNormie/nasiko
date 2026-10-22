@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './../../common/src/routes/__root'
 import { Route as AppRouteImport } from './../../common/src/routes/_app'
 import { Route as LoginRouteImport } from './../../common/src/routes/login'
 import { Route as AppIndexRouteImport } from './../../common/src/routes/_app/index'
+import { Route as AppAssessmentRouteImport } from './../../common/src/routes/_app/assessment'
+import { Route as AppCliRouteImport } from './../../common/src/routes/_app/cli'
 import { Route as AppDeployRouteImport } from './../../common/src/routes/_app/deploy'
 import { Route as AppHarnessesRouteImport } from './../../common/src/routes/_app/harnesses'
 import { Route as AppOptimizationRouteImport } from './../../common/src/routes/_app/optimization'
@@ -59,6 +61,16 @@ const LoginRoute = LoginRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAssessmentRoute = AppAssessmentRouteImport.update({
+  id: '/assessment',
+  path: '/assessment',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCliRoute = AppCliRouteImport.update({
+  id: '/cli',
+  path: '/cli',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDeployRoute = AppDeployRouteImport.update({
@@ -236,6 +248,8 @@ const AppWorkflowsRunsRoute = AppWorkflowsRunsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof LoginRoute
+  '/assessment': typeof AppAssessmentRoute
+  '/cli': typeof AppCliRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -273,6 +287,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/assessment': typeof AppAssessmentRoute
+  '/cli': typeof AppCliRoute
   '/deploy': typeof AppDeployRoute
   '/harnesses': typeof AppHarnessesRoute
   '/optimization': typeof AppOptimizationRoute
@@ -313,6 +329,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/_app/assessment': typeof AppAssessmentRoute
+  '/_app/cli': typeof AppCliRoute
   '/_app/deploy': typeof AppDeployRoute
   '/_app/harnesses': typeof AppHarnessesRoute
   '/_app/optimization': typeof AppOptimizationRoute
@@ -354,6 +372,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/assessment'
+    | '/cli'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -391,6 +411,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/assessment'
+    | '/cli'
     | '/deploy'
     | '/harnesses'
     | '/optimization'
@@ -430,6 +452,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/login'
+    | '/_app/assessment'
+    | '/_app/cli'
     | '/_app/deploy'
     | '/_app/harnesses'
     | '/_app/optimization'
@@ -493,6 +517,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/assessment': {
+      id: '/_app/assessment'
+      path: '/assessment'
+      fullPath: '/assessment'
+      preLoaderRoute: typeof AppAssessmentRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/cli': {
+      id: '/_app/cli'
+      path: '/cli'
+      fullPath: '/cli'
+      preLoaderRoute: typeof AppCliRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/deploy': {
@@ -737,6 +775,8 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppRouteChildren {
+  AppAssessmentRoute: typeof AppAssessmentRoute
+  AppCliRoute: typeof AppCliRoute
   AppDeployRoute: typeof AppDeployRoute
   AppHarnessesRoute: typeof AppHarnessesRoute
   AppOptimizationRoute: typeof AppOptimizationRoute
@@ -775,6 +815,8 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAssessmentRoute: AppAssessmentRoute,
+  AppCliRoute: AppCliRoute,
   AppDeployRoute: AppDeployRoute,
   AppHarnessesRoute: AppHarnessesRoute,
   AppOptimizationRoute: AppOptimizationRoute,
