@@ -39,6 +39,8 @@ export const MOCKABLE = [
   'mcp',
   'workflows',
   'onboarding',
+  // The free assessment form's POST (assessment.rs).
+  'assessment',
   // Coding-agent sync progress and the desktop app's local routes (the Harnesses onboarding card).
   'coding-agents',
   'optimization',

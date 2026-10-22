@@ -275,8 +275,7 @@ impl AppState {
 
         let (build_tx, build_rx) = mpsc::channel(64);
         let (hitl_resume_tx, hitl_resume_rx) = mpsc::channel(64);
-        let continuation_events = crate::hitl::continuation::ContinuationRegistry::new();
-        // Pauses and resume outcomes are written from several places (the store, the MCP
+        let continuation_events = crate::hitl::continuation::ContinuationRegistry::new(); // Pauses and resume outcomes are written from several places (the store, the MCP
         // gateway's inserts, both resume dispatchers); each reports through this one observer. A
         // second AppState in the same process (tests) keeps the first one's: the instruments sit
         // on the process-wide meter either way.

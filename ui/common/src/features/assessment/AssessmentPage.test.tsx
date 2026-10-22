@@ -1,14 +1,16 @@
 /** The free assessment (`/assessment`) and the sidebar's ways to it and to help (AssessmentCta, HelpRows). */
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { copy as shell } from '@/app/shell/copy'
 import { DOCS_URL, EXPERT_CALL_URL } from '@/lib/links'
+import { assessmentsMockState, configureMocks } from '@/mocks/handlers'
 import { setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
 import { copy } from './copy'
 
 setupPinnedSeed()
+afterEach(() => configureMocks({ variant: null }))
 
 const field = (name: string) => screen.getByRole('textbox', { name: new RegExp(`^${name}`) })
 const submit = () => userEvent.click(screen.getByRole('button', { name: copy.form.submit }))
@@ -43,6 +45,19 @@ describe('assessment', () => {
 
     const step = await screen.findByRole('heading', { name: copy.done.title('Ada') })
     expect(step).toHaveFocus()
+    expect(screen.getByText(new RegExp(copy.done.saved))).toBeInTheDocument()
+    expect(assessmentsMockState()).toEqual([
+      {
+        applying_as: 'team',
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+        company: 'Analytical Engines',
+        agents: '2-5',
+        spend: '<100',
+        challenges: ['Lack of token usage visibility'],
+        notes: '',
+      },
+    ])
     const book = screen.getByRole('link', { name: new RegExp(copy.done.book) })
     expect(book).toHaveAttribute('href', EXPERT_CALL_URL)
     expect(book).toHaveAttribute('target', '_blank')
@@ -54,6 +69,21 @@ describe('assessment', () => {
     // Edit answers comes back to what was typed.
     await userEvent.click(screen.getByRole('button', { name: copy.done.edit }))
     expect(field(copy.form.name)).toHaveValue('Ada Lovelace')
+  })
+
+  it('still reaches the booking step when the server cannot save the answers', async () => {
+    configureMocks({ variant: 'assessment-unconfigured' })
+    renderApp('/assessment')
+    await screen.findByRole('heading', { level: 1, name: copy.headline })
+    await userEvent.type(field(copy.form.name), 'Ada')
+    await userEvent.type(field(copy.form.email), 'ada@example.com')
+    await userEvent.click(screen.getByRole('radio', { name: '1 agent' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Under $100' }))
+    await submit()
+
+    await screen.findByRole('heading', { name: copy.done.title('Ada') })
+    expect(screen.getByText(new RegExp(copy.done.notSaved))).toBeInTheDocument()
+    expect(assessmentsMockState()).toEqual([])
   })
 
   it('puts the help rows and the assessment card in the sidebar, the waitlist gone', async () => {

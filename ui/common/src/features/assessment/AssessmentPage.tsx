@@ -1,8 +1,8 @@
 /**
  * The free TokenOps assessment (`/assessment`; the sidebar card that replaced the waitlist's): a hero, a short form
  * about how the visitor runs agents, then the last step, booking a slot on the team's calendar.
- * ponytail: frontend only (user decision 2026-10-22). The answers aren't sent anywhere; the last step offers them to
- * copy into the booking note. When a backend endpoint exists, POST `answers` in `submit` before showing the last step.
+ * Submitting POSTs the answers (api.ts, stored in S3) before the last step. A failed save — a server without a bucket
+ * configured, or S3 down — still reaches the last step, which then asks for the answers in the booking note instead.
  */
 import { ArrowUpRight, Check, ChartNoAxesColumn, MessagesSquare, Waypoints } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -20,9 +20,10 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
 import { EXPERT_CALL_URL } from '@/lib/links'
+import { useSubmitAssessment } from './api'
 import { AGENT_COUNTS, APPLYING_AS, CHALLENGES, copy, SPEND } from './copy'
 
-type Answers = {
+export type Answers = {
   applyingAs: (typeof APPLYING_AS)[number]['value']
   name: string
   email: string
@@ -68,6 +69,8 @@ export function AssessmentPage() {
   // The last answers: shown on the last step, and the form's starting values after Edit answers.
   const [answers, setAnswers] = useState<Answers>(EMPTY)
   const [submitted, setSubmitted] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const save = useSubmitAssessment()
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
       <TopBar root={copy.title} />
@@ -92,12 +95,19 @@ export function AssessmentPage() {
         </div>
       </SpotlightCard>
       {submitted ? (
-        <LastStep answers={answers} onEdit={() => setSubmitted(false)} />
+        <LastStep answers={answers} saved={saved} onEdit={() => setSubmitted(false)} />
       ) : (
         <AssessmentForm
           initial={answers}
-          onDone={(a) => {
+          sending={save.isPending}
+          onDone={async (a) => {
             setAnswers(a)
+            setSaved(
+              await save.mutateAsync(a).then(
+                () => true,
+                () => false,
+              ),
+            )
             setSubmitted(true)
           }}
         />
@@ -108,12 +118,20 @@ export function AssessmentPage() {
 
 // useForm lives here, not in the page: under the React Compiler a child reading a passed-in form's formState never
 // sees its errors update.
-function AssessmentForm({ initial, onDone }: { initial: Answers; onDone(a: Answers): void }) {
+function AssessmentForm({
+  initial,
+  sending,
+  onDone,
+}: {
+  initial: Answers
+  sending: boolean
+  onDone(a: Answers): Promise<void>
+}) {
   const id = useId()
   const form = useForm<Answers>({ defaultValues: initial })
   const { errors } = form.formState
   const team = useWatch({ control: form.control, name: 'applyingAs' }) === 'team'
-  const submit = form.handleSubmit((a) => onDone(a))
+  const submit = form.handleSubmit(onDone)
   const req = <span className="sr-only">{copy.form.required}</span>
   const star = (
     <span aria-hidden className="text-muted-foreground">
@@ -265,8 +283,8 @@ function AssessmentForm({ initial, onDone }: { initial: Answers; onDone(a: Answe
           />
         </Field>
         <div className="flex flex-col gap-3">
-          <Button type="submit" size="lg" className="w-full">
-            {copy.form.submit}
+          <Button type="submit" size="lg" className="w-full" disabled={sending}>
+            {sending ? copy.form.sending : copy.form.submit}
           </Button>
           <p className="text-center text-xs text-muted-foreground">{copy.form.fine}</p>
         </div>
@@ -275,7 +293,15 @@ function AssessmentForm({ initial, onDone }: { initial: Answers; onDone(a: Answe
   )
 }
 
-function LastStep({ answers, onEdit }: { answers: Answers; onEdit(): void }) {
+function LastStep({
+  answers,
+  saved,
+  onEdit,
+}: {
+  answers: Answers
+  saved: boolean
+  onEdit(): void
+}) {
   const summary = summaryOf(answers)
   const first = answers.name.trim().split(/\s+/)[0] ?? ''
   const heading = useRef<HTMLHeadingElement>(null)
@@ -286,7 +312,9 @@ function LastStep({ answers, onEdit }: { answers: Answers; onEdit(): void }) {
       <h2 ref={heading} tabIndex={-1} className="text-lg font-semibold outline-none">
         {copy.done.title(first)}
       </h2>
-      <p className="text-sm text-muted-foreground">{copy.done.line}</p>
+      <p className="text-sm text-muted-foreground">
+        {saved ? copy.done.saved : copy.done.notSaved} {copy.done.line}
+      </p>
       <Button asChild size="lg" className="self-start">
         <a href={EXPERT_CALL_URL} target="_blank" rel="noopener noreferrer">
           {copy.done.book}

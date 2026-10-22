@@ -29,6 +29,7 @@ export const copy = {
       'Which models, frameworks and providers do you use? What would you most like to solve?',
     required: '(required)',
     submit: 'Continue to scheduling',
+    sending: 'Sending your answers…',
     fine: 'We use your answers only to prepare your assessment. Requests are subject to follow-up and scheduling.',
   },
   errors: {
@@ -41,6 +42,8 @@ export const copy = {
   },
   done: {
     title: (name: string) => (name ? `Almost there, ${name}` : 'Almost there'),
+    saved: "We've received your answers.",
+    notSaved: "We couldn't save your answers, so paste them into the booking note.",
     line: 'Last step: pick a 30-minute slot with the Nasiko team.',
     book: 'Book your assessment',
     pasteHint: 'Paste your answers into the booking note so the team can prepare.',

@@ -13,6 +13,7 @@ pub mod agent_proxy;
 pub mod agent_scaling;
 pub mod agent_state;
 pub mod agents;
+pub mod assessment;
 pub mod auth;
 pub mod build;
 pub mod capabilities;
@@ -287,6 +288,8 @@ where
     // costs two bcrypt cost-12 hashes. 10/min is generous for a human changing
     // their own password and still bounds the CPU burn from a scripted loop.
     let change_password_limiter = RateLimiter::new(10, Duration::from_secs(60));
+    // Each assessment is an S3 write; a human submits the form once or twice.
+    let assessment_limiter = RateLimiter::new(5, Duration::from_secs(60));
     // Starting a MAF run is the single most expensive authenticated action in
     // the product: the executor makes 4 LLM calls minimum (plan, per-step
     // placeholder fill, per-step extraction, final synthesis) plus one agent
@@ -325,6 +328,7 @@ where
         .merge(chat::router())
         .merge(context_selection::router())
         .merge(onboarding::router())
+        .merge(assessment::router(assessment_limiter))
         .merge(overview::router())
         .merge(coding_agent_onboarding::router())
         .merge(coding_agent_telemetry::router(state.clone()))
