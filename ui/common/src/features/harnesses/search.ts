@@ -101,6 +101,7 @@ export const HARNESS_MOCK_VARIANTS = [
   'desktop-running',
   'desktop-failed',
   'desktop-rejected',
+  'desktop-sending',
 ] as const
 
 const id = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))

@@ -41,8 +41,10 @@ export const SYNC_SENDING_POLL_MS = 10_000
 /** With no run yet, the card (while it and the page are visible) looks for one this often: someone may run the
  *  command at any moment. */
 export const SYNC_IDLE_POLL_MS = 10_000
-/** In the desktop app, the local state is re-read this often while a run is active (no network involved). */
+/** In the desktop app, the local state is re-read this often while it syncs (no network involved). */
 export const DESKTOP_STATE_POLL_MS = 1_000
+/** In the desktop app, the local state is re-read this often while nothing syncs: a hook may queue turns any time. */
+export const DESKTOP_IDLE_POLL_MS = 10_000
 /** The import timeline shows this many finished windows before "Show all". */
 export const SYNC_DONE_WINDOWS_SHOWN = 3
 /** The label local clients give the window of history older than the last 30 days (the contract's v2 `windows`). */

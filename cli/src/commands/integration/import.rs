@@ -24,7 +24,7 @@ use super::ledger::Ledger;
 use super::queue;
 use super::report::{self, CaptureMode, Captured, REPORT_BUDGET};
 use super::state::{self, IntegrationState};
-use super::sync;
+use super::sync::{self, Backoff};
 use super::windows;
 
 /// How often a run waiting on deliveries checks on them and says how long it still waits.
@@ -94,6 +94,8 @@ pub struct ImportRun {
     pub backlog: Backlog,
     /// Set once every window is read while turns are still waiting to be delivered.
     pub sending: Option<Sending>,
+    /// Turns the server took (accepted, or already had) during this run.
+    pub delivered: usize,
 }
 
 #[cfg(test)]
@@ -124,6 +126,22 @@ impl ImportRun {
                 .windows
                 .iter()
                 .all(|window| window.status == WindowStatus::Done)
+    }
+
+    /// Windows whose sessions have all been read (their turns may still be waiting to be delivered).
+    pub fn windows_read(&self) -> usize {
+        self.windows
+            .iter()
+            .filter(|window| matches!(window.status, WindowStatus::Sending | WindowStatus::Done))
+            .count()
+    }
+
+    /// Windows read whose turns have all been delivered or set aside.
+    pub fn windows_done(&self) -> usize {
+        self.windows
+            .iter()
+            .filter(|window| window.status == WindowStatus::Done)
+            .count()
     }
 
     fn progress(&mut self, agent: Agent) -> &mut ImportProgress {
@@ -160,31 +178,58 @@ pub fn import_past_sessions(drain: Drain, observe: impl FnMut(&ImportRun)) -> Re
         .iter()
         .map(|agent| (*agent, agent.past_sessions()))
         .collect();
-    importer(observe).run(listed, drain)
+    importer(observe, Backoff::Honour).run(listed, drain)
 }
 
 /// Delivers what the queue holds, as `drain` says, with no import: `nasiko agents sync` run by hand.
-pub fn deliver_queued(drain: Drain, observe: impl FnMut(&ImportRun)) -> Result<ImportRun> {
-    importer(observe).run(Vec::new(), drain)
+/// With [`Backoff::Ignore`] (the user asked to send now) every queued turn gets an attempt at once,
+/// even one waiting on a retry; a server's own pause still holds, and a turn that fails again waits as
+/// usual.
+pub fn deliver_queued(
+    drain: Drain,
+    backoff: Backoff,
+    observe: impl FnMut(&ImportRun),
+) -> Result<ImportRun> {
+    let mut importer = importer(observe, backoff);
+    if backoff == Backoff::Ignore {
+        // Nothing may be due by its retry delay, so the drain alone wouldn't send.
+        importer.courier.nudge();
+    }
+    importer.run(Vec::new(), drain)
 }
 
 type Capture = fn(Agent, SessionSource) -> Result<Captured>;
 
 /// An importer on this computer's queue, delivering to the server.
-fn importer<O: FnMut(&ImportRun)>(observe: O) -> Importer<Capture, O> {
+fn importer<O: FnMut(&ImportRun)>(observe: O, backoff: Backoff) -> Importer<Capture, O> {
     Importer {
         root: state::integrations_dir(),
         ledger: Ledger::load(),
-        courier: Courier::start({
-            let mut pace = sync::Pace::default();
-            move || sync::deliver_paced(&mut pace)
-        }),
+        courier: paced_courier(backoff, sync::deliver_paced),
         capture: capture_past,
         observe,
         run: ImportRun::default(),
         last_pass: None,
         tick: TICK,
     }
+}
+
+/// A courier delivering with `deliver` at one pace kept across its passes. The first pass that runs
+/// treats retry delays as `backoff` says; every later one honours them, so a turn that fails again
+/// waits out its delay.
+fn paced_courier(
+    backoff: Backoff,
+    mut deliver: impl FnMut(&mut sync::Pace, Backoff) -> Result<sync::Pass> + Send + 'static,
+) -> Courier {
+    let mut pace = sync::Pace::default();
+    let mut backoff = backoff;
+    Courier::start(move || {
+        let pass = deliver(&mut pace, backoff);
+        if pass.is_ok() {
+            backoff = Backoff::Honour;
+        }
+        pass
+    })
 }
 
 /// Captures one past session the way its hook would, but without waiting on it or logging per session.
@@ -312,8 +357,18 @@ where
         if finished.is_empty() {
             return Ok(());
         }
-        self.last_pass = finished.into_iter().last();
+        for outcome in finished {
+            self.take(outcome);
+        }
         self.refresh()
+    }
+
+    /// Takes in a finished delivery pass.
+    fn take(&mut self, outcome: Outcome) {
+        if let Ok(pass) = &outcome {
+            self.run.delivered += pass.delivered;
+        }
+        self.last_pass = Some(outcome);
     }
 
     /// Rereads the queue: windows whose turns have all left it are done (and recorded as such), and the
@@ -343,7 +398,7 @@ where
         loop {
             if !self.courier.idle() {
                 if let Some(outcome) = self.courier.wait(self.tick) {
-                    self.last_pass = Some(outcome);
+                    self.take(outcome);
                     self.refresh()?;
                 }
                 self.report_sending();
@@ -551,6 +606,8 @@ mod tests {
         assert_eq!(*reads.borrow(), ["new", "yesterday", "old"]);
         assert!(run.delivered());
         assert!(run.sending.is_none());
+        assert_eq!(run.delivered, 3, "every turn the server took is counted");
+        assert_eq!((run.windows_read(), run.windows_done()), (3, 3));
         let progress = &run.agents[0].1;
         assert_eq!((progress.done, progress.total, progress.turns), (3, 3, 3));
         assert!(progress.finished);
@@ -584,6 +641,8 @@ mod tests {
         );
         assert_eq!(run.backlog.pending(), 3);
         assert!(!run.delivered());
+        assert_eq!(run.delivered, 0);
+        assert_eq!((run.windows_read(), run.windows_done()), (3, 0));
         assert!(run.sending.is_some());
         assert!(
             seen.borrow()
@@ -727,14 +786,23 @@ mod tests {
         captured: Rc<RefCell<HashSet<String>>>,
         observe: O,
     ) -> Importer<impl FnMut(Agent, SessionSource) -> Result<Captured>, O> {
+        delivering_importer_with(root, url, captured, observe, Backoff::Honour)
+    }
+
+    fn delivering_importer_with<O: FnMut(&ImportRun)>(
+        root: &Path,
+        url: &str,
+        captured: Rc<RefCell<HashSet<String>>>,
+        observe: O,
+        backoff: Backoff,
+    ) -> Importer<impl FnMut(Agent, SessionSource) -> Result<Captured>, O> {
         let config = signed_in(url);
         let queue_root = root.to_path_buf();
-        let mut pace = sync::Pace::default();
         Importer {
             root: root.to_path_buf(),
             ledger: Ledger::load_at(root),
-            courier: Courier::start(move || {
-                sync::deliver_at(&queue_root, || Ok(config.clone()), &mut pace)
+            courier: paced_courier(backoff, move |pace, backoff| {
+                sync::deliver_at(&queue_root, || Ok(config.clone()), pace, backoff)
             }),
             capture: capture_once(root, url, captured),
             observe,
@@ -788,6 +856,60 @@ mod tests {
             .collect();
         assert_eq!(sent.into_iter().collect::<HashSet<_>>(), expected);
         mock.assert();
+    }
+
+    /// A turn queued for `url` that failed before and waits on its retry for another half hour.
+    fn waiting_on_a_retry(root: &Path, url: &str) -> PathBuf {
+        let mut record = QueueRecord::new(
+            QueueDestination {
+                cluster_name: "c".into(),
+                cluster_url: url.into(),
+                principal_id: uuid::Uuid::nil(),
+            },
+            event("waiting", "t"),
+        );
+        record.attempts = 4;
+        record.next_attempt_at = Some(Utc::now() + chrono::Duration::minutes(30));
+        queue::enqueue_at(root, &record).unwrap()
+    }
+
+    #[test]
+    fn delivering_now_sends_a_turn_waiting_on_a_retry_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (server, mock) = accepting_server(sent.clone());
+        let path = waiting_on_a_retry(dir.path(), &server.url());
+        let captured = Rc::new(RefCell::new(HashSet::new()));
+        let url = server.url();
+
+        let mut now = delivering_importer_with(dir.path(), &url, captured, |_| {}, Backoff::Ignore);
+        now.courier.nudge();
+        let run = now.run(Vec::new(), Drain::WhileDue).unwrap();
+
+        mock.assert();
+        assert!(!path.exists());
+        assert_eq!(run.delivered, 1);
+        assert_eq!(run.backlog.pending(), 0);
+    }
+
+    #[test]
+    fn a_delivery_not_asked_for_by_the_user_waits_out_the_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .expect(0)
+            .create();
+        let path = waiting_on_a_retry(dir.path(), &server.url());
+        let captured = Rc::new(RefCell::new(HashSet::new()));
+
+        let run = delivering_importer(dir.path(), &server.url(), captured, |_| {})
+            .run(Vec::new(), Drain::WhileDue)
+            .unwrap();
+
+        mock.assert();
+        assert!(path.exists());
+        assert_eq!((run.delivered, run.backlog.pending()), (0, 1));
     }
 
     /// Reads this computer's real agent stores (read-only: nothing is captured, queued or written) and

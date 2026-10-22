@@ -33,7 +33,7 @@ export function AgentsOnboardingCard({ onboarding }: { onboarding: AgentsOnboard
 }
 
 function CardBody({ view, onboarding }: { view: CardView; onboarding: AgentsOnboarding }) {
-  const { desktop, retry, mode } = onboarding
+  const { desktop, retry, mode, waiting } = onboarding
   const busy = !!desktop?.busy
   switch (view.kind) {
     case 'command':
@@ -90,7 +90,7 @@ function CardBody({ view, onboarding }: { view: CardView; onboarding: AgentsOnbo
         <>
           <Title>{view.kind === 'running' ? copy.runningTitle : finishedTitle(view.runs)}</Title>
           {view.runs.map((run) => (
-            <RunBlock key={run.device_id} run={run} retry={retry} />
+            <RunBlock key={run.device_id} run={run} retry={retry} waiting={waiting} />
           ))}
           {view.runs.some((r) => r.phase === 'failed') ? (
             desktop ? (

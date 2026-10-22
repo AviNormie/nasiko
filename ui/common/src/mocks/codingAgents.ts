@@ -9,7 +9,9 @@
  *   `agents-none` has no run yet, `agents-done` a finished one, `agents-absent` a server without the routes. Every
  *   variant but `agents-absent` is a viewer with no registered harness yet (handlers.ts `onboardingSeed`).
  * - The desktop app (`/__nasiko/coding-agents/state|start|decline|retry`): a 404 by default, as a browser gets.
- *   `?mock=desktop-unasked|running|failed|rejected` answer as the desktop app, with its local consent and run.
+ *   `?mock=desktop-unasked|running|failed|rejected` answer as the desktop app, with its local consent and run;
+ *   `desktop-sending` is a finished import while the app delivers turns its hooks queued (the `backlog`, which every
+ *   desktop state carries: the run's waiting and refused turns plus `queued`), so the app-wide sync bar shows.
  *
  * Tests start with no runs and no desktop, so the card stays hidden on every page test whose viewer has harnesses.
  */
@@ -70,6 +72,10 @@ export interface DesktopMockState {
   run: MockLocalRun | null
   /** The next N starts answer 500, as a desktop that couldn't start. */
   failStarts: number
+  /** Turns queued outside the run (the agents' hooks), waiting to be sent. */
+  queued: number
+  /** A background delivery pass is going now. */
+  sending: boolean
 }
 
 export type MockLocalRun = Omit<
@@ -101,6 +107,7 @@ export const AGENTS_ONBOARDING_VARIANTS = [
   'desktop-running',
   'desktop-failed',
   'desktop-rejected',
+  'desktop-sending',
 ] as const
 export type AgentsOnboardingVariant = (typeof AGENTS_ONBOARDING_VARIANTS)[number]
 
@@ -370,23 +377,29 @@ const desktopBase = (over: Partial<DesktopMockState> = {}): DesktopMockState => 
   retryAt: null,
   run: null,
   failStarts: 0,
+  queued: 0,
+  sending: false,
   ...over,
 })
 
-/** A desktop run that stopped: the user signed out mid-import. */
-function failedLocalRun(now: number): MockLocalRun {
-  const {
-    device_id: _d,
-    device_name: _n,
-    client: _c,
-    retry_requested_at: _r,
-    ...run
-  } = mockRun('failed', importingAgents(), now, {
-    error: 'signed out of Nasiko',
-    windows: mockWindows(now, 4, false),
-  })
-  return run
+/** A run as the desktop holds it: without the device fields (it is this computer). */
+function toLocal(run: MockSyncRun): MockLocalRun {
+  const { device_id: _d, device_name: _n, client: _c, retry_requested_at: _r, ...local } = run
+  return local
 }
+
+/** A desktop run that stopped: the user signed out mid-import. */
+const failedLocalRun = (now: number): MockLocalRun =>
+  toLocal(
+    mockRun('failed', importingAgents(), now, {
+      error: 'signed out of Nasiko',
+      windows: mockWindows(now, 4, false),
+    }),
+  )
+
+/** A desktop import that finished, every window in. */
+export const doneLocalRun = (now: number): MockLocalRun =>
+  toLocal(mockRun('done', doneAgents(), now, { windows: mockWindows(now, WINDOW_COUNT) }))
 
 /** The state for a `?mock=` variant (null: the tests' default). */
 export function buildCodingAgentsState(
@@ -425,6 +438,11 @@ export function buildCodingAgentsState(
       return { ...base, desktop: desktopBase({ run: failedLocalRun(now) }) }
     case 'desktop-rejected':
       return { ...base, desktop: desktopBase({ scriptStart: now - REJECTED_AT * 1000 }) }
+    case 'desktop-sending':
+      return {
+        ...base,
+        desktop: desktopBase({ run: doneLocalRun(now), queued: 499, sending: true }),
+      }
     default:
       return base
   }
@@ -473,17 +491,47 @@ function requestRetry(st: CodingAgentsState, deviceId: string, now: number): Moc
 function localRun(d: DesktopMockState, now: number): MockLocalRun | null {
   if (d.run) return d.run
   const run = d.scriptStart === null ? null : scriptedRun(now - d.scriptStart, now, d.retryAt)
-  if (!run) return null
-  const { device_id: _d, device_name: _n, client: _c, retry_requested_at: _r, ...local } = run
-  return local
+  return run ? toLocal(run) : null
 }
 
-const desktopState = (d: DesktopMockState, now: number) => ({
-  desktop: true,
-  consent: d.consent,
-  signed_in: d.signedIn,
-  run: localRun(d, now),
-})
+/** How long a turn waiting on a retry waits, as the desktop's own backoff might. */
+const RETRY_IN_MS = 120_000
+
+/** The desktop's queue (server.rs `backlog_json`): the run's waiting and refused turns plus what hooks queued. */
+function desktopBacklog(d: DesktopMockState, run: MockLocalRun | null, now: number) {
+  const sum = (key: 'pending' | 'rejected') =>
+    (run?.agents ?? []).reduce((n, a) => n + a.import[key], 0)
+  const pending = sum('pending') + d.queued
+  const sending = d.sending || run?.phase === 'sending'
+  return {
+    pending,
+    rejected: sum('rejected'),
+    sending,
+    next_attempt_at: pending > 0 && !sending ? new Date(now + RETRY_IN_MS).toISOString() : null,
+  }
+}
+
+/** The desktop's own counts on its run (server.rs `run_json`): windows read and turns delivered. */
+function withAppCounts(run: MockLocalRun) {
+  const sum = (key: 'turns' | 'pending' | 'rejected') =>
+    run.agents.reduce((n, a) => n + a.import[key], 0)
+  return {
+    ...run,
+    windows_read: run.windows.filter((w) => w.status === 'done').length,
+    delivered: Math.max(0, sum('turns') - sum('pending') - sum('rejected')),
+  }
+}
+
+const desktopState = (d: DesktopMockState, now: number) => {
+  const run = localRun(d, now)
+  return {
+    desktop: true,
+    consent: d.consent,
+    signed_in: d.signedIn,
+    run: run && withAppCounts(run),
+    backlog: desktopBacklog(d, run, now),
+  }
+}
 
 /** Start (or start again): consent granted, and the scripted client begins at discovery, unless a run is active. */
 function startDesktop(d: DesktopMockState, now: number) {

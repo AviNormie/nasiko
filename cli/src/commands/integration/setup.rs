@@ -108,15 +108,25 @@ pub fn import() -> Result<()> {
 /// `nasiko agents status`: the import (running, or the last one), what is still waiting to send, and
 /// the end of the background import's log.
 pub fn status() -> Result<()> {
-    for line in background::status_report(&state::integrations_dir())? {
+    let in_terminal = std::io::stdout().is_terminal();
+    let width = terminal_width();
+    let lines = background::status_report(&state::integrations_dir(), |line| {
+        if in_terminal {
+            fit(line, width)
+        } else {
+            line.to_string()
+        }
+    })?;
+    for line in lines {
         println!("{line}");
     }
     Ok(())
 }
 
 /// `nasiko agents sync`. Run by a hook (no terminal) it delivers what is due and stops; by hand it
-/// first acts on a retry asked for in the web app (or `--retry-rejected`), then keeps delivering until
-/// the queue is empty, saying what it waits for.
+/// first acts on a retry asked for in the web app (or `--retry-rejected`), then sends every queued turn
+/// at once, even one waiting on a retry (the user asked; a server's own pause still holds), and keeps
+/// delivering until the queue is empty, saying what it waits for.
 pub fn sync(retry_rejected: bool) -> Result<()> {
     let by_hand = std::io::stdout().is_terminal();
     if retry_rejected {
@@ -128,7 +138,9 @@ pub fn sync(retry_rejected: bool) -> Result<()> {
         return delivery::run();
     }
     let mut printer = Printer::new();
-    let run = import::deliver_queued(Drain::UntilEmpty, |run| printer.show(run))?;
+    let run = import::deliver_queued(Drain::UntilEmpty, delivery::Backoff::Ignore, |run| {
+        printer.show(run)
+    })?;
     printer.finish(&run);
     Ok(())
 }
@@ -240,7 +252,7 @@ fn import_here(mut follow: impl FnMut(&ImportRun)) -> Result<Option<ImportRun>> 
     let run = import::import_past_sessions(Drain::UntilEmpty, |run| {
         follow(run);
         printer.show(run);
-        status.update(run, &status_line(run));
+        status.update(run, &waiting_line(run));
     })?;
     printer.finish(&run);
     status.finish(&run, &outcome_line(&run));
@@ -338,25 +350,33 @@ impl Printer {
     }
 }
 
-/// `Last 8 hours · 8/25 sessions · Claude Code 8/192` while a window is read; what delivery waits for
+/// `Read 9/23 windows · Oct 17 · 10/10 sessions · Delivered 1,730 turns · 499 waiting · 0 set aside`
+/// while windows are read, so delivery lagging reading is seen to be moving; what delivery waits for
 /// once all are.
 fn status_line(run: &ImportRun) -> String {
     if run.sending.is_some() {
         return sending_line(run);
     }
-    match run
-        .windows
-        .iter()
-        .find(|window| window.status == WindowStatus::Reading)
-    {
-        Some(window) => format!(
-            "{} · {}/{} sessions · {}",
-            window.label,
-            window.done,
-            window.sessions,
-            agent_counts(run)
+    if run.windows.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{} · {}",
+        background::read_line(
+            run.windows_read(),
+            run.windows.len(),
+            &background::reading(run)
         ),
-        None => String::new(),
+        background::delivered_line(run.delivered, &run.backlog)
+    )
+}
+
+/// What delivery waits for once every window is read, for the status file; empty before then.
+fn waiting_line(run: &ImportRun) -> String {
+    if run.sending.is_some() {
+        sending_line(run)
+    } else {
+        String::new()
     }
 }
 
@@ -397,21 +417,6 @@ fn sending_line(run: &ImportRun) -> String {
          `nasiko agents sync` later.",
         by_agent.join(", ")
     )
-}
-
-fn agent_counts(run: &ImportRun) -> String {
-    run.agents
-        .iter()
-        .map(|(agent, progress)| {
-            format!(
-                "{} {}/{}",
-                agent.spec().display_name,
-                progress.done,
-                progress.total
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// The terminal's width in columns: as the terminal says, else `$COLUMNS`, else [`DEFAULT_WIDTH`].
@@ -490,29 +495,43 @@ mod tests {
     }
 
     #[test]
-    fn the_progress_line_is_short_and_cut_to_the_terminal_width() {
-        let mut window = WindowProgress::for_test("Last 8 hours", WindowStatus::Reading, 25, 40);
-        window.done = 8;
-        let run = ImportRun {
-            agents: vec![(
-                Agent::Claude,
-                import::ImportProgress {
-                    done: 8,
-                    total: 192,
-                    ..import::ImportProgress::default()
-                },
-            )],
-            windows: vec![window],
+    fn the_progress_line_shows_reading_and_delivery_apart_cut_to_the_terminal_width() {
+        let mut window = WindowProgress::for_test("Oct 17", WindowStatus::Reading, 10, 40);
+        window.done = 10;
+        let mut run = ImportRun {
+            windows: vec![
+                WindowProgress::for_test("Today", WindowStatus::Done, 2, 3),
+                WindowProgress::for_test("Yesterday", WindowStatus::Sending, 5, 9),
+                window,
+                WindowProgress::for_test("Oct 16", WindowStatus::Waiting, 7, 0),
+            ],
+            delivered: 1_730,
             ..ImportRun::default()
         };
+        run.backlog.agents.insert(
+            "claude".into(),
+            AgentBacklog {
+                pending: 499,
+                ..AgentBacklog::default()
+            },
+        );
 
         let line = status_line(&run);
 
-        assert_eq!(line, "Last 8 hours · 8/25 sessions · Claude Code 8/192");
-        assert_eq!(fit(&line, 80), line);
+        assert_eq!(
+            line,
+            "Read 2/4 windows · Oct 17 · 10/10 sessions · Delivered 1,730 turns · 499 waiting · 0 set aside"
+        );
+        assert_eq!(fit(&line, 120), line);
         let cut = fit(&line, 20);
         assert_eq!(cut.chars().count(), 19);
-        assert!(cut.starts_with("Last 8 hours · 8/2") && cut.ends_with('…'));
+        assert!(cut.starts_with("Read 2/4 windows") && cut.ends_with('…'));
         assert_eq!(fit(&line, 0), "…");
+    }
+
+    #[test]
+    fn the_status_file_says_what_delivery_waits_for_only_once_every_window_is_read() {
+        assert_eq!(waiting_line(&ImportRun::default()), "");
+        assert!(waiting_line(&waiting(None)).starts_with("5 turn(s) waiting to send"));
     }
 }

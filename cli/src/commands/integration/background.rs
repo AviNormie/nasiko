@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::backlog;
+use super::backlog::Backlog;
 use super::import::{ImportRun, WindowStatus};
 use super::queue;
 
@@ -111,15 +112,26 @@ fn detach(_command: &mut Command) {}
 
 // ─── Progress on disk ────────────────────────────────────────────────────────
 
-/// How far an import has got, as `nasiko agents status` reads it.
+/// How far an import has got, as `nasiko agents status` reads it. Reading and delivery are counted
+/// apart, so an import whose deliveries lag its reading is seen to be moving.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportStatus {
     pub pid: u32,
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Windows read whose turns have all been delivered or set aside.
     pub windows_done: usize,
+    /// Windows whose sessions have all been read.
+    #[serde(default)]
+    pub windows_read: usize,
     pub windows_total: usize,
-    /// The progress line as the import last printed it.
+    /// The window being read, as `Oct 17 · 10/10 sessions`; empty when none is.
+    #[serde(default)]
+    pub reading: String,
+    /// Turns the server took during this import.
+    #[serde(default)]
+    pub delivered: usize,
+    /// What delivery waits for once every window is read; empty before then.
     pub line: String,
     /// Set once the import has returned.
     pub finished: bool,
@@ -141,7 +153,7 @@ impl StatusFile {
         }
     }
 
-    /// Records `run` (`line` is its progress line), unless it was recorded less than
+    /// Records `run` (`line` says what its delivery waits for), unless it was recorded less than
     /// [`STATUS_INTERVAL`] ago. Best effort: a status that can't be written is no reason to stop.
     pub fn update(&mut self, run: &ImportRun, line: &str) {
         if self
@@ -164,12 +176,11 @@ impl StatusFile {
             pid: std::process::id(),
             started_at: self.started_at,
             updated_at: Utc::now(),
-            windows_done: run
-                .windows
-                .iter()
-                .filter(|window| window.status == WindowStatus::Done)
-                .count(),
+            windows_done: run.windows_done(),
+            windows_read: run.windows_read(),
             windows_total: run.windows.len(),
+            reading: reading(run),
+            delivered: run.delivered,
             line: line.to_string(),
             finished,
         };
@@ -179,27 +190,99 @@ impl StatusFile {
     }
 }
 
+// ─── Progress lines ──────────────────────────────────────────────────────────
+
+/// The window `run` is reading, as `Oct 17 · 10/10 sessions`; empty when it reads none.
+pub fn reading(run: &ImportRun) -> String {
+    run.windows
+        .iter()
+        .find(|window| window.status == WindowStatus::Reading)
+        .map(|window| {
+            format!(
+                "{} · {}/{} sessions",
+                window.label, window.done, window.sessions
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// `Read 9/23 windows · Oct 17 · 10/10 sessions`: how far reading has got (`reading` is the window
+/// being read, if one is).
+pub fn read_line(read: usize, total: usize, reading: &str) -> String {
+    let windows = format!("Read {read}/{total} windows");
+    if reading.is_empty() {
+        windows
+    } else {
+        format!("{windows} · {reading}")
+    }
+}
+
+/// `Delivered 1,730 turns · 499 waiting · 0 set aside`: how far delivery has got.
+pub fn delivered_line(delivered: usize, backlog: &Backlog) -> String {
+    format!(
+        "Delivered {} turns · {} waiting · {} set aside",
+        thousands(delivered),
+        thousands(backlog.pending()),
+        thousands(rejected(backlog))
+    )
+}
+
+fn rejected(backlog: &Backlog) -> usize {
+    backlog.agents.values().map(|agent| agent.rejected).sum()
+}
+
+/// `n` with its thousands grouped: `1,730`.
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 fn read_status(dir: &Path) -> Option<ImportStatus> {
     serde_json::from_slice(&std::fs::read(dir.join(IMPORT_STATUS_FILE)).ok()?).ok()
 }
 
 // ─── `nasiko agents status` ──────────────────────────────────────────────────
 
-/// What `nasiko agents status` prints for the queue under `dir`: the import (running or last), what is
-/// waiting to send and set aside, and the end of the import's log.
-pub fn status_report(dir: &Path) -> Result<Vec<String>> {
+/// What `nasiko agents status` prints for the queue under `dir`: the import (running or last) with its
+/// reading and its delivery apart, what is waiting to send and set aside, and the end of the import's
+/// log. `fit` cuts a progress line to the terminal's width.
+pub fn status_report(dir: &Path, fit: impl Fn(&str) -> String) -> Result<Vec<String>> {
     let running = import_running(dir)?;
     let status = read_status(dir);
-    let mut lines = vec![import_line(running, status.as_ref())];
-    if let Some(status) = status.filter(|s| running && !s.finished && !s.line.is_empty()) {
-        lines.push(format!("  {}", status.line));
-    }
     let backlog = backlog::backlog_at(dir)?;
-    let rejected: usize = backlog.agents.values().map(|agent| agent.rejected).sum();
-    lines.push(format!(
-        "Queue: {} turn(s) waiting to send, {rejected} set aside",
-        backlog.pending()
-    ));
+    let rejected = rejected(&backlog);
+    let mut lines = vec![import_line(running, status.as_ref())];
+    match status.filter(|s| running && !s.finished) {
+        Some(status) => {
+            let progress = [
+                read_line(status.windows_read, status.windows_total, &status.reading),
+                format!(
+                    "{} · {}/{} windows complete",
+                    delivered_line(status.delivered, &backlog),
+                    status.windows_done,
+                    status.windows_total
+                ),
+                status.line,
+            ];
+            lines.extend(
+                progress
+                    .iter()
+                    .filter(|line| !line.is_empty())
+                    .map(|line| fit(&format!("  {line}"))),
+            );
+        }
+        None => lines.push(format!(
+            "Queue: {} turn(s) waiting to send, {rejected} set aside",
+            backlog.pending()
+        )),
+    }
     for (agent_id, agent) in &backlog.agents {
         for (reason, count) in &agent.reasons {
             lines.push(format!("  {agent_id}: {count} × {reason}"));
@@ -218,13 +301,19 @@ pub fn status_report(dir: &Path) -> Result<Vec<String>> {
 }
 
 fn import_line(running: bool, status: Option<&ImportStatus>) -> String {
-    let windows = |s: &ImportStatus| format!("{}/{} windows done", s.windows_done, s.windows_total);
+    let windows = |s: &ImportStatus| {
+        format!(
+            "{}/{} windows done, {} turns delivered",
+            s.windows_done,
+            s.windows_total,
+            thousands(s.delivered)
+        )
+    };
     match (running, status) {
         (true, Some(s)) if !s.finished => format!(
-            "Import: running (pid {}), started {}, {}",
+            "Import: running (pid {}), started {}",
             s.pid,
             s.started_at.format("%Y-%m-%d %H:%M UTC"),
-            windows(s)
         ),
         (true, _) => "Import: running".into(),
         (false, Some(s)) if s.finished => format!(
@@ -271,50 +360,118 @@ mod tests {
         assert!(!import_running(dir.path()).unwrap());
     }
 
-    #[test]
-    fn the_status_file_records_windows_done_and_the_progress_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let run = ImportRun {
+    use super::super::import::WindowProgress;
+
+    /// An import that has read two of three windows, confirmed one, is reading the third, and has
+    /// had 1,730 turns delivered.
+    fn reading_run() -> ImportRun {
+        let mut reading = WindowProgress::for_test("Oct 17", WindowStatus::Reading, 10, 0);
+        reading.done = 4;
+        ImportRun {
             windows: vec![
-                super::super::import::WindowProgress::for_test("Today", WindowStatus::Done, 2, 3),
-                super::super::import::WindowProgress::for_test(
-                    "Yesterday",
-                    WindowStatus::Reading,
-                    5,
-                    0,
-                ),
+                WindowProgress::for_test("Today", WindowStatus::Done, 2, 3),
+                WindowProgress::for_test("Yesterday", WindowStatus::Sending, 5, 9),
+                reading,
             ],
+            delivered: 1_730,
             ..ImportRun::default()
-        };
+        }
+    }
+
+    #[test]
+    fn the_status_file_records_reading_and_delivery_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = reading_run();
         let mut file = StatusFile::new(dir.path());
 
-        file.update(&run, "Yesterday · 1/5 sessions");
-        file.update(&run, "throttled away");
+        file.update(&run, "");
+        file.update(&ImportRun::default(), "throttled away");
         let status = read_status(dir.path()).unwrap();
 
-        assert_eq!((status.windows_done, status.windows_total), (1, 2));
-        assert_eq!(status.line, "Yesterday · 1/5 sessions");
+        assert_eq!(
+            (
+                status.windows_read,
+                status.windows_done,
+                status.windows_total
+            ),
+            (2, 1, 3)
+        );
+        assert_eq!(status.reading, "Oct 17 · 4/10 sessions");
+        assert_eq!(status.delivered, 1_730);
+        assert_eq!(status.line, "");
         assert!(!status.finished);
         file.finish(&run, "done");
         assert!(read_status(dir.path()).unwrap().finished);
     }
 
     #[test]
-    fn status_shows_the_import_the_queue_and_the_end_of_the_log() {
+    fn a_status_file_from_before_reading_and_delivery_were_counted_apart_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = r#"{"pid":7,"started_at":"2026-10-21T08:00:00Z","updated_at":"2026-10-21T08:05:00Z",
+            "windows_done":3,"windows_total":9,"line":"","finished":false}"#;
+        std::fs::write(dir.path().join(IMPORT_STATUS_FILE), old).unwrap();
+
+        let status = read_status(dir.path()).unwrap();
+
+        assert_eq!((status.windows_read, status.delivered), (0, 0));
+        assert_eq!(status.reading, "");
+    }
+
+    #[test]
+    fn status_shows_reading_and_delivery_apart_the_queue_and_the_end_of_the_log() {
         let dir = tempfile::tempdir().unwrap();
         let log: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         std::fs::write(dir.path().join(IMPORT_LOG_FILE), log).unwrap();
         let _lock = ImportLock::try_acquire(dir.path()).unwrap().unwrap();
         let mut file = StatusFile::new(dir.path());
-        file.update(&ImportRun::default(), "Today · 1/2 sessions");
+        file.update(&reading_run(), "");
 
-        let report = status_report(dir.path()).unwrap();
+        let report = status_report(dir.path(), str::to_string).unwrap();
 
         assert!(report[0].starts_with("Import: running (pid "));
-        assert_eq!(report[1], "  Today · 1/2 sessions");
-        assert_eq!(report[2], "Queue: 0 turn(s) waiting to send, 0 set aside");
+        assert!(!report[0].contains("windows"), "{}", report[0]);
+        assert_eq!(report[1], "  Read 2/3 windows · Oct 17 · 4/10 sessions");
+        assert_eq!(
+            report[2],
+            "  Delivered 1,730 turns · 0 waiting · 0 set aside · 1/3 windows complete"
+        );
+        assert_eq!(
+            report[3],
+            format!("Log: {}", dir.path().join(IMPORT_LOG_FILE).display())
+        );
         assert_eq!(report.last().unwrap(), "  line 20");
         assert_eq!(report.len(), 4 + LOG_TAIL_LINES);
+    }
+
+    #[test]
+    fn status_progress_lines_are_cut_to_fit() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = ImportLock::try_acquire(dir.path()).unwrap().unwrap();
+        let mut file = StatusFile::new(dir.path());
+        file.update(&reading_run(), "");
+
+        let report =
+            status_report(dir.path(), |line| line.chars().take(20).collect::<String>()).unwrap();
+
+        assert!(report[1].starts_with("  Read 2/3 windows"));
+        assert!(report[1..=2].iter().all(|line| line.chars().count() <= 20));
+    }
+
+    #[test]
+    fn counts_are_grouped_by_thousands() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_730), "1,730");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn the_read_line_names_the_window_being_read_only_while_one_is() {
+        assert_eq!(read_line(23, 23, ""), "Read 23/23 windows");
+        assert_eq!(
+            read_line(9, 23, "Oct 17 · 10/10 sessions"),
+            "Read 9/23 windows · Oct 17 · 10/10 sessions"
+        );
     }
 
     #[test]
@@ -325,14 +482,17 @@ mod tests {
             started_at: now,
             updated_at: now,
             windows_done: 3,
+            windows_read: 5,
             windows_total: 9,
+            reading: String::new(),
+            delivered: 1_730,
             line: String::new(),
             finished: false,
         };
 
         let line = import_line(false, Some(&stopped));
 
-        assert!(line.contains("3/9 windows done"));
+        assert!(line.contains("3/9 windows done, 1,730 turns delivered"));
         assert!(line.contains("nasiko agents setup"));
     }
 }

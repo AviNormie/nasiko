@@ -2,7 +2,7 @@
  * The desktop app's own coding-agent onboarding (contract v3): the Nasiko desktop app serves the web app and answers
  * `/__nasiko/coding-agents/*` itself, same origin, so consent and progress never go through the server.
  *
- *   GET  /__nasiko/coding-agents/state    {desktop: true, consent, signed_in, run}
+ *   GET  /__nasiko/coding-agents/state    {desktop: true, consent, signed_in, run, backlog}
  *   POST /__nasiko/coding-agents/start    consent granted, discovery + import start   → 202 the state
  *   POST /__nasiko/coding-agents/decline  consent declined                            → 200 the state
  *   POST /__nasiko/coding-agents/retry    resend refused turns (or restart a failed run) → 202 the state
@@ -13,16 +13,27 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import { apiFetch } from '@/lib/api/client'
-import { DESKTOP_STATE_POLL_MS } from './constants'
-import { isActivePhase, localRunSchema, shownPhase } from './runs'
+import { DESKTOP_IDLE_POLL_MS, DESKTOP_STATE_POLL_MS } from './constants'
+import { localRunSchema } from './runs'
+import { desktopSync } from './syncStatus'
 
 const BASE = '/__nasiko/coding-agents'
+
+/** The desktop's queue: turns waiting and set aside, a delivery going now, when the next waiting turn is due. */
+const backlogSchema = z.looseObject({
+  pending: z.number(),
+  rejected: z.number(),
+  sending: z.boolean(),
+  next_attempt_at: z.string().nullable(),
+})
 
 export const desktopStateSchema = z.looseObject({
   desktop: z.literal(true),
   consent: z.enum(['unasked', 'granted', 'declined']),
   signed_in: z.boolean(),
   run: localRunSchema.nullable(),
+  // A desktop app from before the sync bar has no queue to report.
+  backlog: backlogSchema.nullish(),
 })
 export type DesktopState = z.infer<typeof desktopStateSchema>
 export type DesktopAction = 'start' | 'decline' | 'retry'
@@ -43,7 +54,14 @@ async function probeDesktop(signal: AbortSignal): Promise<DesktopState | null> {
   }
 }
 
-/** The desktop probe, refreshed every `DESKTOP_STATE_POLL_MS` while a run is active (a local call, no network). */
+/** How often to re-read the desktop's state: every `DESKTOP_STATE_POLL_MS` while it syncs, every
+ *  `DESKTOP_IDLE_POLL_MS` otherwise (hooks queue turns at any time; a local call, no network); never in a browser. */
+export function desktopPollInterval(state: DesktopState | null | undefined): number | false {
+  if (!state) return false
+  return desktopSync(state).syncing ? DESKTOP_STATE_POLL_MS : DESKTOP_IDLE_POLL_MS
+}
+
+/** The desktop probe (one query for the app's sync bar and the Harnesses card), re-read by `desktopPollInterval`. */
 export function useDesktopState(enabled = true) {
   return useQuery({
     queryKey: desktopKeys.state,
@@ -53,10 +71,7 @@ export function useDesktopState(enabled = true) {
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: Infinity,
-    refetchInterval: (q) => {
-      const run = q.state.data?.run
-      return run && isActivePhase(shownPhase(run)) ? DESKTOP_STATE_POLL_MS : false
-    },
+    refetchInterval: (q) => desktopPollInterval(q.state.data),
   })
 }
 

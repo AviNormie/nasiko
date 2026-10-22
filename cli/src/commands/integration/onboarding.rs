@@ -452,6 +452,7 @@ mod tests {
             ],
             backlog,
             sending: None,
+            delivered: 0,
         }
     }
 

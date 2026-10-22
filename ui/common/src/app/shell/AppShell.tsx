@@ -22,16 +22,19 @@ const FULL_HEIGHT = /^\/(chat|settings|account)(\/|$)/
 const BARE = /^\/(chat\/?)?$/
 
 /**
- * `end` and `badges` come from the `_app` route, which may import features (the shell never does): Deploy's build
- * toasts and the Builds item's in-progress count.
+ * `end`, `banner` and `badges` come from the `_app` route, which may import features (the shell never does): Deploy's
+ * build toasts, the desktop app's coding-agent sync bar and the Builds item's in-progress count.
  */
 export function AppShell({
   end,
+  banner,
   split: Split,
   badges,
   hidden,
 }: {
   end?: ReactNode
+  /** A strip under the top bar on every page (it places itself; nothing renders while it has nothing to say). */
+  banner?: ReactNode
   split?: ComponentType<{ path: string; children: ReactNode }> | null
   badges?: NavBadges
   /** Nav paths to leave out (onboarding hides Home while its guide stands in for it). */
@@ -63,6 +66,7 @@ export function AppShell({
     <SidebarInset id="main" tabIndex={-1} className={cn('outline-none', fullHeight && 'min-h-0')}>
       {/* One bar above every page (TopBar.tsx); on phones it also holds the menu button (§4.2). */}
       <ShellTopBar item={item} pathname={pathname} bare={bare}>
+        {banner}
         {fullHeight ? (
           <div className="min-h-0 flex-1">
             <Outlet />

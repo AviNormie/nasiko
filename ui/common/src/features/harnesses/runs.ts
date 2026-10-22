@@ -64,6 +64,10 @@ export const localRunSchema = z.looseObject({
   started_at: z.string().nullable(),
   updated_at: z.string(),
   windows: z.array(syncWindowSchema).default([]),
+  // The desktop app's own counts (server.rs `run_json`), absent from the server's runs: windows whose sessions are
+  // all read (their turns may still be on their way), and turns delivered so far.
+  windows_read: z.number().optional(),
+  delivered: z.number().optional(),
 })
 export type LocalRun = z.infer<typeof localRunSchema>
 
@@ -85,6 +89,14 @@ export const pendingTurns = (run: LocalRun) => run.agents.reduce((n, a) => n + a
 /** Turns the server refused, over a run's agents. */
 export const rejectedTurns = (run: LocalRun) =>
   run.agents.reduce((n, a) => n + a.import.rejected, 0)
+/** Turns a run has delivered: the desktop's own count, else those its import queued less those still waiting and
+ *  those refused (never below 0: the queue also holds turns the agents' hooks captured). */
+export const sentTurns = (run: LocalRun) =>
+  run.delivered ??
+  Math.max(
+    0,
+    run.agents.reduce((n, a) => n + a.import.turns, 0) - pendingTurns(run) - rejectedTurns(run),
+  )
 
 /** The phase the card shows: a run is never done while turns wait to be sent. */
 export const shownPhase = (run: LocalRun): SyncPhase =>
@@ -110,21 +122,34 @@ export function lastMonthIn(windows: readonly SyncWindow[]): boolean {
   )
 }
 
-/** One run's progress: windows done over windows when the client reports them, else sessions processed over sessions
- *  to process; null while that is unknown (discovering, connecting, nothing counted yet). 99 at most while sending. */
-export function runProgress(run: LocalRun): number | null {
+/**
+ * One run's progress, the one rule the card and the app's sync bar share. Importing: windows read over windows when
+ * the client reports them, else sessions processed over sessions to process. Sending: turns sent over turns sent and
+ * waiting, where `waiting` is what still waits to be sent (the run's own count unless the caller knows the whole
+ * queue's), 99 at most. Null while that is unknown (discovering, connecting, nothing counted yet).
+ */
+export function runProgress(run: LocalRun, waiting = pendingTurns(run)): number | null {
   const phase = shownPhase(run)
-  if (phase === 'done') return 100
+  if (phase === 'done' && waiting === 0) return 100
   if (phase === 'discovering' || phase === 'connecting') return null
-  const share = run.windows.length ? windowShare(run.windows) : sessionShare(run)
-  if (share === null) return null
-  // Never full while turns are still on their way.
-  return Math.min(Math.round(share * 100), phase === 'sending' ? ALMOST_DONE_PCT : 100)
+  if (phase === 'sending' || phase === 'done') return sendingProgress(sentTurns(run), waiting)
+  const share = run.windows.length ? windowShare(run) : sessionShare(run)
+  return share === null ? null : Math.round(share * 100)
+}
+
+/** Sent over sent and waiting, never full while turns are still on their way; null with nothing counted. */
+export function sendingProgress(sent: number, waiting: number): number | null {
+  if (sent + waiting === 0) return null
+  return Math.min(Math.round((sent / (sent + waiting)) * 100), ALMOST_DONE_PCT)
 }
 
 const ALMOST_DONE_PCT = 99
-const windowShare = (windows: readonly SyncWindow[]) =>
-  windows.filter((w) => w.status === 'done').length / windows.length
+/** Windows read over windows: the desktop's count when it gives one, else the windows done. */
+const windowShare = (run: LocalRun) =>
+  Math.min(
+    run.windows_read ?? run.windows.filter((w) => w.status === 'done').length,
+    run.windows.length,
+  ) / run.windows.length
 function sessionShare(run: LocalRun): number | null {
   const total = run.agents.reduce((n, a) => n + a.import.total, 0)
   if (!total) return null

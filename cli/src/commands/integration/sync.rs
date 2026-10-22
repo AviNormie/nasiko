@@ -5,7 +5,8 @@
 //! | Failure | What happens to the batch's turns |
 //! | --- | --- |
 //! | HTTP 429 or 503 with `Retry-After` (the server is pacing its clients) | Every turn for that server waits exactly as long as it asked (plus a little jitter), no attempt counted |
-//! | HTTP 413 (the batch is too large) | Sent again at once in halves, down to one turn; a single turn still too large is set aside |
+//! | HTTP 413 (the batch is too large), or the connection dropped while sending a large batch | Sent again at once in halves, down to one turn; a single turn still refused with `413` is set aside |
+//! | One turn larger than the server accepts at all ([`SINGLE_EVENT_MAX`]) | Set aside before it is sent |
 //! | Network (connect, DNS, timeout), HTTP 5xx, 408, 429, or a reply that isn't one result per event | Retried after 1 min, then 2, 4 … up to 1 h, as often as it takes; set aside only once 30 days old |
 //! | HTTP 401, 403, or this computer's sign-in no longer matches the turn's destination | Kept, no attempt counted, until the user signs in again |
 //! | The server rejects an event, or any other HTTP 4xx for the batch | Set aside with the server's reason |
@@ -15,6 +16,10 @@
 //! One batch is in flight per computer at a time: every delivery (a hook's, an import's courier, a
 //! `nasiko agents sync`) holds the queue's sync lock while it sends, one batch after another, at the
 //! size [`Pace`] allows.
+//!
+//! A turn waiting on a retry waits out its delay, unless the user asked to send now
+//! ([`Backoff::Ignore`]): then every queued turn gets one attempt at once, and a turn that fails again
+//! waits as usual. A server's own `Retry-After` pause holds either way.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -26,15 +31,30 @@ use uuid::Uuid;
 
 use super::pace;
 pub use super::pace::Pace;
+pub use super::queue::Backoff;
 use super::queue::{self, DeliveryState, QueueDestination, QueueRecord};
 use crate::api::Attempt;
 use crate::config::{ClusterEntry, Config};
 
 /// How long a delivery waits for another one (a hook's) to finish before leaving the turns to it.
 const LOCK_WAIT: Duration = Duration::from_millis(250);
-/// Bytes of events one batch may carry: under the server's 8 MiB request limit with room for the
-/// request envelope.
+/// The largest request body the server reads (`8 MiB`). Over it, the server answers `413` but closes
+/// the connection before reading the body, so the client sees a broken pipe, not the `413`.
+const SERVER_BODY_LIMIT: usize = 8 * 1024 * 1024;
+/// Bytes of events one batch may carry: under [`SERVER_BODY_LIMIT`] with room for the request
+/// envelope.
 const BATCH_BYTE_BUDGET: usize = 6 * 1024 * 1024;
+/// Room left in a request for what wraps its events (`{"events":[...]}`, commas): far more than it
+/// takes.
+const ENVELOPE_HEADROOM: usize = 64 * 1024;
+/// The largest one turn can be and still be sent. A larger one can never be delivered (the server
+/// drops the connection, which looks like a network failure and would be retried forever), so it is
+/// set aside instead of being sent.
+const SINGLE_EVENT_MAX: usize = SERVER_BODY_LIMIT - ENVELOPE_HEADROOM;
+/// A batch at least this large whose connection breaks while it is sent is taken as refused for its
+/// size, for a server whose limit is lower than [`SERVER_BODY_LIMIT`]: it is sent again in halves.
+const LARGE_BATCH_BYTES: usize = 1024 * 1024;
+const MIB: f64 = 1024.0 * 1024.0;
 /// Bounds each batch request.
 const BATCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// The first retry after a transient failure; each further failure doubles it, up to [`MAX_RETRY_SECS`].
@@ -97,7 +117,7 @@ pub fn run() -> Result<()> {
     let mut pace = Pace::default();
     let mut quiet = 0;
     while quiet < QUIET_SCANS {
-        if deliver_paced(&mut pace)?.progressed() {
+        if deliver_paced(&mut pace, Backoff::Honour)?.progressed() {
             quiet = 0;
         } else {
             quiet += 1;
@@ -110,9 +130,15 @@ pub fn run() -> Result<()> {
 /// Delivers every queued turn that is due, batch by batch, until none is left that this attempt could
 /// send. Fails if another delivery holds the queue (it sends these too). Batches are as large as
 /// `pace` allows, which adapts as the server answers; one pace kept across passes (an import's
-/// courier) carries what it learned from one pass to the next.
-pub fn deliver_paced(pace: &mut Pace) -> Result<Pass> {
-    deliver_at(&super::state::integrations_dir(), crate::config::load, pace)
+/// courier) carries what it learned from one pass to the next. With [`Backoff::Ignore`], turns waiting
+/// on a retry are sent too, once: one that fails again waits as usual.
+pub fn deliver_paced(pace: &mut Pace, backoff: Backoff) -> Result<Pass> {
+    deliver_at(
+        &super::state::integrations_dir(),
+        crate::config::load,
+        pace,
+        backoff,
+    )
 }
 
 /// [`deliver_paced`] for the queue under `root`, with the sign-ins `load_config` reads.
@@ -120,16 +146,20 @@ pub(super) fn deliver_at(
     root: &Path,
     load_config: impl Fn() -> Result<Config>,
     pace: &mut Pace,
+    backoff: Backoff,
 ) -> Result<Pass> {
     let _lock = queue::acquire_sync_lock_at(root, LOCK_WAIT)?;
     let mut total = Pass::default();
+    let mut backoff = backoff;
     loop {
         let config = load_config()?;
-        let records = queue::records_at(root)?;
+        let records = queue::records_at(root, backoff)?;
         if records.is_empty() {
             break;
         }
-        let pass = sync_records(&config, records, pace)?;
+        let pass = sync_records(&config, records, pace, backoff)?;
+        // Each turn gets one attempt regardless of its retry delay; what failed again now waits it out.
+        backoff = Backoff::Honour;
         let progressed = pass.progressed();
         total.absorb(pass);
         if !progressed {
@@ -143,6 +173,7 @@ fn sync_records(
     config: &Config,
     records: Vec<(PathBuf, QueueRecord)>,
     pace: &mut Pace,
+    backoff: Backoff,
 ) -> Result<Pass> {
     let mut pass = Pass::default();
     let mut groups: BTreeMap<(String, String, Uuid), Vec<(PathBuf, QueueRecord)>> = BTreeMap::new();
@@ -152,7 +183,7 @@ fn sync_records(
             pass.set_aside += 1;
             continue;
         }
-        if record.1.next_attempt_at.is_some_and(|at| at > Utc::now()) {
+        if !backoff.lets_through(&record.1, Utc::now()) {
             continue;
         }
         let destination = &record.1.destination;
@@ -197,6 +228,14 @@ fn deliver_destination(
     let mut pass = Pass::default();
     let mut rest = records;
     while !rest.is_empty() {
+        // Only the first turn of a batch can be this large: `batch_len` ends a batch before one.
+        if let Some(reason) = too_large_to_send(event_bytes(&rest[0].1)) {
+            let (path, record) = &rest[0];
+            reject(path, record, format!("permanently rejected: {reason}"))?;
+            pass.set_aside += 1;
+            rest = &rest[1..];
+            continue;
+        }
         let (batch, after) = rest.split_at(batch_len(rest, pace.batch_size()));
         let started = Instant::now();
         match deliver_batch(client, batch)? {
@@ -232,13 +271,56 @@ fn batch_len(records: &[(PathBuf, QueueRecord)], max: usize) -> usize {
     let mut bytes = 0usize;
     let mut len = 0usize;
     for (_, record) in records.iter().take(max.max(1)) {
-        bytes += serde_json::to_vec(&record.event).map_or(0, |event| event.len());
+        bytes += event_bytes(record);
         if len > 0 && bytes > BATCH_BYTE_BUDGET {
             break;
         }
         len += 1;
     }
     len.max(1)
+}
+
+/// How many bytes `record`'s event takes in a request.
+fn event_bytes(record: &QueueRecord) -> usize {
+    serde_json::to_vec(&record.event).map_or(0, |event| event.len())
+}
+
+/// Why a turn of `bytes` can't be sent at all, if it can't: it is over [`SINGLE_EVENT_MAX`].
+fn too_large_to_send(bytes: usize) -> Option<String> {
+    (bytes > SINGLE_EVENT_MAX).then(|| {
+        format!(
+            "turn is larger than the server accepts ({:.1} MiB > {:.0} MiB)",
+            bytes as f64 / MIB,
+            SERVER_BODY_LIMIT as f64 / MIB
+        )
+    })
+}
+
+/// Whether a batch of `turns` turns and `body_bytes` bytes whose sending failed with `error` was
+/// most likely refused for its size: the connection broke (a server over its body limit closes it
+/// without reading the body) while a large batch of more than one turn was sent. Such a batch is sent
+/// again in halves; a single turn is only retried, as the break may have been the network's.
+fn dropped_for_size(error: &anyhow::Error, turns: usize, body_bytes: usize) -> bool {
+    turns > 1 && body_bytes > LARGE_BATCH_BYTES && connection_broke(error)
+}
+
+/// Whether `error` is the connection being broken or reset by the other end. macOS reports some uses
+/// of a socket the other end has reset as `EINVAL` ("Invalid argument") rather than as a reset.
+fn connection_broke(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    let broke = |io: &std::io::Error| {
+        matches!(
+            io.kind(),
+            ErrorKind::BrokenPipe
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::InvalidInput
+        )
+    };
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(broke)
+            || matches!(cause.downcast_ref::<ureq::Error>(), Some(ureq::Error::Io(io)) if broke(io))
+    })
 }
 
 fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]) -> Result<Sent> {
@@ -261,6 +343,13 @@ fn deliver_batch(client: &crate::api::Client, records: &[(PathBuf, QueueRecord)]
                 .map(Sent::Done);
         }
         Err(error) => {
+            let body_bytes = serde_json::to_vec(&request).map_or(0, |body| body.len());
+            if dropped_for_size(&error, records.len(), body_bytes) {
+                return Ok(Sent::TooLarge(format!(
+                    "connection dropped sending {:.1} MiB: {error:#}",
+                    body_bytes as f64 / MIB
+                )));
+            }
             return fail_all(
                 records,
                 Failure::Transient(format!("delivery failed: {error:#}")),
@@ -467,7 +556,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use nasiko_types::{
         CODING_AGENT_EVENT_VERSION, CapturePolicy, CodingAgentEventV1, CodingAgentSession,
-        CodingAgentSource, CodingAgentTurn, coding_agent_event_id, coding_agent_session_id,
+        CodingAgentSource, CodingAgentTimestampQuality, CodingAgentToolAssociation,
+        CodingAgentToolCall, CodingAgentToolCallStatus, CodingAgentTurn, coding_agent_event_id,
+        coding_agent_session_id,
     };
     use std::collections::HashMap;
 
@@ -509,6 +600,220 @@ mod tests {
         let mut huge = big("solo");
         huge.1.event.turn.prompt = Some("x".repeat(7_000_000));
         assert_eq!(batch_len(std::slice::from_ref(&huge), 100), 1);
+    }
+
+    #[test]
+    fn a_turn_over_the_server_limit_is_too_large_to_send() {
+        assert_eq!(too_large_to_send(SINGLE_EVENT_MAX), None);
+        assert_eq!(too_large_to_send(7 * 1024 * 1024), None);
+        assert_eq!(
+            too_large_to_send(9 * 1024 * 1024).as_deref(),
+            Some("turn is larger than the server accepts (9.0 MiB > 8 MiB)")
+        );
+        assert!(too_large_to_send(SINGLE_EVENT_MAX + 1).is_some());
+    }
+
+    #[test]
+    fn a_broken_connection_on_a_large_batch_is_taken_as_too_large() {
+        use std::io::{Error, ErrorKind};
+        let large = LARGE_BATCH_BYTES + 1;
+        let broken_pipe = anyhow::Error::new(Error::from(ErrorKind::BrokenPipe))
+            .context("cannot reach control plane");
+        let reset = anyhow::Error::new(ureq::Error::Io(Error::from(ErrorKind::ConnectionReset)))
+            .context("cannot reach control plane");
+        let timed_out = anyhow::Error::new(Error::from(ErrorKind::TimedOut));
+        let reset_on_macos = anyhow::Error::new(Error::from_raw_os_error(22));
+
+        assert!(dropped_for_size(&broken_pipe, 2, large));
+        assert!(dropped_for_size(&reset, 10, large));
+        assert!(dropped_for_size(&reset_on_macos, 2, large));
+        assert!(
+            !dropped_for_size(&broken_pipe, 1, large),
+            "a single turn is only retried: the break may have been the network's"
+        );
+        assert!(!dropped_for_size(&broken_pipe, 2, LARGE_BATCH_BYTES));
+        assert!(!dropped_for_size(&timed_out, 2, large));
+    }
+
+    #[test]
+    fn a_turn_over_the_server_limit_is_set_aside_without_being_sent() {
+        let mut server = mockito::Server::new();
+        let dir = tempfile::tempdir().unwrap();
+        let huge = padded(record("bound", &server.url(), "s", "huge"), 9 * 1024 * 1024);
+        let huge_path = queue::enqueue_at(dir.path(), &huge).unwrap();
+        let small_path =
+            queue::enqueue_at(dir.path(), &record("bound", &server.url(), "s", "small")).unwrap();
+        let small_id = queue::load(&small_path).unwrap().event.event_id;
+        let delivery = server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .match_request(move |request| requested_ids(request) == [small_id.clone()])
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(accepted)
+            .expect(1)
+            .create();
+        let config = config("bound", &server.url(), Some(&token(Uuid::nil())));
+
+        let pass = deliver_at(
+            dir.path(),
+            || Ok(config.clone()),
+            &mut Pace::default(),
+            Backoff::Honour,
+        )
+        .unwrap();
+
+        delivery.assert();
+        assert_eq!((pass.delivered, pass.set_aside), (1, 1));
+        assert!(!huge_path.exists());
+        let set_aside = only(&dir.path().join("rejected"));
+        assert_eq!(set_aside.event.event_id, huge.event.event_id);
+        assert_eq!(
+            set_aside.last_error.as_deref(),
+            Some("permanently rejected: turn is larger than the server accepts (9.0 MiB > 8 MiB)")
+        );
+    }
+
+    /// `record` with its content captured and tool calls added until its event takes about `bytes`
+    /// (each tool call's raw transcript is at most 512 KiB, as an event's fields have limits of their
+    /// own).
+    fn padded(mut record: QueueRecord, bytes: usize) -> QueueRecord {
+        const PIECE: usize = 512 * 1024;
+        record.event.capture_policy = CapturePolicy::Content;
+        record.event.turn.prompt = Some("p".into());
+        record.event.turn.response = Some("r".into());
+        let mut left = bytes;
+        while left > 0 {
+            let size = left.min(PIECE);
+            let id = format!("tool-{}", record.event.turn.tool_calls.len());
+            record.event.turn.tool_calls.push(CodingAgentToolCall {
+                id,
+                name: "read".into(),
+                kind: "read".into(),
+                model_call_id: None,
+                status: CodingAgentToolCallStatus::Succeeded,
+                arguments: None,
+                output: None,
+                raw: Some("x".repeat(size)),
+                error: None,
+                started_at: None,
+                ended_at: None,
+                duration_ms: None,
+                association: CodingAgentToolAssociation::Unknown,
+                timestamp_quality: CodingAgentTimestampQuality::Unknown,
+            });
+            left -= size;
+        }
+        record
+    }
+
+    /// A server on localhost that, like one over its body limit, closes the connection without reading
+    /// a request body over [`LARGE_BATCH_BYTES`], and accepts every event of a smaller one.
+    fn server_dropping_large_bodies() -> String {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    let header = line.split_once(':');
+                    if let Some((_, value)) =
+                        header.filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                if length > LARGE_BATCH_BYTES {
+                    continue;
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let results: Vec<serde_json::Value> = request["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|event| serde_json::json!({"event_id": event["event_id"], "status": "accepted"}))
+                    .collect();
+                let reply = serde_json::json!({"data": {"results": results}, "status_code": 200})
+                    .to_string();
+                let _ = write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn a_large_batch_whose_connection_drops_is_sent_again_in_halves() {
+        let url = server_dropping_large_bodies();
+        let dir = tempfile::tempdir().unwrap();
+        // Three 600 kB turns: together over `LARGE_BATCH_BYTES`, each alone under it.
+        let records: Vec<_> = (0..3)
+            .map(|turn| {
+                let record = padded(record("bound", &url, "s", &format!("t{turn}")), 600_000);
+                let path = queue::enqueue_at(dir.path(), &record).unwrap();
+                (path, record)
+            })
+            .collect();
+        let mut pace = Pace::default();
+
+        let pass = sync_records(
+            &config("bound", &url, Some(&token(Uuid::nil()))),
+            records,
+            &mut pace,
+            Backoff::Honour,
+        )
+        .unwrap();
+
+        assert_eq!((pass.delivered, pass.set_aside), (3, 0));
+        assert!(queue::queued_ids_at(dir.path()).unwrap().is_empty());
+        assert!(pace.batch_size() < 3, "the pace learned the smaller size");
+    }
+
+    #[test]
+    fn sending_now_ignores_a_retry_delay_but_honouring_it_waits() {
+        let mut server = mockito::Server::new();
+        let dir = tempfile::tempdir().unwrap();
+        let mut deferred = record("bound", &server.url(), "s", "deferred");
+        deferred.attempts = 3;
+        deferred.next_attempt_at = Some(Utc::now() + chrono::Duration::minutes(30));
+        let path = queue::enqueue_at(dir.path(), &deferred).unwrap();
+        let delivery = server
+            .mock("POST", "/api/telemetry/coding-agent/events/batch")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(accepted)
+            .expect(1)
+            .create();
+        let config = config("bound", &server.url(), Some(&token(Uuid::nil())));
+        let deliver = |backoff| {
+            deliver_at(
+                dir.path(),
+                || Ok(config.clone()),
+                &mut Pace::default(),
+                backoff,
+            )
+            .unwrap()
+        };
+
+        assert_eq!(deliver(Backoff::Honour), Pass::default());
+        assert!(path.exists(), "a hook's delivery leaves it to its retry");
+        assert_eq!(deliver(Backoff::Ignore).delivered, 1);
+
+        delivery.assert();
+        assert!(!path.exists());
     }
 
     fn record(name: &str, url: &str, session: &str, turn: &str) -> QueueRecord {
@@ -607,6 +912,7 @@ mod tests {
             &config("original", "https://new.example", Some(&token(Uuid::nil()))),
             vec![queued.clone()],
             &mut Pace::default(),
+            Backoff::Honour,
         )
         .unwrap();
         assert!(
@@ -701,7 +1007,8 @@ mod tests {
             sync_records(
                 &config,
                 vec![first.clone(), second.clone()],
-                &mut Pace::default()
+                &mut Pace::default(),
+                Backoff::Honour,
             )
             .unwrap()
             .delivered,
@@ -731,6 +1038,7 @@ mod tests {
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             vec![queued.clone()],
             &mut Pace::default(),
+            Backoff::Honour,
         )
         .unwrap();
         assert!(!queued.0.exists());
@@ -754,6 +1062,7 @@ mod tests {
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             vec![queued.clone()],
             &mut Pace::default(),
+            Backoff::Honour,
         )
         .unwrap();
         let retained = queue::load(&queued.0).unwrap();
@@ -785,6 +1094,7 @@ mod tests {
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             vec![(path, record)],
             &mut Pace::default(),
+            Backoff::Honour,
         )
         .unwrap();
         (server, dir, pass)
@@ -842,6 +1152,7 @@ mod tests {
             &config("bound", url, Some(&token(Uuid::nil()))),
             vec![(path, record)],
             &mut Pace::default(),
+            Backoff::Honour,
         )
         .unwrap();
 
@@ -974,9 +1285,21 @@ mod tests {
             let config = config("bound", &server.url(), Some(&token(Uuid::nil())));
             let before = Utc::now();
 
-            let pass = sync_records(&config, records.clone(), &mut Pace::default()).unwrap();
-            let again =
-                deliver_at(dir.path(), || Ok(config.clone()), &mut Pace::default()).unwrap();
+            let pass = sync_records(
+                &config,
+                records.clone(),
+                &mut Pace::default(),
+                Backoff::Honour,
+            )
+            .unwrap();
+            // Even sending now, as the user asked, leaves alone a server that asked to be.
+            let again = deliver_at(
+                dir.path(),
+                || Ok(config.clone()),
+                &mut Pace::default(),
+                Backoff::Ignore,
+            )
+            .unwrap();
 
             paced.assert();
             assert_eq!(pass, Pass::default(), "HTTP {status}");
@@ -1036,6 +1359,7 @@ mod tests {
             &config("bound", &server.url(), Some(&token(Uuid::nil()))),
             records,
             &mut pace,
+            Backoff::Honour,
         )
         .unwrap();
 

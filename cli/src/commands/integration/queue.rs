@@ -191,7 +191,28 @@ pub(super) fn paused_until(destination_dir: &Path, now: DateTime<Utc>) -> Option
         .filter(|until| *until > now)
 }
 
-pub(super) fn records_at(root: &Path) -> Result<Vec<(PathBuf, QueueRecord)>> {
+/// Whether a delivery waits out the retry delay this computer set itself after a failed attempt
+/// (`next_attempt_at`). A server's own pause ([`pause`]) holds either way: the server asked for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Backoff {
+    /// A turn waiting on a retry waits (a hook's delivery, an import's).
+    #[default]
+    Honour,
+    /// A turn waiting on a retry is sent at once (the user asked for it: a `nasiko agents sync` by
+    /// hand, the app's Retry).
+    Ignore,
+}
+
+impl Backoff {
+    /// Whether `record` may be sent at `now`.
+    pub(super) fn lets_through(self, record: &QueueRecord, now: DateTime<Utc>) -> bool {
+        self == Backoff::Ignore || record.next_attempt_at.is_none_or(|at| at <= now)
+    }
+}
+
+/// The records a delivery may send now, oldest file name first: none of a paused destination's, and
+/// none waiting on a retry unless `backoff` says to ignore that.
+pub(super) fn records_at(root: &Path, backoff: Backoff) -> Result<Vec<(PathBuf, QueueRecord)>> {
     let queue = root.join("queue");
     if !queue.exists() {
         return Ok(Vec::new());
@@ -211,11 +232,7 @@ pub(super) fn records_at(root: &Path) -> Result<Vec<(PathBuf, QueueRecord)>> {
                 .is_some_and(|extension| extension == "json")
             {
                 match load(&path) {
-                    Ok(record)
-                        if record
-                            .next_attempt_at
-                            .is_none_or(|next_attempt| next_attempt <= now) =>
-                    {
+                    Ok(record) if backoff.lets_through(&record, now) => {
                         records.push((path, record));
                         if records.len() >= MAX_SCAN_RECORDS {
                             records.sort_by(|left, right| left.0.cmp(&right.0));
@@ -431,7 +448,7 @@ mod tests {
         let second = enqueue_at(dir.path(), &record).unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(records_at(dir.path()).unwrap().len(), 1);
+        assert_eq!(records_at(dir.path(), Backoff::Honour).unwrap().len(), 1);
         assert_eq!(
             std::fs::read_dir(first.parent().unwrap()).unwrap().count(),
             1
@@ -507,7 +524,7 @@ mod tests {
         ready.event.event_id = coding_agent_event_id("claude", "session", "ready");
         let ready_path = enqueue_at(dir.path(), &ready).unwrap();
 
-        let records = records_at(dir.path()).unwrap();
+        let records = records_at(dir.path(), Backoff::Honour).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].0, ready_path);
         assert!(!malformed.exists());
@@ -559,10 +576,27 @@ mod tests {
         ready.event.event_id = coding_agent_event_id("claude", "session", "ready");
         enqueue_at(dir.path(), &ready).unwrap();
 
-        let records = records_at(dir.path()).unwrap();
+        let records = records_at(dir.path(), Backoff::Honour).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].1.event.turn.id, "ready");
         assert_eq!(queued_ids_at(dir.path()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn ignoring_backoff_sends_a_turn_waiting_on_a_retry_but_not_into_a_server_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut deferred = record("one", "https://one.example");
+        deferred.next_attempt_at = Some(Utc::now() + chrono::Duration::hours(1));
+        let path = enqueue_at(dir.path(), &deferred).unwrap();
+
+        assert_eq!(records_at(dir.path(), Backoff::Ignore).unwrap().len(), 1);
+
+        pause(
+            path.parent().unwrap(),
+            Utc::now() + chrono::Duration::minutes(2),
+        )
+        .unwrap();
+        assert!(records_at(dir.path(), Backoff::Ignore).unwrap().is_empty());
     }
 
     #[test]
@@ -573,12 +607,12 @@ mod tests {
         let now = Utc::now();
 
         pause(destination_dir, now + chrono::Duration::minutes(2)).unwrap();
-        assert!(records_at(dir.path()).unwrap().is_empty());
+        assert!(records_at(dir.path(), Backoff::Honour).unwrap().is_empty());
         assert!(paused_until(destination_dir, now).is_some());
         assert_eq!(queued_ids_at(dir.path()).unwrap().len(), 1);
 
         pause(destination_dir, now - chrono::Duration::seconds(1)).unwrap();
         assert_eq!(paused_until(destination_dir, now), None);
-        assert_eq!(records_at(dir.path()).unwrap().len(), 1);
+        assert_eq!(records_at(dir.path(), Backoff::Honour).unwrap().len(), 1);
     }
 }
