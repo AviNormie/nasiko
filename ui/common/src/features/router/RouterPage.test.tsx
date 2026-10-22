@@ -366,9 +366,7 @@ describe('configs', () => {
     renderApp('/router')
     await ready()
     await showTab(copy.anchors.configs)
-    await waitFor(() =>
-      expect(configItem('cli-openrouter')).toHaveTextContent(copy.openrouterHidden),
-    )
+    await waitFor(() => expect(configItem('cli-openrouter')).toHaveTextContent(copy.notInCatalog))
     expect(configItem('lost-key')).toHaveTextContent(copy.missingKey('DELETED_KEY'))
     expect(configItem('old-endpoint')).toHaveTextContent(copy.providerGone)
     expect(configItem('off-catalog')).toHaveTextContent(copy.notInCatalog)

@@ -62,11 +62,12 @@ const PROVIDER_NAMES: Record<string, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   gemini: 'Gemini',
+  openrouter: 'OpenRouter',
 }
 export const providerName = (id: string) => PROVIDER_NAMES[id] ?? id
 
 /** The router's built-in providers, in the order the guide offers them (router routing.ts `BUILTIN_PROVIDERS`). */
-const GUIDE_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const
+const GUIDE_PROVIDERS = ['openai', 'anthropic', 'gemini', 'openrouter'] as const
 /** The pricing catalog files Gemini's models under `google`; the router's provider is `gemini`. */
 const CATALOG_ALIASES: Record<string, string> = { google: 'gemini' }
 

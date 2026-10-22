@@ -472,11 +472,7 @@ function EditorForm({
                 ))}
               </SelectContent>
             </Select>
-            {!isRoutable(form.provider, customLabels) ? (
-              <Warn>
-                {form.provider === 'openrouter' ? copy.openrouterHidden : copy.providerGone}
-              </Warn>
-            ) : null}
+            {!isRoutable(form.provider, customLabels) ? <Warn>{copy.providerGone}</Warn> : null}
             {fieldError('provider')}
           </FormField>
           <FormField id={`${ids}-model`} label={copy.fieldModel} hint={copy.modelHint}>
