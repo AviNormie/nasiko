@@ -90,20 +90,6 @@ export interface SettingsSection {
 }
 
 /**
- * A layer's own personal (non-admin) settings row, e.g. EE's memory L2-proxy-consent toggle. Unlike
- * `SettingsSection` — which renders at `/settings?section=<key>`, a page the core redirects every non-superuser
- * away from — this is a plain nav link to the layer's own dedicated route (its own file under `routes/_app/`,
- * same as the core's Chat context), so every user, admin or not, can reach it. Placed in the Security group,
- * after Chat context: a data/recall preference, the same bucket as that one, not an Account (UI/auth) one.
- */
-export interface PersonalSettingsLink {
-  key: string
-  label: string
-  /** The layer's own route, e.g. `/settings/memory` — not `/settings?section=`. */
-  to: string
-}
-
-/**
  * Sign-in methods a layer adds under /login's password form (EE: single sign-on). A method leaves the app for its
  * provider: it calls `onStart` first, then sends the browser away with `returnTo` as the path to come back to.
  * `/login` finishes that sign-in itself; a failed one comes back with `#error=<code>`, handed over as `error`.
@@ -329,7 +315,6 @@ export interface Slots {
   granteeKinds: GranteeKind[]
   connectorGranteeKinds: ConnectorGranteeKind[]
   settingsSections: SettingsSection[]
-  personalSettingsLinks: PersonalSettingsLink[]
   loginMethods: ComponentType<LoginMethodsProps> | null
   tokenopsOrgUnitFilter: ComponentType<OrgUnitFilterProps> | null
   topbarStart: ComponentType | null
@@ -398,7 +383,6 @@ export const OSS_SLOTS: Slots = {
   granteeKinds: [],
   connectorGranteeKinds: [],
   settingsSections: [],
-  personalSettingsLinks: [],
   loginMethods: null,
   tokenopsOrgUnitFilter: null,
   topbarStart: null,
@@ -440,7 +424,6 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     granteeKinds: [],
     connectorGranteeKinds: [],
     settingsSections: [],
-    personalSettingsLinks: [],
     tours: [],
   }
   for (const layer of layers) {
@@ -449,8 +432,6 @@ export function resolveSlots(layers: readonly EditionLayer[]): Slots {
     if (s.connectorGranteeKinds)
       out.connectorGranteeKinds = [...out.connectorGranteeKinds, ...s.connectorGranteeKinds]
     if (s.settingsSections) out.settingsSections = [...out.settingsSections, ...s.settingsSections]
-    if (s.personalSettingsLinks)
-      out.personalSettingsLinks = [...out.personalSettingsLinks, ...s.personalSettingsLinks]
     if (s.tours) out.tours = [...out.tours, ...s.tours]
     if (s.harnessOrgScope !== undefined) out.harnessOrgScope = s.harnessOrgScope
     if (s.loginMethods !== undefined) out.loginMethods = s.loginMethods

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 use nasiko_flow::FlowGuard;
 use nasiko_hitl::{HitlStore, NewHitlRequest};
+use nasiko_types::agent_call::AgentCallMeter;
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -35,12 +36,16 @@ fn consumer_name() -> String {
 pub async fn run(
     db: PgPool,
     redis: redis::Client,
-    http_client: reqwest::Client,
+    agent_calls: super::AgentCalls,
     flow_guard: Arc<FlowGuard>,
     llm: LlmClient,
     hitl_store: Arc<dyn HitlStore>,
-    outbound: Arc<dyn OutboundPrefix>,
 ) {
+    let super::AgentCalls {
+        client: http_client,
+        meter: agent_calls,
+        outbound,
+    } = agent_calls;
     let consumer = consumer_name();
 
     let mut conn = match redis.get_multiplexed_async_connection().await {
@@ -67,6 +72,7 @@ pub async fn run(
         &db,
         &http_client,
         &flow_guard,
+        &agent_calls,
         &llm,
         &hitl_store,
         &outbound,
@@ -105,6 +111,7 @@ pub async fn run(
                             &db,
                             &http_client,
                             &flow_guard,
+                            &agent_calls,
                             &llm,
                             &hitl_store,
                             &outbound,
@@ -260,6 +267,7 @@ async fn process_job(
     db: &PgPool,
     http_client: &reqwest::Client,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
     outbound: &Arc<dyn OutboundPrefix>,
@@ -337,6 +345,7 @@ async fn process_job(
                     http_client,
                     db,
                     flow_guard,
+                    agent_calls,
                     execution_id,
                     user_id,
                     &maf_def,
@@ -352,6 +361,7 @@ async fn process_job(
                         http_client,
                         db,
                         flow_guard,
+                        agent_calls,
                         execution_id,
                         user_id,
                         &maf_def,
@@ -657,6 +667,7 @@ async fn reclaim_pending(
     db: &PgPool,
     http_client: &reqwest::Client,
     flow_guard: &Arc<FlowGuard>,
+    agent_calls: &Arc<dyn AgentCallMeter>,
     llm: &LlmClient,
     hitl_store: &Arc<dyn HitlStore>,
     outbound: &Arc<dyn OutboundPrefix>,
@@ -709,6 +720,7 @@ async fn reclaim_pending(
                 db,
                 http_client,
                 flow_guard,
+                agent_calls,
                 llm,
                 hitl_store,
                 outbound,
