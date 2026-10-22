@@ -179,6 +179,42 @@ export const copy = {
     label: 'Coding agent import progress',
     details: 'See progress',
   },
+  // The desktop app's LLM routing card (components/RoutingCard.tsx): `nasiko connect <harness> [--config]`.
+  routing: {
+    title: 'LLM routing',
+    body: "Point a coding harness on this computer at Nasiko's LLM router, with the LLM config you choose. Nothing is routed until you connect it.",
+    listLabel: 'Coding harnesses on this computer',
+    configLabel: (harness: string) => `LLM config for ${harness}`,
+    yourDefault: (name: string) => `Your default (${name})`,
+    configOption: (name: string, provider: string, model: string | null) =>
+      model ? `${name} · ${provider}/${model}` : `${name} · ${provider}`,
+    noConfigs: 'Add an LLM config on the LLM router page before routing a harness.',
+    openRouter: 'Open LLM router',
+    configsFailed: "Couldn't load your LLM configs.",
+    retry: 'Retry',
+    notOnComputer: 'Not on this computer',
+    notRouted: 'Not routed through Nasiko',
+    routedVia: (config: string) => `Routed through Nasiko · ${config}`,
+    routedViaDefault: (config: string) => `Routed through Nasiko · your default (${config})`,
+    routed: 'Routed through Nasiko',
+    byCli: 'Connected with the Nasiko CLI. Connecting here takes it over.',
+    changed: 'Its settings changed since it was connected. Connect again to repair them.',
+    noMcp: 'MCP tools are not connected.',
+    connect: 'Connect',
+    apply: 'Use this config',
+    takeOver: 'Take over',
+    disconnect: 'Disconnect',
+    working: (name: string) => `Connecting ${name}…`,
+    disconnecting: (name: string) => `Disconnecting ${name}…`,
+    connected: (name: string, provider?: string | null, model?: string | null) =>
+      provider
+        ? `${name} is routed through Nasiko (${provider}${model ? `/${model}` : ''}).`
+        : `${name} is routed through Nasiko.`,
+    disconnected: (name: string) => `${name} is no longer routed through Nasiko.`,
+    failed: (name: string, detail: string | null) =>
+      `Couldn't change ${name}'s routing${detail ? `: ${detail}` : '.'}`,
+    loadFailed: "Couldn't read this computer's coding harnesses from the desktop app.",
+  },
   // The desktop app's sync bar, on every page while coding-agent data syncs (components/SyncBar.tsx).
   syncBar: {
     title: 'Syncing coding agents',
