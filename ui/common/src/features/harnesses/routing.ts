@@ -14,6 +14,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 import { routerKeys } from '@/features/router/api'
+import type { RowRead } from '@/features/router/routing'
 import type { AgentRouting, LlmConfig } from '@/features/router/types'
 import { apiFetch } from '@/lib/api/client'
 import { ROUTING_CHANGE_TIMEOUT_MS } from './constants'
@@ -93,19 +94,31 @@ export function useRoutingChange() {
 
 // ─── Pure rules ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The picker's value for "follow my default config". */
-export const DEFAULT_CHOICE = '__default__'
-
-/** What the picker starts on: the config attached to the harness's row, else the default. */
-export function initialChoice(routing: AgentRouting | undefined): string {
-  return routing?.source === 'attached' && routing.llm_config_id
-    ? routing.llm_config_id
-    : DEFAULT_CHOICE
+/**
+ * What the picker starts on: the config attached to the harness's row, else the user's default, else their first.
+ * A connect always attaches the config picked (never "none, follow the default"), so a routed harness always counts
+ * for Token optimization (`attachedHarnesses`).
+ */
+export function initialChoice(
+  routing: AgentRouting | undefined,
+  configs: readonly LlmConfig[],
+): string | null {
+  if (routing?.source === 'attached' && routing.llm_config_id) return routing.llm_config_id
+  return defaultConfig(configs)?.id ?? configs[0]?.id ?? null
 }
 
-/** The connect request's `config` for a picker value. */
-export const configForChoice = (choice: string): string | null =>
-  choice === DEFAULT_CHOICE ? null : choice
+/**
+ * The harnesses Token optimization applies to: those with an LLM config attached, whose sessions go through Nasiko's
+ * LLM router (where the optimization runs). `reads` are their routing reads, in the same order; a failed read leaves
+ * its harness out, and `loading` says some are still on their way.
+ */
+export function attachedHarnesses<T>(harnesses: readonly T[], reads: readonly RowRead[]) {
+  const included = harnesses.filter((_, i) => {
+    const read = reads[i]
+    return read?.state === 'ok' && !!read.routing.llm_config_id
+  })
+  return { included, loading: reads.some((read) => read.state === 'pending') }
+}
 
 /** The user's default config, if they have one. */
 export const defaultConfig = (configs: readonly LlmConfig[]): LlmConfig | undefined =>
@@ -121,12 +134,12 @@ export function configModel(
 /** What the row's button does: connect it, reconnect it with another config, or nothing new. */
 export function connectAction(
   harness: RoutedHarness,
-  choice: string,
+  choice: string | null,
   routing: AgentRouting | undefined,
 ): 'connect' | 'apply' | 'take-over' | null {
-  if (!harness.detected) return null
+  if (!harness.detected || !choice) return null
   if (harness.connected_by === null) return 'connect'
   if (harness.connected_by === 'cli') return 'take-over'
-  // Connected here: only a different choice (or settings changed since) is worth a reconnect.
-  return harness.changed || choice !== initialChoice(routing) ? 'apply' : null
+  // Connected here: only a different config (or settings changed since) is worth a reconnect.
+  return harness.changed || choice !== (routing?.llm_config_id ?? null) ? 'apply' : null
 }

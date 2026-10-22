@@ -32,11 +32,13 @@ export interface DisplayTurn<L extends LiveRef = LiveRef> {
 
 /**
  * Server timestamps carry 0-9 fractional digits (`…:00Z`, `…:00.5Z`, `…:00.123456Z`), which
- * don't sort as strings; compare instants, then ids.
+ * don't sort as strings; compare instants, then put the user row first (an imported coding-agent
+ * turn can save its question and reply at the same instant), then ids.
  */
 const at = (iso: string) => Date.parse(iso) || 0
+const userFirst = (m: ChatMessage) => (m.role === 'user' ? 0 : 1)
 const byTime = (a: ChatMessage, b: ChatMessage) =>
-  at(a.timestamp) - at(b.timestamp) || a.id.localeCompare(b.id)
+  at(a.timestamp) - at(b.timestamp) || userFirst(a) - userFirst(b) || a.id.localeCompare(b.id)
 
 export function mergeTurns<L extends LiveRef>(
   pages: readonly MessagesPage[],

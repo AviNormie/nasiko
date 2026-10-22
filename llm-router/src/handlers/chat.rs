@@ -39,6 +39,9 @@ pub(crate) struct RoutedRequest {
     pub resolved: crate::resolver::ResolvedConfig,
     pub flow_id: Option<String>,
     pub attribution_source: Option<routing::attribution::AttributionSource>,
+    /// What payload compression did to this request, for its usage rows. Set by the Responses
+    /// surface after routing; `chat_core` passes its own stats straight to its rows instead.
+    pub compression: crate::compress::Ledger,
 }
 
 /// Prompt-derived signals `resolve_routed_request` needs beyond the resolved config,
@@ -205,6 +208,7 @@ async fn chat_core(
         resolved,
         flow_id,
         attribution_source,
+        compression: _,
     } = routed;
 
     // ── compression seam ──────────────────────────────────────────────────────────────────
@@ -581,6 +585,7 @@ pub(crate) async fn resolve_routed_request(
         resolved,
         flow_id,
         attribution_source,
+        compression: crate::compress::Ledger::default(),
     })
 }
 

@@ -11,10 +11,10 @@ import { configureMocks, type MockVariant } from '@/mocks/handlers'
 import { generateHarnessSeed } from '@/mocks/seed-harness'
 import { FIXED, now, seed, setupPinnedSeed } from '@/test/pinnedSeed'
 import { renderApp } from '@/test/renderApp'
+import type { LlmConfig } from '@/features/router/types'
 import { recordRequestBodies, recordRequests, server } from '@/test/setup'
 import {
-  DEFAULT_CHOICE,
-  configForChoice,
+  attachedHarnesses,
   configModel,
   connectAction,
   initialChoice,
@@ -66,7 +66,7 @@ describe('in the desktop app', () => {
     // Nothing is routed until asked: the picker starts on the user's default config.
     expect(
       within(claude).getByRole('combobox', { name: 'LLM config for Claude Code' }),
-    ).toHaveTextContent('Your default (anthropic-default)')
+    ).toHaveTextContent('anthropic-default (your default) · anthropic/claude-sonnet-4')
 
     const codex = await row('codex')
     expect(within(codex).getByText(/Connected with the Nasiko CLI/)).toBeInTheDocument()
@@ -92,7 +92,11 @@ describe('in the desktop app', () => {
       // Connected with what it was connected with: nothing new to apply.
       expect(within(claude).queryByRole('button', { name: /Connect|Use this config/ })).toBeNull()
       const connect = rec.requests.find((r) => r.url.pathname === `${ROUTING}/connect`)
-      expect(connect?.body).toEqual({ agent: 'claude', config: null })
+      // The default config is attached by id, never left to follow the default, so the harness counts for
+      // Token optimization.
+      const body = connect?.body as { agent: string; config: string }
+      expect(body.agent).toBe('claude')
+      expect(body.config).toMatch(/^5eed0007-/)
 
       await user.click(within(claude).getByRole('button', { name: 'Disconnect' }))
       await within(claude).findByText('Not routed through Nasiko')
@@ -168,23 +172,40 @@ describe('pure rules', () => {
     pinned_model: null,
   }
 
-  it('starts on the attached config, else the default', () => {
-    expect(initialChoice(undefined)).toBe(DEFAULT_CHOICE)
-    expect(initialChoice(attached)).toBe('c1')
-    expect(initialChoice({ ...attached, source: 'owner-default' })).toBe(DEFAULT_CHOICE)
-    expect(configForChoice(DEFAULT_CHOICE)).toBeNull()
-    expect(configForChoice('c2')).toBe('c2')
+  const config = (id: string, isDefault = false) => ({ id, is_default: isDefault }) as LlmConfig
+
+  it('starts on the attached config, else the default, else the first', () => {
+    const configs = [config('c2'), config('c3', true)]
+    expect(initialChoice(attached, configs)).toBe('c1')
+    expect(initialChoice(undefined, configs)).toBe('c3')
+    expect(initialChoice({ ...attached, source: 'owner-default' }, configs)).toBe('c3')
+    expect(initialChoice(undefined, [config('c2')])).toBe('c2')
+    expect(initialChoice(undefined, [])).toBeNull()
+  })
+
+  it('counts only harnesses with an LLM config attached for Token optimization', () => {
+    const rows = ['a', 'b', 'c', 'd']
+    const { included, loading } = attachedHarnesses(rows, [
+      { state: 'ok', routing: attached },
+      { state: 'ok', routing: { ...attached, llm_config_id: null, source: 'owner-default' } },
+      { state: 'error' },
+      { state: 'pending' },
+    ])
+    expect(included).toEqual(['a'])
+    expect(loading).toBe(true)
+    expect(attachedHarnesses(['a'], [{ state: 'ok', routing: attached }]).loading).toBe(false)
   })
 
   it('offers a reconnect only when something would change', () => {
-    expect(connectAction(harness(), DEFAULT_CHOICE, undefined)).toBe('connect')
+    expect(connectAction(harness(), 'c1', undefined)).toBe('connect')
+    expect(connectAction(harness(), null, undefined)).toBeNull()
     expect(connectAction(harness({ connected_by: 'cli' }), 'c1', attached)).toBe('take-over')
     expect(connectAction(harness({ connected_by: 'desktop' }), 'c1', attached)).toBeNull()
     expect(connectAction(harness({ connected_by: 'desktop' }), 'c2', attached)).toBe('apply')
     expect(connectAction(harness({ connected_by: 'desktop', changed: true }), 'c1', attached)).toBe(
       'apply',
     )
-    expect(connectAction(harness({ detected: false }), DEFAULT_CHOICE, undefined)).toBeNull()
+    expect(connectAction(harness({ detected: false }), 'c1', undefined)).toBeNull()
   })
 
   it("names a config's model as the router would pick it", () => {

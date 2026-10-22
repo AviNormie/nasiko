@@ -59,6 +59,14 @@ describe('mergeTurns', () => {
     expect(turns[1].user?.id).toBe('u1')
   })
 
+  it('puts the user row before a reply saved at the same instant', () => {
+    // The reply's id sorts first, so only the role tie-break keeps the question on top.
+    const turns = mergeTurns([page([msg('a-reply', 'assistant', '01'), msg('z-q', 'user', '01')])])
+    expect(turns.map((t) => [t.user?.id, t.replies.map((r) => r.id)])).toEqual([
+      ['z-q', ['a-reply']],
+    ])
+  })
+
   it('hides system rows', () => {
     expect(
       mergeTurns([page([msg('u1', 'user', '01'), msg('x', 'system', '02')])])[0].replies,
