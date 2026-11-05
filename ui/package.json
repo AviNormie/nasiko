@@ -10,9 +10,9 @@
     "common"
   ],
   "scripts": {
-    "dev": "node scripts/app.ts dev",
+    "dev": "node init && node scripts/app.ts dev",
     "design": "vite --config design/vite.config.ts",
-    "build": "node scripts/app.ts typecheck && node scripts/app.ts build",
+    "build": "node init && node scripts/app.ts typecheck && node scripts/app.ts build",
     "typecheck": "node scripts/app.ts typecheck",
     "lint": "eslint . --max-warnings 0 && prettier --check . && node scripts/check-spelling.ts",
     "test": "node scripts/app.ts typecheck && eslint . --max-warnings 0 && vitest run",
@@ -20,7 +20,7 @@
     "coverage": "vitest run --coverage",
     "preview": "node scripts/app.ts preview",
     "gen:api": "node scripts/gen-api.ts",
-    "dev:live": "VITE_NASIKO_API_MODE=live node scripts/app.ts dev",
+    "dev:live": "node init && VITE_NASIKO_API_MODE=live node scripts/app.ts dev",
     "seed:sql": "node scripts/seed-trace-usage.ts",
     "seed:live": "node scripts/seed-live.ts",
     "seed:reset": "node scripts/seed-live.ts --reset",
@@ -28,14 +28,14 @@
     "contract:check": "node scripts/contract-check.ts",
     "ee:server": "node scripts/ee-server.ts",
     "seed:ee": "node scripts/seed-live.ts --edition ee",
-    "dev:live:ee": "NASIKO_API_URL=http://localhost:9090 VITE_NASIKO_API_MODE=live node scripts/app.ts dev ee",
+    "dev:live:ee": "node init && NASIKO_API_URL=http://localhost:9090 VITE_NASIKO_API_MODE=live node scripts/app.ts dev ee",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
     "budgets": "node scripts/check-budgets.ts",
     "e2e": "playwright test --config e2e/playwright.config.ts",
     "storybook": "storybook dev -p 6006 --no-open",
-    "build-storybook": "storybook build -o storybook-static",
+    "build-storybook": "node init && storybook build -o storybook-static",
     "test:stories": "vitest run --config vitest.storybook.config.ts"
   },
   "devDependencies": {
